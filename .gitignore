@@ -1,0 +1,17 @@
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+
+bin/
+obj/
+dist/
+build/
+node_modules/
+.venv/
+__pycache__/
+.idea/
+.vs/
+*.user
