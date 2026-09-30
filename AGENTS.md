@@ -83,6 +83,13 @@ with site_scope(site.id):                 # istek başına bir kez, site çözü
 - `all_sites_scope()` yalnız platform paneli, portföy, gece işleri — bilinçli kullan.
 - Uygulama `site_yonetim_app` rolüyle bağlanır (RLS'e tabi); göçler `site_yonetim_owner` ile.
 
+**Siteye bağlı uç nokta** (`/api/v1/sites/{slug}/…`): `api/deps.py` yaşam döngüsünü uygular —
+`SiteContextDep` siteyi çözer (yoksa 404) ve kapsamı açar; `Depends(require_module(ModuleKey.X))`
+modül kapalıysa ya da planda yoksa 404 verir. **Erişim kontrolü (Dilim 2) gelene kadar
+`site_context` gerçek bir uca bağlanmaz** — `tests/architecture/test_routes.py` bunu engeller.
+Modül aç/kapa: `services/sites.set_module_enabled` (çekirdek `finance` kapatılamaz, planda
+olmayan açılamaz; kapatmak veriyi silmez).
+
 **Yeni kiracı tablosu eklerken:** `TenantMixin` + `__table_args__ = tenant_table_args(...)`;
 başka kiracı tablosuna FK → `tenant_fk("x_id", "tablo")` (bileşik, site dışına bağlanamaz);
 göçte `enable_tenant_rls(op, "tablo")`. Unutursan `tests/architecture/test_models.py` ve

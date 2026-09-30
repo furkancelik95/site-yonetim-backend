@@ -1,5 +1,8 @@
 """Uygulama fabrikası. Çalıştırma: `uvicorn site_yonetim.main:app`."""
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
@@ -9,9 +12,25 @@ from site_yonetim.core.config import Settings, get_settings
 from site_yonetim.core.errors import install_error_handlers
 from site_yonetim.core.logging import configure_logging
 from site_yonetim.core.middleware import RequestContextMiddleware, SecurityHeadersMiddleware
+from site_yonetim.db.session import create_engine_from_settings, create_session_factory
 
 OPENAPI_URL = f"{API_V1_PREFIX}/openapi.json"
 DOCS_URL = f"{API_V1_PREFIX}/docs"
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Veritabanı tanımlıysa motor açılışta kurulur, kapanışta bırakılır."""
+    settings: Settings = app.state.settings
+    if settings.database_url is not None:
+        engine = create_engine_from_settings(settings)
+        app.state.engine = engine
+        app.state.session_factory = create_session_factory(engine)
+    try:
+        yield
+    finally:
+        if app.state.engine is not None:
+            await app.state.engine.dispose()
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -27,8 +46,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         docs_url=DOCS_URL if docs_enabled else None,
         redoc_url=None,
         swagger_ui_oauth2_redirect_url=None,
+        lifespan=_lifespan,
     )
     app.state.settings = settings
+    app.state.engine = None
+    app.state.session_factory = None
 
     install_error_handlers(app)
     app.include_router(api_router)
