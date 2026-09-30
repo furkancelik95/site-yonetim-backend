@@ -13,9 +13,11 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
 
+import httpx2
 import pytest
 from alembic import command
 from alembic.config import Config
+from fastapi import FastAPI
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -25,10 +27,13 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import NullPool
 
+from site_yonetim.core.security import hash_password
 from site_yonetim.db.base import Base
 from site_yonetim.db.session import create_session_factory
 from site_yonetim.db.tenancy import site_scope
-from site_yonetim.models import Block, Site, Unit
+from site_yonetim.main import create_app
+from site_yonetim.models import Block, Site, SiteMembership, Unit, User
+from tests.conftest import SettingsFactory
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -122,3 +127,62 @@ async def two_sites(session_factory: async_sessionmaker[AsyncSession]) -> TwoSit
     block_a, units_a = await _seed_site(session_factory, site_a.id, "Aksu A", 4)
     block_b, units_b = await _seed_site(session_factory, site_b.id, "Yıldız A", 3)
     return TwoSites(site_a.id, site_b.id, block_a, block_b, units_a, units_b)
+
+
+# --- Kimlik yardımcıları ------------------------------------------------------
+
+DEFAULT_PASSWORD = "Gizli-Parola-2026"
+
+
+async def create_user(
+    factory: async_sessionmaker[AsyncSession],
+    email: str,
+    *,
+    password: str = DEFAULT_PASSWORD,
+    full_name: str = "Test KULLANICI",
+    **fields: object,
+) -> User:
+    async with factory() as session, session.begin():
+        user = User(
+            email=email, password_hash=hash_password(password), full_name=full_name, **fields
+        )
+        session.add(user)
+    return user
+
+
+async def add_site_membership(
+    factory: async_sessionmaker[AsyncSession],
+    site_id: uuid.UUID,
+    user_id: uuid.UUID,
+    role: str,
+    **fields: object,
+) -> None:
+    with site_scope(site_id):
+        async with factory() as session, session.begin():
+            session.add(SiteMembership(user_id=user_id, role=role, **fields))
+
+
+@pytest.fixture
+def api_app(
+    make_settings: SettingsFactory, session_factory: async_sessionmaker[AsyncSession]
+) -> FastAPI:
+    app = create_app(
+        make_settings(refresh_cookie_secure=False, cors_origins=["http://localhost:5173"])
+    )
+    app.state.session_factory = session_factory
+    return app
+
+
+@pytest.fixture
+async def api(api_app: FastAPI) -> AsyncIterator[httpx2.AsyncClient]:
+    transport = httpx2.ASGITransport(app=api_app)
+    async with httpx2.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        yield client
+
+
+async def login_headers(
+    client: httpx2.AsyncClient, email: str, password: str = DEFAULT_PASSWORD
+) -> dict[str, str]:
+    response = await client.post("/api/v1/auth/login", json={"email": email, "password": password})
+    assert response.status_code == 200, response.text
+    return {"Authorization": f"Bearer {response.json()['access_token']}"}

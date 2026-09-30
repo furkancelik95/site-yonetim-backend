@@ -83,10 +83,13 @@ with site_scope(site.id):                 # istek başına bir kez, site çözü
 - `all_sites_scope()` yalnız platform paneli, portföy, gece işleri — bilinçli kullan.
 - Uygulama `site_yonetim_app` rolüyle bağlanır (RLS'e tabi); göçler `site_yonetim_owner` ile.
 
-**Siteye bağlı uç nokta** (`/api/v1/sites/{slug}/…`): `api/deps.py` yaşam döngüsünü uygular —
-`SiteContextDep` siteyi çözer (yoksa 404) ve kapsamı açar; `Depends(require_module(ModuleKey.X))`
-modül kapalıysa ya da planda yoksa 404 verir. **Erişim kontrolü (Dilim 2) gelene kadar
-`site_context` gerçek bir uca bağlanmaz** — `tests/architecture/test_routes.py` bunu engeller.
+**Uç nokta yazarken** (`api/deps.py`, docs/02 §4 yaşam döngüsü):
+- Her uç varsayılan olarak kimlik ister (`CurrentUserDep`); kimliksiz uç yalnız
+  `tests/architecture/test_routes.py` içindeki beyaz listeyle — bilinçli karar.
+- Siteye bağlı uç (`/api/v1/sites/{slug}/…`) `SiteContextDep` üzerinden geçer: site yoksa ya da
+  kullanıcının erişimi yoksa **404**, sonra site kapsamı açılır.
+- `Depends(require_module(ModuleKey.X))` → modül kapalı/planda yok **404**;
+  `Depends(require_permission(Permission.X))` → izin yok **403**. Rol adına bakma.
 Modül aç/kapa: `services/sites.set_module_enabled` (çekirdek `finance` kapatılamaz, planda
 olmayan açılamaz; kapatmak veriyi silmez).
 

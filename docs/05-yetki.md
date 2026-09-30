@@ -123,6 +123,25 @@ UserAccess
   çok siteli → portföy.
 - Sonra eklenecek: telefonla tek kullanımlık kod (OTP), iki adımlı doğrulama (yöneticiler için).
 
+### 8.1 Uygulama notları (karar: Furkan, 30.09.2026)
+
+- **Kendi kendine kayıt yok.** Kullanıcıyı platform (`POST /platform/customers`) ya da
+  `members.manage` izni olan yönetici oluşturur.
+- Erişim jetonu: HS256 JWT (`iss=site-yonetim`, `aud=site-yonetim-api`, `sub`, `sid`, `typ=access`).
+  Her istekte `sid` oturumunun iptal edilmediği ve kullanıcının aktif olduğu kontrol edilir —
+  **çıkış ve hesap pasifleştirme anında etkilidir.**
+- Yenileme jetonu: çerez `sy_refresh`, `Path=/api/v1/auth`, httpOnly, SameSite=Lax, üretimde
+  Secure. Her `/auth/refresh`'te döner; eski jeton tekrar gelirse oturum iptal edilir.
+  Çerezle çalışan uçlar `Origin` başlığı varsa `CORS_ORIGINS` dışını 403 ile reddeder (CSRF).
+- Yanlış parola ile bilinmeyen e-posta **aynı** yanıtı (401, "E-posta veya parola hatalı.") ve
+  yaklaşık aynı süreyi alır. Pasif hesap da aynı yanıtı alır. Kilitli hesap 429.
+- Kilit sayacı paralel denemelerle atlatılamaz (kullanıcı satırı `FOR UPDATE`).
+- **Pasif açık üyelik** o sitedeki türetilmiş (şirket) erişimini de kapatır — bir sitedeki
+  erişimi kaldırmanın güvenilir yolu.
+- **Platform yöneticisinin** kayıtta site üyeliği olsa bile yok sayılır (§5).
+- Henüz yok: IP bazlı hız sınırı (paylaşılan depo gerekir), mobil için gövdeyle yenileme,
+  OTP/2FA, denetim kaydı (`09` §6).
+
 ## 9. Demo hesapları
 
 `10-demo-veri.md`.

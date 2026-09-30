@@ -5,7 +5,6 @@ isteği reddedilir, diğer site etkilenmez.
 """
 
 import uuid
-from collections.abc import AsyncIterator
 from typing import Annotated
 
 import httpx2
@@ -25,7 +24,13 @@ from site_yonetim.services.sites import (
     set_module_enabled,
 )
 from tests.conftest import SettingsFactory
-from tests.integration.conftest import DatabaseUrls, TwoSites
+from tests.integration.conftest import (
+    DatabaseUrls,
+    TwoSites,
+    add_site_membership,
+    create_user,
+    login_headers,
+)
 
 Factory = async_sessionmaker[AsyncSession]
 STANDART = ["finance", "announcements", "requests", "documents", "visitors", "surveys"]
@@ -54,10 +59,17 @@ async def planned_sites(session_factory: Factory, two_sites: TwoSites) -> TwoSit
 
 @pytest.fixture
 async def client(
-    make_settings: SettingsFactory, session_factory: Factory
-) -> AsyncIterator[httpx2.AsyncClient]:
-    app: FastAPI = create_app(make_settings())
-    app.state.session_factory = session_factory
+    api_app: FastAPI,
+    api: httpx2.AsyncClient,
+    session_factory: Factory,
+    planned_sites: TwoSites,
+) -> httpx2.AsyncClient:
+    """İki sitede de Yönetici olan bir kullanıcıyla oturum açılmış istemci."""
+    app = api_app
+    user = await create_user(session_factory, "yonetici@test.local")
+    for site_id in (planned_sites.site_a, planned_sites.site_b):
+        await add_site_membership(session_factory, site_id, user.id, "Yönetici")
+    api.headers.update(await login_headers(api, "yonetici@test.local"))
 
     @app.get("/api/v1/sites/{slug}/_probe")
     async def probe(ctx: SiteContextDep) -> dict[str, str]:
@@ -71,9 +83,7 @@ async def client(
         count = await ctx.session.scalar(select(func.count()).select_from(SiteModule))
         return {"module_rows": count or 0}
 
-    transport = httpx2.ASGITransport(app=app)
-    async with httpx2.AsyncClient(transport=transport, base_url="http://testserver") as http:
-        yield http
+    return api
 
 
 async def _toggle(factory: Factory, site_id: uuid.UUID, key: ModuleKey, *, enable: bool) -> None:

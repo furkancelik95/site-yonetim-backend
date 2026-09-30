@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     database_max_overflow: int = Field(default=10, ge=0, le=100)
     jwt_secret: SecretStr = SecretStr(PLACEHOLDER_SECRET)
     jwt_access_minutes: int = Field(default=15, ge=1, le=60)
+    # Oturum ömrü: kayan pencere (docs/05 §8). Her yenilemede uzar.
+    session_hours: int = Field(default=8, ge=1, le=24)
+    # Yenileme jetonu çerezi: httpOnly + SameSite=Lax; üretimde Secure zorunlu.
+    refresh_cookie_secure: bool = True
     cors_origins: Annotated[list[str], NoDecode] = Field(default_factory=list)
     allowed_hosts: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["localhost", "127.0.0.1", "testserver"]
@@ -73,6 +77,8 @@ class Settings(BaseSettings):
             )
         if "*" in self.allowed_hosts:
             raise ValueError("Üretimde ALLOWED_HOSTS '*' olamaz.")
+        if not self.refresh_cookie_secure:
+            raise ValueError("Üretimde REFRESH_COOKIE_SECURE kapatılamaz (çerez yalnız HTTPS).")
         return self
 
     @property

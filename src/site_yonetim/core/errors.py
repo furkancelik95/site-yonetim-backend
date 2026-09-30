@@ -31,17 +31,30 @@ class ApiError(Exception):
         code: str,
         message: str,
         fields: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.code = code
         self.message = message
         self.fields = fields
+        self.headers = headers
 
 
 class NotFoundError(ApiError):
     def __init__(self, message: str = "Aradığınız kayıt bulunamadı.") -> None:
         super().__init__(HTTPStatus.NOT_FOUND, "not_found", message)
+
+
+class UnauthorizedError(ApiError):
+    def __init__(
+        self,
+        message: str = "Oturumunuz yok ya da süresi doldu. Lütfen yeniden giriş yapın.",
+        code: str = "unauthorized",
+    ) -> None:
+        super().__init__(
+            HTTPStatus.UNAUTHORIZED, code, message, headers={"WWW-Authenticate": "Bearer"}
+        )
 
 
 class ForbiddenError(ApiError):
@@ -132,7 +145,9 @@ def validation_fields(exc: RequestValidationError) -> dict[str, str]:
 async def _api_error_handler(_: Request, error: Exception) -> JSONResponse:
     exc = cast(ApiError, error)
     return JSONResponse(
-        status_code=exc.status_code, content=error_body(exc.code, exc.message, exc.fields)
+        status_code=exc.status_code,
+        content=error_body(exc.code, exc.message, exc.fields),
+        headers=exc.headers,
     )
 
 
