@@ -1,17 +1,30 @@
-"""Uç nokta güvenlik kuralları.
+"""Uç nokta güvenlik kuralları — varsayılan kapalı.
 
-Erişim kontrolü (docs/02 §4 adım 3, Dilim 2) gelene kadar hiçbir gerçek uç nokta
-`site_context`'e bağlanmaz: aksi halde siteye erişimi olmayan biri de veriye ulaşırdı.
-Kimlik doğrulaması eklendiğinde bu test "site_context kullanan her uç kimlik de ister"
-kuralına dönüştürülür.
+1. Her uç kimlik (`current_user`) ister; istisnalar aşağıdaki beyaz listededir.
+2. `/sites/{slug}/…` altındaki her uç `site_context`'ten geçer (erişim 404, kapsam, modül).
+3. `site_context` kullanan her uç kimlik de ister.
+
+Not: FastAPI alt router'ları `app.routes` içinde düzleştirmez; uçlar OpenAPI üretiminin de
+kullandığı `iter_route_contexts` ile dolaşılır. Testin boşa geçmediği ayrıca doğrulanır.
 """
 
+import pytest
+from fastapi import FastAPI
 from fastapi.dependencies.models import Dependant
-from fastapi.routing import APIRoute
+from fastapi.routing import APIRoute, iter_route_contexts
 
-from site_yonetim.api.deps import site_context
+from site_yonetim.api.deps import current_user, site_context
 from site_yonetim.main import create_app
 from tests.conftest import SettingsFactory
+
+# Kimliksiz erişilebilen uçlar. Buraya ekleme bilinçli bir güvenlik kararıdır.
+PUBLIC_ROUTES = {
+    "/api/v1/health",
+    "/api/v1/health/ready",
+    "/api/v1/auth/login",
+    "/api/v1/auth/refresh",  # çerezle doğrular
+    "/api/v1/auth/logout",  # her zaman 204; varsa oturumu iptal eder
+}
 
 
 def _calls(dependant: Dependant) -> set[object]:
@@ -21,12 +34,64 @@ def _calls(dependant: Dependant) -> set[object]:
     return found
 
 
-def test_site_baglamina_bagli_gercek_uc_yok(make_settings: SettingsFactory) -> None:
-    app = create_app(make_settings())
+def _api_routes(app: FastAPI) -> list[tuple[str, set[object]]]:
+    routes = []
+    for context in iter_route_contexts(app.routes):
+        if isinstance(context.route, APIRoute):
+            routes.append((str(context.path), _calls(context.route.dependant)))
+    return routes
+
+
+@pytest.fixture
+def routes(make_settings: SettingsFactory) -> list[tuple[str, set[object]]]:
+    return _api_routes(create_app(make_settings()))
+
+
+def test_uclar_gercekten_dolasiliyor(routes: list[tuple[str, set[object]]]) -> None:
+    paths = {path for path, _ in routes}
+
+    assert {"/api/v1/me", "/api/v1/sites/{slug}", "/api/v1/auth/login"} <= paths
+
+
+def test_her_uc_kimlik_ister(routes: list[tuple[str, set[object]]]) -> None:
     offenders = [
-        route.path
-        for route in app.routes
-        if isinstance(route, APIRoute) and site_context in _calls(route.dependant)
+        path for path, calls in routes if path not in PUBLIC_ROUTES and current_user not in calls
     ]
 
-    assert offenders == [], "Erişim kontrolü gelmeden site_context kullanılamaz"
+    assert offenders == [], (
+        "Kimliksiz uç: current_user ekleyin ya da bilinçli olarak beyaz listeye alın"
+    )
+
+
+def test_site_uclari_site_baglamindan_gecer(routes: list[tuple[str, set[object]]]) -> None:
+    offenders = [
+        path for path, calls in routes if "/sites/{slug}" in path and site_context not in calls
+    ]
+
+    assert offenders == []
+
+
+def test_site_baglami_kimlik_ister(routes: list[tuple[str, set[object]]]) -> None:
+    offenders = [
+        path for path, calls in routes if site_context in calls and current_user not in calls
+    ]
+
+    assert offenders == []
+
+
+def test_kural_ihlali_yakalanir(make_settings: SettingsFactory) -> None:
+    from fastapi import APIRouter
+
+    app = create_app(make_settings())
+    router = APIRouter(prefix="/api/v1")
+
+    @router.get("/acik-uc")
+    async def open_endpoint() -> None:
+        return None
+
+    app.include_router(router)
+    offenders = [
+        p for p, calls in _api_routes(app) if p not in PUBLIC_ROUTES and current_user not in calls
+    ]
+
+    assert offenders == ["/api/v1/acik-uc"]

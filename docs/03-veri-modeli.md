@@ -87,8 +87,18 @@ Tablo ve sütun adları `snake_case`, İngilizce. Kullanıcıya görünen etiket
 |---|---|---|
 | user_id | UUID → users | |
 | role | TEXT | site rol şablonu adı — `05-yetki.md` §2 |
-| person_id | UUID NULL → persons | **Sakin** üyeliğinde dolu: kullanıcının hangi kişi olduğu |
-| is_active | BOOL | |
+| person_id | UUID NULL → persons | **Sakin** üyeliğinde dolu: kullanıcının hangi kişi olduğu. FK `persons` tablosuyla (Dilim 3) eklenir |
+| is_active | BOOL | pasif açık üyelik erişim vermez ve o sitedeki türetilmiş erişimi de kapatır (`05` §4) |
+
+### `auth_sessions` [G] — oturum (yenileme jetonu)
+| Sütun | Tip | Not |
+|---|---|---|
+| user_id | UUID → users | |
+| token_hash | TEXT UNIQUE | yenileme jetonunun **SHA-256** hash'i; jetonun kendisi saklanmaz |
+| previous_token_hash | TEXT NULL UNIQUE | bir önceki jeton — tekrar gelirse çalınma belirtisi, oturum iptal |
+| expires_at | TIMESTAMPTZ | kayan pencere: her yenilemede `now + SESSION_HOURS` |
+| last_used_at | TIMESTAMPTZ | |
+| revoked_at | TIMESTAMPTZ NULL | çıkış / iptal |
 
 ---
 

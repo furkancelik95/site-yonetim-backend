@@ -18,6 +18,7 @@ def make_settings() -> SettingsFactory:
     def factory(**overrides: Any) -> Settings:
         values: dict[str, Any] = {
             "environment": "test",
+            "jwt_secret": "test-jwt-sirri-" + "x" * 32,
             "cors_origins": ["http://localhost:5173"],
             "log_level": "WARNING",
         }

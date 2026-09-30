@@ -12,7 +12,14 @@ import site_yonetim.models  # noqa: F401 — tüm modeller kaydolsun
 from site_yonetim.db.base import Base, is_tenant_model
 
 # docs/03-veri-modeli.md [G] işaretli tablolar. Yeni global tablo = bilinçli karar + doküman.
-GLOBAL_TABLES = {"plans", "organizations", "sites", "users", "organization_memberships"}
+GLOBAL_TABLES = {
+    "plans",
+    "organizations",
+    "sites",
+    "users",
+    "organization_memberships",
+    "auth_sessions",  # oturum kullanıcıya aittir, siteye değil
+}
 
 TABLES: list[Table] = list(Base.metadata.sorted_tables)
 MAPPERS = list(Base.registry.mappers)

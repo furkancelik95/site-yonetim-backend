@@ -103,9 +103,9 @@ Her hata aynı gövdeyi döner:
 ### 2.1 Kimlik
 | Yöntem | Yol | İzin | Durum | Not |
 |---|---|---|---|---|
-| POST | `/auth/login` | — | R | `{email, password}` → jetonlar. 5 hatada 15 dk kilit |
-| POST | `/auth/refresh` | — | Y | |
-| POST | `/auth/logout` | giriş | R | |
+| POST | `/auth/login` | — | R | `{email, password}` → `{access_token, token_type: "bearer", expires_in}` + `sy_refresh` çerezi. Hatalı: 401 `invalid_credentials`; 5 hatada 15 dk kilit: 429 `account_locked` |
+| POST | `/auth/refresh` | çerez | Y | gövde yok; çerezle → yeni `access_token` + yeni çerez. Geçersiz/süresi dolmuş: 401 `session_expired`. Frontend `credentials: "include"` ile çağırır |
+| POST | `/auth/logout` | — | R | Bearer ve/veya çerez; oturumu iptal eder, çerezi siler. Her zaman 204 |
 | GET | `/me` | giriş | R | `UserAccess` — `05-yetki.md` §4. Frontend yönlendirmesi buna bakar |
 
 ### 2.2 Platform (yalnız platform yöneticisi — değilse 404)

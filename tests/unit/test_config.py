@@ -55,3 +55,8 @@ def test_demo_verisi_yalniz_gelistirmede(
     settings = make_settings(environment=environment, seed_demo_data=seed, jwt_secret=STRONG_SECRET)
 
     assert settings.demo_data_allowed is expected
+
+
+def test_uretimde_guvensiz_cerez_reddedilir(make_settings: SettingsFactory) -> None:
+    with pytest.raises(ValidationError, match="REFRESH_COOKIE_SECURE"):
+        make_settings(environment="production", refresh_cookie_secure=False)
