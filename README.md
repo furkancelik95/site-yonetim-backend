@@ -42,7 +42,8 @@ uv run pytest --cov
 
 Değişkenler yoksa entegrasyon testleri yerelde atlanır; CI'da atlanmaz.
 
-Docker ile API: `docker compose up --build api` → `http://localhost:8000/api/v1/health`.
+Docker ile API: `docker compose up --build api` → `http://localhost:8000/api/v1/health`
+(canlılık) ve `/api/v1/health/ready` (veritabanı dahil hazırlık; ulaşılamazsa 503).
 
 OpenAPI şeması: `GET /api/v1/openapi.json` (frontend tiplerini buradan üretir).
 

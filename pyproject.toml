@@ -57,6 +57,7 @@ known-first-party = ["site_yonetim", "tests"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S105", "S106"]  # assert ve sabit test parolaları
+"migrations/versions/**" = ["E501"]  # autogenerate uzun CHECK ifadeleri üretir
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "decimal.ROUND_HALF_EVEN".msg = "Para yuvarlaması ROUND_HALF_UP'tır (docs/04-is-kurallari.md §1)."
