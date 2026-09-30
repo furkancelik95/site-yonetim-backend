@@ -2,19 +2,12 @@
 
 import uuid
 from decimal import Decimal
-from enum import StrEnum
 
 from sqlalchemy import CheckConstraint, Numeric, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from site_yonetim.db.base import Base, TenantMixin, enum_check, tenant_fk, tenant_table_args
-
-
-class UnitUsage(StrEnum):
-    RESIDENTIAL = "residential"
-    COMMERCIAL = "commercial"
-    STORAGE = "storage"
-    PARKING = "parking"
+from site_yonetim.domain.structure import UnitUsage
 
 
 class Block(TenantMixin, Base):

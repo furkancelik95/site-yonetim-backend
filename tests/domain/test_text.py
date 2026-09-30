@@ -7,6 +7,7 @@ import pytest
 
 from site_yonetim.domain.text import (
     SLUG_MAX_LENGTH,
+    ascii_fold,
     format_date_tr,
     format_money_tr,
     format_period_tr,
@@ -122,3 +123,8 @@ def test_gecersiz_ay_reddedilir() -> None:
 )
 def test_oran_gereksiz_sifirsiz(value: Decimal, expected: str) -> None:
     assert format_ratio_tr(value) == expected
+
+
+def test_ascii_fold_for_matching() -> None:
+    assert ascii_fold("KIRACI") == ascii_fold("kiracı") == ascii_fold("Kİracı") == "kiraci"
+    assert ascii_fold("Dükkan İŞYERİ Çğö") == "dukkan isyeri cgo"
