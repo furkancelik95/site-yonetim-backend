@@ -1,5 +1,6 @@
 """Mimari kurallar (docs/07-test-senaryolari.md §7).
 
+7.3: para `float` değildir.
 7.4: `domain/` paketi `sqlalchemy`, `fastapi`, `starlette` içe aktarmaz ve saati okumaz.
 """
 
@@ -73,3 +74,22 @@ def test_kural_ihlali_yakalanir(tmp_path: Path) -> None:
     )
 
     assert len(_violations(bad)) == 3
+
+
+# 7.3: para asla float değildir. Uygulama kodunda `float` tipi/çağrısı hiç kullanılmaz;
+# modellerdeki para sütunlarının `Numeric` olduğu, modeller gelince ayrıca test edilir.
+
+
+def _float_usages(path: Path) -> list[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    return [
+        f"{path.relative_to(SRC)}:{node.lineno}"
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name) and node.id == "float"
+    ]
+
+
+def test_uygulama_kodunda_float_yok() -> None:
+    usages = [usage for path in sorted(SRC.rglob("*.py")) for usage in _float_usages(path)]
+
+    assert usages == [], "Para ve oran için Decimal kullanın (docs/04-is-kurallari.md §1)"

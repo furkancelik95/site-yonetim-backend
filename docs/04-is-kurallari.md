@@ -48,17 +48,25 @@ Yöntem: *en büyük kalan* (largest remainder).
 1. Her payın ham değeri: `ham[i] = toplam × ağırlık[i] / Σağırlık`
 2. Her payı **kuruşa kes** (aşağı değil, *sıfıra doğru* kes): `pay[i] = kes(ham[i])`
 3. Eksik kalan kuruş: `kalan = (toplam − Σpay) × 100` → tam sayı
-4. Kuruşları, **kesilen kısmı en büyük olanlardan başlayarak** birer birer dağıt.
+4. Kuruşları, **kesilen kısmı (mutlak değerce) en büyük olanlardan başlayarak** birer birer dağıt.
    Eşitlikte **ağırlığı büyük olan** önce. O da eşitse **listedeki sıra** korunur.
+5. **Negatif tutar pozitifin aynasıdır:** `distribute(-x, w) == [-p for p in distribute(x, w)]`
+   (karar: Furkan, 30.09.2026 — şimdilik; değişirse burası güncellenir).
+6. Savunma: **negatif ağırlık** ve **kuruştan hassas tutar** (`100.005`) `ValueError`. Dağıtılacak
+   tutar önce kuruşa yuvarlanmış olmalı; sessizce yuvarlamak "toplam = kaynak" garantisini bozar.
 
 ```python
 def distribute(total: Decimal, weights: list[Decimal]) -> list[Decimal]:
     """total'ı weights oranında paylaştırır; sum(sonuç) == total her zaman."""
     if not weights:
         return []
+    if any(w < 0 for w in weights):
+        raise ValueError("Ağırlıklar negatif olamaz.")
     weight_sum = sum(weights, ZERO)
     if weight_sum <= 0:
         raise ValueError("Ağırlıklar toplamı sıfır veya negatif olamaz.")
+    if total != round_money(total):
+        raise ValueError("Dağıtılacak tutar kuruşa yuvarlanmış olmalı (en fazla 2 ondalık).")
 
     raw = [total * w / weight_sum for w in weights]
     result = [r.quantize(CENT, rounding=ROUND_DOWN) for r in raw]   # ROUND_DOWN = sıfıra doğru
@@ -68,9 +76,10 @@ def distribute(total: Decimal, weights: list[Decimal]) -> list[Decimal]:
     if remaining_cents == 0:
         return result
 
-    # kesilen kısmı büyük olan önce, eşitse ağırlığı büyük olan; sorted kararlıdır → sıra korunur
+    # kesilen kısmı (mutlak) büyük olan önce, eşitse ağırlığı büyük olan;
+    # sorted kararlıdır → sıra korunur. abs() sayesinde negatif tutar pozitifin aynası olur.
     order = sorted(range(len(weights)),
-                   key=lambda i: (raw[i] - result[i], weights[i]),
+                   key=lambda i: (abs(raw[i] - result[i]), weights[i]),
                    reverse=True)
     step = CENT if remaining_cents > 0 else -CENT
     for k in range(abs(remaining_cents)):
