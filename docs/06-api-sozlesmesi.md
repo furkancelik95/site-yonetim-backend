@@ -127,12 +127,15 @@ Her hata aynı gövdeyi döner:
 |---|---|---|---|---|
 | GET | `/sites/{slug}` | erişim | R | site bilgisi + açık modüller + kullanıcının o sitedeki izinleri |
 | GET | `/sites/{slug}/dashboard` | `finance.read` | R | toplam tahakkuk/tahsilat, bu ay, açık bakiye, borçlu sayısı, ilk 5 borçlu, açık talepler, son duyurular, son giderler. **Özet tablodan**, `08-performans.md` |
-| GET | `/sites/{slug}/units` | `units.read` | R | sayfalı. bölüm, blok, tip, m², arsa payı, kullanım, malik adı, kiracı adı, bakiye |
+| GET | `/sites/{slug}/units` | `units.read` | R | sayfalı; `q` (no / blok+no / unvan), `block_id`, `is_active`. bölüm, blok, tip, m², arsa payı, kullanım, **bugünkü** malik ve kiracı adları. Bakiye finans diliminde eklenecek |
 | GET | `/sites/{slug}/units/{id}` | `units.read` | Y | bölüm ayrıntısı + taraflar (geçmiş dahil) + hesaplar |
 | POST | `/sites/{slug}/units` | `units.manage` | Y | elle bölüm ekleme |
 | PATCH | `/sites/{slug}/units/{id}` | `units.manage` | Y | |
-| POST | `/sites/{slug}/units/{id}/parties` | `people.manage` | Y | malik/kiracı ekle — gerekli cari hesapları da açar (`03` §5) |
+| POST | `/sites/{slug}/units/{id}/parties` | `people.manage` | Y | `{role, start_date, share_percent?, person_id \| person}` — gerekli cari hesapları da açar (`03` §5); malik hisseleri toplamı ≤ 100 (409) |
 | POST | `/sites/{slug}/units/{id}/parties/{party_id}/end` | `people.manage` | Y | `{end_date}` — kiracı çıkışı. **Silme değil, bitiş tarihi** |
+| POST · PATCH | `/sites/{slug}/blocks`, `/blocks/{id}` | `units.manage` | Y | blok ekle/güncelle; ad sitede benzersiz (Türkçe harf duyarsız) |
+| GET | `/sites/{slug}/people` | `people.read` | Y | sayfalı; `q` ad soyad içinde (Türkçe harf duyarsız) |
+| POST · PATCH | `/sites/{slug}/people`, `/people/{id}` | `people.manage` | Y | ad baş harf büyük, soyad tamamı büyük; telefon E.164 (cep); e-posta küçük harf |
 | GET | `/sites/{slug}/blocks`, `/unit-types` | `units.read` | R | |
 
 ### 2.5 Excel içe aktarma

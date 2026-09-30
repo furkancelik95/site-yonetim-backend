@@ -152,6 +152,9 @@ Hesaplanan:
 | email | TEXT NULL | küçük harf, ≤ 254 |
 | national_id_encrypted | TEXT NULL | TC kimlik — **şifreli** saklanır (`09-guvenlik-kvkk.md`) |
 | user_id | UUID NULL → users | kişi sisteme giriş yapıyorsa |
+| search_name | TEXT, indeks | Türkçe kurallarla küçük harf "ad soyad" — arama için (PostgreSQL `lower()` Türkçeyi bilmez) |
+
+TC kimlik (`national_id_encrypted`) şifreleme anahtarı yönetimi (`09` §5) gelince eklenecek; şimdilik tutulmuyor.
 
 Aynı gerçek kişi iki farklı sitede iki ayrı `persons` kaydıdır (kiracı sınırı).
 Hesaplanan: `full_name` = `"{first_name} {last_name}"`.

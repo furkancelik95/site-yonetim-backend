@@ -1,3 +1,4 @@
+import uuid
 from decimal import Decimal
 
 from site_yonetim.models import Unit
@@ -28,3 +29,23 @@ def test_site_ad_anahtari_turkce_kurallarla() -> None:
     assert Site(name="AKSU  KONAKLARI").name_key == Site(name="Aksu Konakları").name_key
     assert Site(name="IŞIK Sitesi").name_key == "ışık sitesi"
     assert Site(name="İSTANBUL").name_key == "istanbul"
+
+
+def test_kisi_iletisim_bilgisi_izin_yoksa_gizlenir() -> None:
+    from site_yonetim.api.v1.structure import PersonOut
+    from site_yonetim.models import Person
+
+    person = Person(
+        id=uuid.uuid4(),
+        first_name="Ayşe",
+        last_name="YILMAZ",
+        phone="+905321234567",
+        email="a@b.co",
+    )
+
+    hidden = PersonOut.of(person, contact=False)
+    shown = PersonOut.of(person, contact=True)
+
+    assert (hidden.phone, hidden.email) == (None, None)
+    assert shown.phone == "+905321234567"
+    assert person.search_name == "ayşe yılmaz"

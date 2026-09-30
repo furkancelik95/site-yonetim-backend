@@ -15,8 +15,9 @@ import re
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Annotated
+from zoneinfo import ZoneInfo
 
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -64,6 +65,16 @@ async def get_session(
 
 SettingsDep = Annotated[Settings, Depends(get_settings_dep)]
 NowDep = Annotated[datetime, Depends(get_now)]
+
+BUSINESS_TZ = ZoneInfo("Europe/Istanbul")
+
+
+def get_today(now: NowDep) -> date:
+    """İş günü (vade, başlangıç/bitiş tarihleri) Türkiye saatine göredir."""
+    return now.astimezone(BUSINESS_TZ).date()
+
+
+TodayDep = Annotated[date, Depends(get_today)]
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 FactoryDep = Annotated[async_sessionmaker[AsyncSession], Depends(get_session_factory)]
 

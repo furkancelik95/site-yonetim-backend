@@ -12,10 +12,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from site_yonetim.core.config import Environment, Settings
 from site_yonetim.core.security import hash_password
 from site_yonetim.db.tenancy import site_scope
+from site_yonetim.domain.structure import PartyRole
+from site_yonetim.domain.text import normalize_person_name
 from site_yonetim.models import (
     Block,
     Organization,
     OrganizationMembership,
+    Person,
     Plan,
     Site,
     SiteMembership,
@@ -32,10 +35,12 @@ from site_yonetim.seed.demo_data import (
     PLANS,
     SITES,
     SiteSpec,
+    occupancy_for,
     units_for,
 )
 from site_yonetim.services.provisioning import provision_site
 from site_yonetim.services.sites import set_module_enabled
+from site_yonetim.services.structure import add_party
 
 logger = logging.getLogger(__name__)
 
@@ -162,3 +167,27 @@ async def _seed_structure(session: AsyncSession, site: Site, spec: SiteSpec) -> 
     )
     await session.flush()
     logger.info("%s: %d blok, %d bölüm", site.name, len(blocks), len(units))
+    await _seed_people(session, spec, blocks)
+
+
+async def _seed_people(session: AsyncSession, spec: SiteSpec, blocks: dict[str, Block]) -> None:
+    units = {(unit.block_id, unit.number): unit for unit in await session.scalars(select(Unit))}
+    for occ in occupancy_for(spec):
+        block = blocks[occ.block]
+        unit = units[(block.id, occ.number)]
+        owner = _person(*occ.owner)
+        session.add(owner)
+        await session.flush()
+        await add_party(session, unit=unit, block=block, person=owner, role=PartyRole.OWNER,
+                        start_date=occ.owner_since)  # fmt: skip
+        if occ.tenant is not None and occ.tenant_since is not None:
+            tenant = _person(*occ.tenant)
+            session.add(tenant)
+            await session.flush()
+            await add_party(session, unit=unit, block=block, person=tenant,
+                            role=PartyRole.TENANT, start_date=occ.tenant_since)  # fmt: skip
+
+
+def _person(first: str, last: str) -> Person:
+    first_name, last_name = normalize_person_name(first, last)
+    return Person(first_name=first_name, last_name=last_name)

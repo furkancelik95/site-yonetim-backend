@@ -6,7 +6,7 @@ from datetime import datetime
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
-from site_yonetim.db.base import Base, TenantMixin, enum_check, tenant_table_args
+from site_yonetim.db.base import Base, TenantMixin, enum_check, tenant_fk, tenant_table_args
 from site_yonetim.domain.access import OrganizationRole, SiteRole, UserKind
 
 
@@ -53,11 +53,12 @@ class SiteMembership(TenantMixin, Base):
     __table_args__ = tenant_table_args(
         UniqueConstraint("site_id", "user_id"),
         CheckConstraint(enum_check("role", SiteRole), name="role"),
+        tenant_fk("person_id", "persons"),
     )
 
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
     role: Mapped[str] = mapped_column(Text)
-    # Sakin üyeliğinde dolu. persons tablosu (Dilim 3) gelince bileşik FK eklenir.
+    # Sakin üyeliğinde dolu: kullanıcının bu sitedeki kişi kaydı (bileşik FK).
     person_id: Mapped[uuid.UUID | None]
     is_active: Mapped[bool] = mapped_column(default=True)
 
