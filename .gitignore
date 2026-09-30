@@ -18,3 +18,12 @@ __pycache__/
 
 # yerel dosya deposu
 var/
+
+# Python araçları
+.coverage
+coverage.xml
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+requirements.lock.txt

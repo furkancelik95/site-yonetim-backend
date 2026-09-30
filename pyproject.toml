@@ -1,0 +1,109 @@
+[project]
+name = "site-yonetim"
+version = "0.1.0"
+description = "Site, apartman, iş merkezi ve AVM yönetim platformunun API ve iş mantığı"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi>=0.142.2",
+    "pydantic-settings>=2.15.0",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/site_yonetim"]
+
+[tool.uv]
+# Kilit dosyası (uv.lock) repoda durur; CI ve Docker `--locked` ile kurar.
+package = true
+
+# --- Lint / biçim -----------------------------------------------------------
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+src = ["src", "tests"]
+# Dokümanlardaki kod örnekleri biçimlendirilmez (docs/ elle yazılır).
+extend-exclude = ["docs", "*.md"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W", "F",   # pycodestyle, pyflakes
+    "I",             # import sırası
+    "B",             # bugbear
+    "UP",            # pyupgrade
+    "S",             # bandit (güvenlik)
+    "DTZ",           # saat dilimi olmayan datetime
+    "SIM", "RET", "PIE", "C4",
+    "PT",            # pytest
+    "N",             # adlandırma
+    "RUF",
+    "ASYNC",
+    "TID",           # yasaklı içe aktarmalar
+]
+ignore = [
+    "RUF001", "RUF002", "RUF003",  # Türkçe metinlerde "belirsiz" harf uyarıları (ı, İ)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106"]  # assert ve sabit test parolaları
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"decimal.ROUND_HALF_EVEN".msg = "Para yuvarlaması ROUND_HALF_UP'tır (docs/04-is-kurallari.md §1)."
+
+# --- Tip kontrolü -----------------------------------------------------------
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+files = ["src", "tests"]
+plugins = ["pydantic.mypy"]
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
+
+# --- Test -------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-ra", "--strict-markers", "--strict-config"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = ["error"]
+markers = [
+    "integration: gerçek PostgreSQL gerektirir",
+]
+
+[tool.coverage.run]
+source = ["site_yonetim"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+skip_covered = true
+exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError"]
+
+# --- Güvenlik taraması (bandit) ---------------------------------------------
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv"]
+
+[dependency-groups]
+dev = [
+    "bandit>=1.9.4",
+    "httpx2>=2.13.1",
+    "mypy>=2.3.1",
+    "pip-audit>=2.10.1",
+    "pre-commit>=4.6.2",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.16.9",
+]
