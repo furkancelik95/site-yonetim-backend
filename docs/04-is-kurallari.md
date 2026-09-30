@@ -267,11 +267,17 @@ Bir tahsilat girildiğinde **tek transaction** içinde:
 
 **Doğrulama:** tutar `> 0` (sıfır ve negatif reddedilir), cari hesap mevcut, kasa hesabı
 seçildiyse mevcut ve aktif. `reference` boşsa hesabın `reference_code`'u yazılır.
+Ayrıca (Python backend): tahsilat tarihi ileri olamaz; kapalı hesaba ve kapalı döneme yazılamaz.
+
+> **Uygulama durumu:** adım 4 (kasaya giriş) kasa diliminde gelecek; o zamana kadar
+> `cash_account_id` alınmaz. Hesap tahsilattan önce kilitlenir — aynı hesaba eşzamanlı iki
+> tahsilat aynı borcu iki kez kapatamaz (`08` §2 uygulama notu).
 
 ### 5.1 Hangi borca sayılır — en eski borçtan (FIFO)
 **Açık borçlar:** hesabın `debit > 0` olan her hareketi için
 `açık_tutar = debit − (bu harekete daha önce yapılmış payment_allocations toplamı)`.
-`açık_tutar > 0.005` olanlar dağıtıma girer.
+`açık_tutar > 0.005` olanlar dağıtıma girer. **Ters kaydı alınmış borç** (§7.3) açık değildir —
+ters kaydın alacağı onu zaten kapatmıştır; tahsilat ona mahsup edilmez.
 
 > "Daha önce yapılmış mahsuplar düşülür" kuralı kritik: düşülmezse ikinci tahsilat, ilk
 > tahsilatın kapattığı borcu **tekrar kapatır.** Test: `07` §3 "ikinci tahsilat aynı borca

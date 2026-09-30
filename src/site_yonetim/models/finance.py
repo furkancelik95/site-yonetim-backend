@@ -1,6 +1,7 @@
 """Finans: kurallar, bütçe, cari defter, tahakkuk — docs/03 §5–§7. Hepsi KİRACI tablosu.
 
-Değişmez defterler (docs/04 §8): `ledger_entries`, `charges`, `charge_lines` satırları
+Değişmez defterler (docs/04 §8): `ledger_entries`, `charges`, `charge_lines`,
+`payment_allocations` satırları
 güncellenemez ve silinemez — göçteki tetikleyici veritabanı düzeyinde reddeder. Düzeltme
 her zaman ters kayıtla yapılır.
 """
@@ -27,6 +28,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from site_yonetim.db.base import Base, TenantMixin, enum_check, tenant_fk, tenant_table_args
+from site_yonetim.domain.charging.payments import PaymentMethod, PaymentStatus
 from site_yonetim.domain.finance import (
     AllocationKind,
     AreaBasis,
@@ -335,6 +337,50 @@ class ChargeLine(TenantMixin, Base):
     weight_total: Mapped[Decimal | None] = mapped_column(Numeric)
     source_amount: Mapped[Decimal | None] = mapped_column(MONEY)
     explanation: Mapped[str | None] = mapped_column(Text)
+
+
+# --- Tahsilat (§7) ----------------------------------------------------------------------
+
+
+class Payment(TenantMixin, Base):
+    """Tahsilat. Cari hesaba tamamı kadar alacak hareketi yazılır (`source = payment`)."""
+
+    __tablename__ = "payments"
+    __table_args__ = tenant_table_args(
+        tenant_fk("ledger_account_id", "ledger_accounts"),
+        CheckConstraint("amount > 0", name="amount_positive"),
+        CheckConstraint(enum_check("method", PaymentMethod), name="method"),
+        CheckConstraint(enum_check("status", PaymentStatus), name="status"),
+        Index("ix_payments_site_date", "site_id", "date"),
+        Index("ix_payments_account", "site_id", "ledger_account_id"),
+    )
+
+    ledger_account_id: Mapped[uuid.UUID]
+    amount: Mapped[Decimal] = mapped_column(MONEY)
+    date: Mapped[dt.date] = mapped_column(Date)
+    method: Mapped[str] = mapped_column(Text)
+    # Paranın girdiği kasa/banka hesabı — kasa diliminde `cash_accounts`'a bağlanacak.
+    cash_account_id: Mapped[uuid.UUID | None]
+    reference: Mapped[str | None] = mapped_column(Text)  # boşsa hesabın referans kodu
+    note: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, default=PaymentStatus.CONFIRMED.value)
+    created_by_name: Mapped[str | None] = mapped_column(Text)
+
+
+class PaymentAllocation(TenantMixin, Base):
+    """Tahsilatın hangi borca sayıldığı — **değişmez**."""
+
+    __tablename__ = "payment_allocations"
+    __table_args__ = tenant_table_args(
+        tenant_fk("payment_id", "payments"),
+        tenant_fk("ledger_entry_id", "ledger_entries"),
+        CheckConstraint("amount > 0", name="amount_positive"),
+        Index("ix_payment_allocations_entry", "site_id", "ledger_entry_id"),
+    )
+
+    payment_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    ledger_entry_id: Mapped[uuid.UUID]
+    amount: Mapped[Decimal] = mapped_column(MONEY)
 
 
 # --- Idempotency (docs/06 §1.5) --------------------------------------------------------
