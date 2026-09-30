@@ -18,6 +18,8 @@ from site_yonetim.models.finance import (
     IdempotencyKey,
     LateFeePolicy,
     LedgerEntry,
+    Payment,
+    PaymentAllocation,
     Period,
     UnitWeight,
 )
@@ -46,6 +48,8 @@ __all__ = [
     "LedgerEntry",
     "Organization",
     "OrganizationMembership",
+    "Payment",
+    "PaymentAllocation",
     "Period",
     "Person",
     "Plan",

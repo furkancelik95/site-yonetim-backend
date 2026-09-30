@@ -27,6 +27,7 @@ from site_yonetim.api.v1.finance_common import (
     replayed,
 )
 from site_yonetim.core.errors import NotFoundError
+from site_yonetim.domain.access import Permission
 from site_yonetim.domain.charging.engine import PreviewCharge, PreviewLine, WarningKind
 from site_yonetim.domain.charging.periods import YearMonth
 from site_yonetim.domain.finance import AllocationKind, ChargeRunStatus, FinanceRuleError
@@ -295,7 +296,7 @@ class PostedChargeOut(BaseModel):
     unit_name: str
     ledger_account_id: uuid.UUID
     reference_code: str
-    person_name: str
+    person_name: str | None = Field(description="people.read izni yoksa null")
     account_kind: AccountKind
     amount: Money
     lines: list[LineOut]
@@ -344,6 +345,7 @@ async def run_charges(run_id: uuid.UUID, ctx: FinanceRead, paging: Paging) -> Pa
         .order_by(ChargeLine.id)
     ):
         lines[line.charge_id].append(line)
+    names = ctx.access.can(Permission.PEOPLE_READ)  # Denetçi kişisel veri görmez (docs/05)
     items = [
         PostedChargeOut(
             id=charge.id,
@@ -351,7 +353,7 @@ async def run_charges(run_id: uuid.UUID, ctx: FinanceRead, paging: Paging) -> Pa
             unit_name=f"{block}-{number}" if block else number,
             ledger_account_id=account.id,
             reference_code=account.reference_code,
-            person_name=f"{first} {last}",
+            person_name=f"{first} {last}" if names else None,
             account_kind=AccountKind(account.kind),
             amount=charge.amount,
             lines=[LineOut.of(line) for line in lines[charge.id]],

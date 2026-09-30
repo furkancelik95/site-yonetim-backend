@@ -7,6 +7,7 @@ from site_yonetim.api.v1 import (
     health,
     imports,
     me,
+    payments,
     platform,
     sites,
     structure,
@@ -24,3 +25,4 @@ api_router.include_router(structure.router)
 api_router.include_router(budget.router)
 api_router.include_router(charges.router)
 api_router.include_router(imports.router)
+api_router.include_router(payments.router)

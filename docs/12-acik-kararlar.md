@@ -20,7 +20,7 @@ silinir ve ilgili dokümana taşınır.
 | **K12** | Platform yöneticisinin müşteri paneline destek erişimi | Yok. Platform yöneticisinin site üyeliği yok | Ayrı yetki, süreli, müşteri onaylı, her giriş denetim kaydında | Burhan + hukuk | Destek |
 | **K13** | Fiyat paketleri | Planlar var, fiyat yok | | Ortaklar | Faturalama |
 | **K14** | Merkezi ısıtma tüketim bileşeni | %70 **eşit** (tüketim yerine) + %30 m² — sayaç okuma yok (`10-demo-veri.md` §3) | Sayaç okuma modülü gelince `by_meter_consumption` | Ürün | Isıtma dağıtımı |
-| **K15** | Aidatta vergi, e-arşiv, tahsilat makbuzu | Yok. Site yönetimi KDV mükellefi değil kabulü | Makbuz gerekli mi, numaralandırma kuralı | Mali müşavir | Makbuz |
+| **K15** | Aidatta vergi, e-arşiv, tahsilat makbuzu | Yok. Site yönetimi KDV mükellefi değil kabulü. Makbuz **verisi** var (`GET …/payments/{id}`), numara yok (`receipt_number = null`) | Makbuz gerekli mi, numaralandırma kuralı | Mali müşavir | Makbuz |
 | **K16** | Excel aktarımında aynı kişinin birden çok bölümü | Tekilleştirme yok: her satırın maliki/kiracısı ayrı kişi kaydı (`11` §5) | Aynı ad + aynı telefon/e-posta → tek kişi; önizlemede "birleştirilecek" diye göster. Yanlış birleştirme kişisel veri karıştırır, bu yüzden kural ürün kararı | Burhan + ürün | Kişi birleştirme |
 | **K17** | Hisseli mülkiyette (birden çok aktif malik) borç kime | Tek kişiye: hissesi büyük, eşitse başlangıcı eski olan (`04` §4.5) | Hisse oranında bölmek (her malike `distribute` ile pay) — ama her malikin ayrı cari hesabı ve ayrı tahsilatı gerekir | Burhan + ürün | Tahakkuk |
 

@@ -22,6 +22,8 @@ from site_yonetim.models import (
     LedgerAccount,
     LedgerEntry,
     Organization,
+    Payment,
+    PaymentAllocation,
     Period,
     Person,
     Plan,
@@ -63,7 +65,7 @@ async def test_demo_verisi_yuklenir(
     assert org.tax_number == "1234567890"
     assert all(site.organization_id == org.id for site in sites.values())
     assert await _count(session_factory, Plan) == 4
-    assert await _count(session_factory, User) == 7
+    assert await _count(session_factory, User) == 8  # 7 personel + sakin
 
     with all_sites_scope():
         assert await _count(session_factory, Unit) == 84
@@ -92,7 +94,7 @@ async def test_ikinci_calistirma_hicbir_sey_yapmaz(
     await seed_demo(dev_settings, session_factory)
 
     assert await seed_demo(dev_settings, session_factory) is False
-    assert await _count(session_factory, User) == 7
+    assert await _count(session_factory, User) == 8  # 7 personel + sakin
 
 
 @pytest.mark.parametrize("environment", ["production", "test"])
@@ -235,7 +237,9 @@ async def test_demo_finansi_motordan_gecer(
                         .order_by(Period.month)
                     )
                 ).all()
-                ledger_total = await session.scalar(select(func.sum(LedgerEntry.debit)))
+                ledger_total = await session.scalar(
+                    select(func.sum(LedgerEntry.debit - LedgerEntry.credit))
+                )
                 summary_total = await session.scalar(select(func.sum(AccountBalance.balance)))
         assert [p.status for p in plans] == ["finalized"]
         assert [month for month, _ in runs] == [4, 5, 6, 7, 8, 9]
@@ -243,3 +247,46 @@ async def test_demo_finansi_motordan_gecer(
         # ayrı yuvarlanır (K3) — kuruş farkı olabilir.
         assert all(abs(total - spec.monthly_budget) < Decimal("0.10") for _, total in runs), runs
         assert ledger_total == summary_total  # özet bakiye defterle tutar
+
+
+async def test_demo_tahsilat_ve_sakin(
+    dev_settings: Settings, session_factory: Factory, admin_engine: object, api: httpx2.AsyncClient
+) -> None:
+    """docs/10 §1.4, §2: tahsilatlar FIFO'dan geçer; sakin en borçlu oturan hesabın kişisidir."""
+    await seed_demo(dev_settings, session_factory, today=date(2026, 9, 30))
+    async with session_factory() as session:
+        sites = {s.slug: s.id for s in await session.scalars(select(Site))}
+    rates = {}
+    for spec in SITES:
+        with site_scope(sites[spec.slug]):
+            async with session_factory() as session:
+                charged = await session.scalar(select(func.sum(Charge.amount)))
+                paid = await session.scalar(select(func.sum(Payment.amount)))
+                allocated = await session.scalar(select(func.sum(PaymentAllocation.amount)))
+                summary = await session.scalar(select(func.sum(AccountBalance.balance)))
+        assert charged is not None
+        assert paid is not None
+        assert paid == allocated  # demo tahsilatı borç tutarında: avans yok
+        assert summary == charged - paid
+        rates[spec.slug] = paid / charged
+    assert rates["aksu-konaklari"] > rates["yildiz-sitesi"] > rates["mimoza-apartmani"]
+
+    headers = await login_headers(api, "sakin@demo.local", DEMO_PASSWORD)
+    me = (await api.get("/api/v1/me", headers=headers)).json()
+    [aksu] = me["sites"]
+    assert aksu["role"] == "Sakin"
+    with site_scope(sites["aksu-konaklari"]):
+        async with session_factory() as session:
+            worst = await session.scalar(
+                select(LedgerAccount)
+                .join(AccountBalance, AccountBalance.account_id == LedgerAccount.id)
+                .where(LedgerAccount.kind == "occupant")
+                .order_by(AccountBalance.balance.desc(), LedgerAccount.reference_code)
+                .limit(1)
+            )
+    assert worst is not None
+    statement = await api.get(
+        f"/api/v1/sites/aksu-konaklari/accounts/{worst.id}/statement", headers=headers
+    )
+    assert statement.status_code == 200
+    assert Decimal(statement.json()["account"]["balance"]) > 0

@@ -5,6 +5,8 @@ ortam kontrolü burada, yazmadan önce yapılır. İdempotent: demo verisi varsa
 """
 
 import logging
+import random
+import uuid
 from datetime import date, datetime, time
 from decimal import Decimal
 
@@ -14,6 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from site_yonetim.core.config import Environment, Settings
 from site_yonetim.core.security import hash_password
 from site_yonetim.db.tenancy import site_scope
+from site_yonetim.domain.access import UserKind
+from site_yonetim.domain.charging.payments import PaymentMethod
 from site_yonetim.domain.charging.periods import YearMonth
 from site_yonetim.domain.finance import (
     BudgetStatus,
@@ -23,15 +27,18 @@ from site_yonetim.domain.finance import (
     ScopeKind,
 )
 from site_yonetim.domain.money import distribute
-from site_yonetim.domain.structure import PartyRole
+from site_yonetim.domain.structure import AccountKind, PartyRole
 from site_yonetim.domain.text import normalize_person_name
 from site_yonetim.models import (
+    AccountBalance,
     AllocationRule,
     Block,
     BudgetItem,
     BudgetPlan,
+    Charge,
     ChargeType,
     ExpenseCategory,
+    LedgerAccount,
     Organization,
     OrganizationMembership,
     Person,
@@ -45,18 +52,25 @@ from site_yonetim.models import (
 from site_yonetim.seed.demo_data import (
     ACCOUNTS,
     BUDGET_ITEMS,
+    CASH_SHARE,
     CHARGED_MONTHS,
+    CURRENT_MONTH_FACTOR,
     DEMO_PASSWORD,
+    LAST_MONTH_FACTOR,
+    OLDER_MONTHS_BONUS,
     ORGANIZATION_NAME,
     ORGANIZATION_PLAN,
     ORGANIZATION_TAX_NUMBER,
+    PAYMENT_DAYS,
     PLANS,
+    RESIDENT,
+    SEED,
     SITES,
     SiteSpec,
     occupancy_for,
     units_for,
 )
-from site_yonetim.services import charging
+from site_yonetim.services import charging, payments
 from site_yonetim.services.charging import BUSINESS_TZ
 from site_yonetim.services.provisioning import provision_site
 from site_yonetim.services.sites import set_module_enabled
@@ -158,7 +172,12 @@ async def seed_demo(
                 )
                 await session.flush()  # kiracı satırları kapsam kapanmadan yazılmalı
 
-    logger.info("Demo verisi yüklendi: %d site, %d hesap.", len(SITES), len(ACCOUNTS))
+    async with factory() as session:
+        aksu = await session.scalar(select(Site.id).where(Site.slug == RESIDENT.site_slug))
+    if aksu is not None:
+        await _seed_resident(factory, aksu, password_hash)
+
+    logger.info("Demo verisi yüklendi: %d site, %d hesap.", len(SITES), len(ACCOUNTS) + 1)
     return True
 
 
@@ -260,10 +279,95 @@ async def _seed_finance(session: AsyncSession, spec: SiteSpec, today: date) -> N
     months = [YearMonth.of(today)]
     while len(months) < CHARGED_MONTHS:
         months.insert(0, months[0].previous())
+    runs = []
     for month in months:
         prepared = await charging.prepare(session, today, charge_date=month.first_day)
         posted_at = datetime.combine(month.first_day, time(9, 30), BUSINESS_TZ)
-        await charging.post(session, prepared, posted_by="Demo verisi", now=posted_at)
+        runs.append(await charging.post(session, prepared, posted_by="Demo verisi", now=posted_at))
+    await _seed_payments(session, spec, [r.run.id for r in runs], months, today)
+
+
+def _pay_probability(rate: Decimal, months_ago: int) -> Decimal:
+    if months_ago == 0:
+        return rate * CURRENT_MONTH_FACTOR
+    if months_ago == 1:
+        return rate * LAST_MONTH_FACTOR
+    return min(Decimal(1), rate + OLDER_MONTHS_BONUS)
+
+
+async def _seed_payments(
+    session: AsyncSession,
+    spec: SiteSpec,
+    run_ids: list[uuid.UUID],
+    months: list[YearMonth],
+    today: date,
+) -> None:
+    """Her borç, ayına göre olasılıkla tamamen ödenir; tahsilat gerçek servisten geçer (FIFO)."""
+    rng = random.Random(f"{SEED}:payments:{spec.slug}")  # noqa: S311  # nosec B311
+    accounts = {a.id: a for a in await session.scalars(select(LedgerAccount))}
+    planned: list[tuple[date, uuid.UUID, Decimal, PaymentMethod]] = []
+    for months_ago, (run_id, month) in enumerate(
+        zip(reversed(run_ids), reversed(months), strict=True)
+    ):
+        chance = _pay_probability(spec.collection_rate, months_ago)
+        charges = await session.scalars(
+            select(Charge).where(Charge.charge_run_id == run_id).order_by(Charge.id)
+        )
+        for charge in charges:
+            if Decimal(str(rng.random())) >= chance:
+                continue
+            day = min(month.first_day.replace(day=rng.randint(*PAYMENT_DAYS)), today)
+            cash = rng.random() < CASH_SHARE
+            method = PaymentMethod.CASH if cash else PaymentMethod.BANK_TRANSFER
+            planned.append((day, charge.ledger_account_id, charge.amount, method))
+    for day, account_id, amount, method in sorted(planned, key=lambda p: (p[0], p[1])):
+        await payments.record_payment(
+            session,
+            accounts[account_id],
+            amount=amount,
+            day=day,
+            method=method,
+            reference=None,
+            note=None,
+            today=today,
+            recorded_by="Demo verisi",
+        )
+
+
+async def _seed_resident(
+    factory: async_sessionmaker[AsyncSession], site_id: uuid.UUID, password_hash: str
+) -> None:
+    """`sakin@demo.local`: Aksu'da en borçlu oturan hesabın kişisi (docs/10 §2)."""
+    with site_scope(site_id):
+        async with factory() as session:
+            person_id = await session.scalar(
+                select(LedgerAccount.person_id)
+                .join(AccountBalance, AccountBalance.account_id == LedgerAccount.id)
+                .where(LedgerAccount.kind == AccountKind.OCCUPANT.value)
+                .order_by(AccountBalance.balance.desc(), LedgerAccount.reference_code)
+                .limit(1)
+            )
+            person = await session.get(Person, person_id)
+    if person is None:  # pragma: no cover - demo sitesinde hep borçlu hesap var
+        return
+    async with factory() as session, session.begin():
+        user = User(
+            email=RESIDENT.email,
+            password_hash=password_hash,
+            full_name=f"{person.first_name} {person.last_name}",
+            kind=UserKind.RESIDENT.value,
+        )
+        session.add(user)
+        await session.flush()
+        user_id = user.id
+    with site_scope(site_id):
+        async with factory() as session, session.begin():
+            session.add(
+                SiteMembership(user_id=user_id, role=RESIDENT.site_role, person_id=person.id)
+            )
+            linked = await session.get(Person, person.id)
+            if linked is not None:
+                linked.user_id = user_id
 
 
 def _person(first: str, last: str) -> Person:

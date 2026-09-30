@@ -62,6 +62,7 @@ class SiteSpec:
     extra_modules: tuple[ModuleKey, ...]
     iban: str
     monthly_budget: Decimal  # docs/10 §1.3 "Aylık bütçe"
+    collection_rate: Decimal  # docs/10 §1.3 "Tahsilat oranı"
 
 
 # docs/10 §1.3
@@ -72,6 +73,7 @@ SITES: tuple[SiteSpec, ...] = (
         (ModuleKey.RESERVATIONS, ModuleKey.VISITORS, ModuleKey.PACKAGES, ModuleKey.VALET),
         "TR330006100519786457841326",
         Decimal(486_000),
+        Decimal("0.94"),
     ),
     SiteSpec(
         "Yıldız Sitesi", "yildiz-sitesi", "Ankara", "Çankaya", PropertyKind.RESIDENTIAL, "Standart",
@@ -79,6 +81,7 @@ SITES: tuple[SiteSpec, ...] = (
         (ModuleKey.VISITORS,),
         "TR620001000222334455667788",
         Decimal(148_000),
+        Decimal("0.78"),
     ),
     SiteSpec(
         "Mimoza Apartmanı", "mimoza-apartmani", "İzmir", "Karşıyaka", PropertyKind.RESIDENTIAL,
@@ -87,6 +90,7 @@ SITES: tuple[SiteSpec, ...] = (
         (),
         "TR110011100000000012345678",
         Decimal(38_500),
+        Decimal("0.61"),
     ),
 )  # fmt: skip
 
@@ -152,7 +156,7 @@ class AccountSpec:
     site_role: str | None = None
 
 
-# docs/10 §2. Sakin hesabı (en borçlu oturan hesabın kişisi) kişi ve finans tabloları gelince.
+# docs/10 §2. Sakin hesabı ayrıca kurulur: Aksu'da en borçlu oturan hesabın kişisine bağlanır.
 ACCOUNTS: tuple[AccountSpec, ...] = (
     AccountSpec("platform@demo.local", "Deniz Aksoy", is_platform_admin=True),
     AccountSpec("yonetici@demo.local", "Kerem Yıldırım", organization_role="Sahip"),
@@ -238,3 +242,11 @@ BUDGET_ITEMS: tuple[BudgetItemSpec, ...] = (
     BudgetItemSpec("Asansör Bakım Sözleşmesi", 4, "Eşit Paylaşım", AIDAT, elevator_only=True),
 )
 CHARGED_MONTHS = 6  # son 6 ayın tahakkuku motordan geçirilerek kaydedilir
+
+# Tahsilat (docs/10 §1.4): eski aylar daha çok kapanmış. Olasılık = oran × çarpan.
+CURRENT_MONTH_FACTOR = Decimal("0.45")
+LAST_MONTH_FACTOR = Decimal("0.90")
+OLDER_MONTHS_BONUS = Decimal("0.04")
+CASH_SHARE = 0.25  # ~%25 nakit, gerisi havale
+PAYMENT_DAYS = (2, 25)  # ayın 2'si – 25'i
+RESIDENT = AccountSpec("sakin@demo.local", "", site_slug="aksu-konaklari", site_role="Sakin")
