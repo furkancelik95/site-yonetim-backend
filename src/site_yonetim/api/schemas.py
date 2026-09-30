@@ -9,7 +9,7 @@ import re
 from decimal import Decimal
 from typing import Annotated, Any
 
-from pydantic import BeforeValidator, PlainSerializer, WithJsonSchema
+from pydantic import BaseModel, BeforeValidator, Field, PlainSerializer, WithJsonSchema
 from pydantic_core import PydanticCustomError
 
 from site_yonetim.domain.money import CENT, ZERO
@@ -63,3 +63,34 @@ Money = Annotated[
         }
     ),
 ]
+
+
+# --- Sayfalama ve yazma yanıtı (docs/06 §1.3, §1.5) ---------------------------
+
+DEFAULT_PAGE_SIZE = 50
+MAX_PAGE_SIZE = 200
+
+
+class Page[T](BaseModel):
+    """Liste döndüren **her** uç sayfalıdır: `{items, page, page_size, total}`."""
+
+    items: list[T]
+    page: int
+    page_size: int
+    total: int
+
+
+class PageParams(BaseModel):
+    page: int = Field(default=1, ge=1)
+    page_size: int = Field(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE)
+
+    @property
+    def offset(self) -> int:
+        return (self.page - 1) * self.page_size
+
+
+class Written[T](BaseModel):
+    """Başarılı yazma: oluşan kayıt + kullanıcıya gösterilecek Türkçe mesaj."""
+
+    data: T
+    message: str
