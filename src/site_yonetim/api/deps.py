@@ -163,3 +163,17 @@ def require_permission(
         return ctx
 
     return dependency
+
+
+# --- Platform ----------------------------------------------------------------
+
+
+async def platform_admin(current: CurrentUserDep) -> CurrentUser:
+    """Platform uçları yalnız platform yöneticisine; başkası **404** alır (panelin varlığı
+    sızmasın — docs/05 §5, docs/07 §8.6)."""
+    if not current.user.is_platform_admin:
+        raise NotFoundError
+    return current
+
+
+PlatformAdminDep = Annotated[CurrentUser, Depends(platform_admin)]

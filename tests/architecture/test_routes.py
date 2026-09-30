@@ -3,6 +3,7 @@
 1. Her uç kimlik (`current_user`) ister; istisnalar aşağıdaki beyaz listededir.
 2. `/sites/{slug}/…` altındaki her uç `site_context`'ten geçer (erişim 404, kapsam, modül).
 3. `site_context` kullanan her uç kimlik de ister.
+4. `/platform/…` altındaki her uç `platform_admin`'den geçer (değilse 404).
 
 Not: FastAPI alt router'ları `app.routes` içinde düzleştirmez; uçlar OpenAPI üretiminin de
 kullandığı `iter_route_contexts` ile dolaşılır. Testin boşa geçmediği ayrıca doğrulanır.
@@ -13,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.dependencies.models import Dependant
 from fastapi.routing import APIRoute, iter_route_contexts
 
-from site_yonetim.api.deps import current_user, site_context
+from site_yonetim.api.deps import current_user, platform_admin, site_context
 from site_yonetim.main import create_app
 from tests.conftest import SettingsFactory
 
@@ -68,6 +69,18 @@ def test_site_uclari_site_baglamindan_gecer(routes: list[tuple[str, set[object]]
         path for path, calls in routes if "/sites/{slug}" in path and site_context not in calls
     ]
 
+    assert offenders == []
+
+
+def test_platform_uclari_platform_yoneticisi_ister(routes: list[tuple[str, set[object]]]) -> None:
+    platform_paths = [path for path, _ in routes if path.startswith("/api/v1/platform")]
+    offenders = [
+        path
+        for path, calls in routes
+        if path.startswith("/api/v1/platform") and platform_admin not in calls
+    ]
+
+    assert platform_paths, "platform uçları dolaşılamadı"
     assert offenders == []
 
 

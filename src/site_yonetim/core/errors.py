@@ -121,6 +121,10 @@ def error_body(code: str, message: str, fields: dict[str, str] | None = None) ->
 
 
 def _validation_message(error: dict[str, Any]) -> str:
+    # Doğrulayıcılarımız Türkçe ValueError fırlatır; mesajı olduğu gibi göster.
+    ctx = error.get("ctx") or {}
+    if error.get("type") == "value_error" and isinstance(ctx.get("error"), ValueError):
+        return str(ctx["error"])
     template = _VALIDATION_MESSAGES.get(error.get("type", ""), _VALIDATION_FALLBACK)
     try:
         return template.format(**(error.get("ctx") or {}))
