@@ -22,6 +22,24 @@ silinir ve ilgili dokümana taşınır.
 | **K14** | Merkezi ısıtma tüketim bileşeni | %70 **eşit** (tüketim yerine) + %30 m² — sayaç okuma yok (`10-demo-veri.md` §3) | Sayaç okuma modülü gelince `by_meter_consumption` | Ürün | Isıtma dağıtımı |
 | **K15** | Aidatta vergi, e-arşiv, tahsilat makbuzu | Yok. Site yönetimi KDV mükellefi değil kabulü | Makbuz gerekli mi, numaralandırma kuralı | Mali müşavir | Makbuz |
 
+## PRD ile repo dokümanları arasındaki çelişkiler
+
+**Karar (Furkan, 30.09.2026):** çelişkide **repo `docs/` geçerlidir**. PRD
+(`Site_Tesis_Yonetim_Platformu_Master_PRD_v1_2.docx`) ile uyum, madde madde ayrı işler olarak
+ele alınır; bir madde uyumlanınca ilgili dokümana taşınır ve bu tablodan silinir.
+
+| # | Konu | Repo `docs/` (şu an geçerli) | PRD v1.2 | Etkisi |
+|---|---|---|---|---|
+| **P1** | Erişimi olmayan site | **404** (`05` §7) | 403 + denetime "kapsam ihlali denemesi" | Yetki katmanı |
+| **P2** | Kapalı / planda olmayan modül | **404** (`02` §4) | 402/403 + yükseltme bilgisi, veri salt okunur | Modül kontrolü |
+| **P3** | Kiracı (tenant) sınırı | **Site** — `site_id` (`02` §3) | Organizasyon; kapsam Org › Site › Blok › Bölüm | İzolasyon, blok/bölüm kapsamlı roller |
+| **P4** | Para saklama | **`NUMERIC(18,2)` + `Decimal`**, tek para birimi TRY (`04` §1) | Kuruş cinsinden tam sayı + para birimi sütunu | Veri modeli |
+| **P5** | Giriş | **E-posta + parola**; OTP/2FA sonra (`05` §8) | OTP/parola + MFA MVP'de; platform kullanıcısına MFA zorunlu; hassas işlemde yeniden doğrulama | Kimlik |
+| **P6** | Aydınlatma metni | **Bağlantı yeterli, onay kutusu yok** (`09` §5) | İlk girişte ve metin değişince onay | KVKK ekranları |
+| **P7** | Barındırma | **Türkiye'de** (`09` §5) | Açık karar: yurt içi seçenek + yurt dışı aktarım değerlendirmesi | Altyapı |
+| **P8** | Denetim kaydı | `09` §6 şeması | + aktör tipi, kanal, korelasyon id, gerekçe; outbox ile aynı transaction; giriş/çıkış ve doküman erişimi | `audit_log` |
+| **P9** | Dosya indirme | Her zaman yetki kontrollü uç nokta (`09` §3) | İmzalı, süreli bağlantı | Dosya deposu |
+
 ## Referans uygulamadaki bilinen hatalar (düzeltilmiş kural dokümanlarda)
 
 Bunlar karar değil, **hata**. Yeni backend'de doğru kural uygulanır; referansı kopyalama.
