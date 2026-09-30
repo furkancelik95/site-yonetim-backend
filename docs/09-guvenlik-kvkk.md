@@ -1,0 +1,89 @@
+# 09 — Güvenlik ve KVKK
+
+Bu sistem aidat tahsilatı ve sakin kişisel verisi işliyor; güvenlik açığı hem para hem hukuk
+sorunu demek. Canlıya çıkmadan önce bağımsız bir güvenlik denetimi yapılacak.
+
+## 1. Kiracı izolasyonu
+
+`02-mimari.md` §3 (iki katman: uygulama filtresi + PostgreSQL RLS) ve `07-test-senaryolari.md` §6.
+En ağır hata türü budur: bir yönetim şirketinin, başka bir şirketin sakinlerinin borcunu görmesi.
+
+- İstekten gelen `site_id` asla kullanılmaz; site her zaman URL'deki `slug` + kullanıcının
+  erişimi üzerinden çözülür.
+- Erişim yoksa **404**.
+- "Tüm siteler" kapsamı yalnız açıkça çağrılan yerlerde: platform paneli, portföy, gece işleri.
+
+## 2. Sırlar
+
+- Bağlantı dizesi, JWT anahtarı, SMS/e-posta/ödeme sağlayıcı anahtarları **ortam değişkeninde.**
+- `.env` repoya girmez (`.gitignore`'da var). `env.example` yer tutucularla repoda durur.
+- Parolalar `argon2id`/bcrypt hash'i ile saklanır; düz metin ya da geri çözülebilir şifreleme yok.
+- **Her commit öncesi** staged değişiklik sır açısından taranır. Öneri: `gitleaks` ya da
+  `detect-secrets` + pre-commit ve **GitHub Actions'ta da** (yerel kanca atlanabilir, CI atlanamaz).
+- Geliştirme ve üretim **ayrı** kimlik bilgisi kullanır.
+- Demo verisi ve `Demo1234!` parolalı hesaplar **yalnız geliştirme ortamında** oluşur.
+
+## 3. Dosya yükleme (fatura, fiş, dekont)
+
+| Kural | Neden |
+|---|---|
+| Uzantı beyaz listesi: `.pdf .jpg .jpeg .png .webp` | |
+| **İçerik imzası doğrulanır** — uzantıya güvenilmez | `fatura.pdf` adlı bir HTML/JS dosyası reddedilmeli |
+| İmzalar: PDF `25 50 44 46` (`%PDF`) · JPEG `FF D8 FF` · PNG `89 50 4E 47` · WEBP `52 49 46 46` (`RIFF`) | |
+| En fazla **10 MB**; beyan edilen boyut **ve** gerçek okunan boyut kontrol edilir | istemci boyut hakkında yalan söyleyebilir |
+| Disk adı üretilir: `{site_id}/{file_id}.{uzantı}` — kullanıcının verdiği ad **kullanılmaz** | `../../` yol saldırısı ve tahmin |
+| Kullanıcının adı yalnız indirme başlığında, temizlenmiş: yol ayıraçları ve geçersiz karakterler `_`, en fazla 120 karakter | |
+| Dosyalar **web kökünün / statik dosya klasörünün dışında** | adresi bilen başka sitenin faturasını indiremesin |
+| İndirme her zaman bir uç noktadan, **yetki ve site kontrolüyle** | |
+| Diskte okunan yol, depo kökünün içinde mi kontrol edilir | |
+| Reddedilen dosyadan diskte **iz kalmaz** | |
+| SHA-256 saklanır | aynı belgenin iki kez yüklenmesi görülebilir |
+| Üretimde virüs taraması (ör. ClamAV) — **yapılacak** | |
+
+## 4. Web güvenliği
+
+- **HTTPS zorunlu**, HSTS açık.
+- **CORS:** yalnız frontend'in alan adı; `*` yok.
+- Yenileme jetonu **httpOnly + Secure + SameSite** çerezde; çerezle korunan yazma işlemlerinde
+  CSRF koruması.
+- **Hız sınırı:** giriş denemesi (5 hatada 15 dk kilit), parola sıfırlama, dosya yükleme.
+- Hata yanıtında yığın izi (stack trace) **yok**; ayrıntı yalnız sunucu logunda.
+- SQL her zaman parametreli (ORM). String birleştirerek SQL **yazılmaz.**
+- Frontend'e dönen metinde HTML yok; kullanıcı girdisi olduğu gibi döner, kaçışlamayı frontend yapar.
+
+## 5. KVKK
+
+Sistem kişisel veri işler: ad, soyad, telefon, e-posta, TC kimlik (isteğe bağlı), plaka,
+ziyaretçi bilgisi, borç bilgisi.
+
+| Konu | Kural |
+|---|---|
+| **Veri minimizasyonu** | Güvenlik görevlisi daire aramasında yalnız bölüm ve oturan adını görür; telefon ve borç **görmez**. Denetçi finans görür, kişisel veri görmez |
+| **TC kimlik** | Zorunlu değil. Tutulursa **şifreli** (`national_id_encrypted`); anahtar ortam değişkeninde; ekranda maskeli (`123******78`) |
+| **Loglar** | Telefon, e-posta, TC kimlik loga yazılmaz |
+| **Aydınlatma metni** | Kişisel veri toplanan her ekranda bağlantı. Onay kutusu gerekmez |
+| **Açık rıza** | İsteğe bağlı; işlem rızaya bağlanmaz. Verildiyse **sürümlü** kaydedilir: `consents(person_id, kind, text_version, granted_at, revoked_at)` |
+| **Ticari ileti izni** (SMS/e-posta/arama) | Her kanal ayrı ve isteğe bağlı. İYS'ye bildirilir. Duyuru ve borç bildirimi ticari ileti değildir, izin gerektirmez |
+| **İlgili kişi başvurusu** | Kişinin verisini dışa aktarma ve silme talebi — **yapılacak**. Finansal kayıtlar yasal saklama süresince silinmez, kişisel alanlar anonimleştirilir |
+| **Saklama süreleri** | Henüz belirlenmedi → `12-acik-kararlar.md` |
+| **Barındırma** | Veri Türkiye'de (KVKK m.9) |
+
+## 6. Denetim kaydı (audit log) — yapılacak
+
+Referans uygulamada ayrı bir denetim tablosu yok (değişmez defter ve ters kayıt zinciri var).
+Yeni backend'de baştan olmalı:
+
+`audit_log(id, site_id, user_id, action, entity, entity_id, before JSONB, after JSONB, ip, at)`
+
+- Kaydedilecekler: her finansal işlem, yetki/üyelik değişikliği, modül aç/kapa, ayar değişikliği,
+  toplu içe aktarma, dosya indirme (kişisel veri içeriyorsa).
+- Tek bir yerden yazılsın (SQLAlchemy olayı / servis katmanı ortak fonksiyonu) — her uç noktaya
+  elle eklenmesin.
+- `audit.read` izni olan görür (Yönetici, Denetçi). Kayıt değiştirilemez ve silinemez.
+
+## Referans
+
+`brhnnkaraa6/siteyonetimi`:
+- Dosya deposu: `src/SiteYonetimi.Infrastructure/Files/FileStorage.cs`
+- Güvenlik ekranının kısıtlı daire araması: `src/SiteYonetimi.Web/Controllers/SecurityController.cs`
+- Demo verisinin yalnız geliştirmede kurulması: `src/SiteYonetimi.Web/Program.cs`

@@ -15,3 +15,6 @@ __pycache__/
 .idea/
 .vs/
 *.user
+
+# yerel dosya deposu
+var/
