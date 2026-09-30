@@ -89,7 +89,16 @@ def _float_usages(path: Path) -> list[str]:
     ]
 
 
+# İstisna: Excel sayı hücrelerini float verir; bu sınırda hemen Decimal(repr(x))'e çevrilir.
+_FLOAT_BOUNDARY = {Path("domain/imports/numbers.py")}
+
+
 def test_uygulama_kodunda_float_yok() -> None:
-    usages = [usage for path in sorted(SRC.rglob("*.py")) for usage in _float_usages(path)]
+    usages = [
+        usage
+        for path in sorted(SRC.rglob("*.py"))
+        if path.relative_to(SRC) not in _FLOAT_BOUNDARY
+        for usage in _float_usages(path)
+    ]
 
     assert usages == [], "Para ve oran için Decimal kullanın (docs/04-is-kurallari.md §1)"

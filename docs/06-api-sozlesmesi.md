@@ -149,6 +149,19 @@ Her hata aynı gövdeyi döner:
 | POST | `/sites/{slug}/imports/units` | `units.manage` | R | dosya yükle → **önizleme**: satırlar, hata ve uyarılar, aktarılabilir satır sayısı. Hiçbir şey yazılmaz |
 | POST | `/sites/{slug}/imports/units/{import_id}/confirm` | `units.manage` | R | önizlenen aktarımı uygula |
 
+- Yükleme `multipart/form-data`, alan adı `file`. Dosya hataları **422** (`invalid_file_type`,
+  `invalid_file_content`, `file_too_complex`, `missing_columns`, `too_many_rows`, `empty_file`;
+  `fields.file` dolu) · 5 MB üstü **413**.
+- Önizleme: `{import_id | null, expires_at, total_rows, importable_count, new_count,
+  existing_count, error_count, warning_count, rows[], issues[]}`. Satırda `already_exists`
+  (onayda atlanır); telefon/e-posta yalnız `people.read` ile. Sorun: `{row_number | null,
+  column, message, severity: "error" | "warning"}` — `row_number` Excel satır numarasıdır;
+  `null` dosya geneli (ör. plan tavanı uyarısı).
+- Onay → `Written`: `{created_units, created_people, created_accounts, created_blocks,
+  created_unit_types, skipped[]}` + Türkçe `message`. Başkasının, başka sitenin, süresi dolmuş
+  ya da zaten onaylanmış aktarımı **404** `import_not_found` · eşzamanlı çakışma **409**
+  `import_conflict`.
+
 ### 2.6 Finans
 | Yöntem | Yol | İzin | Durum | Not |
 |---|---|---|---|---|

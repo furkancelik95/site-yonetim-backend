@@ -40,6 +40,23 @@ En ağır hata türü budur: bir yönetim şirketinin, başka bir şirketin saki
 | SHA-256 saklanır | aynı belgenin iki kez yüklenmesi görülebilir |
 | Üretimde virüs taraması (ör. ClamAV) — **yapılacak** | |
 
+### 3.1 Excel içe aktarma dosyası (`11-excel-aktarim.md`)
+
+| Kural | Neden |
+|---|---|
+| Uzantı `.xlsx` + içerik imzası ZIP (`50 4B 03 04`); en fazla **5 MB** | |
+| Açılmış boyut ≤ 50 MB, arşiv girdisi ≤ 500; `xl/workbook.xml` yoksa ret | zip bombası |
+| XML `defusedxml` ile ayrıştırılır (openpyxl kurulu olunca kendisi kullanır; testle korunur) | XXE, varlık bombası |
+| Yalnız saklanmış hücre değeri okunur; formül, dış bağlantı, makro yok sayılır | |
+| Ayrıştırma iş parçacığında (olay döngüsü bloke olmaz); en fazla 5.000 satır, 60 sütun | |
+| Geçici dosya adı sunucu üretir (`{site_id}/{user_id}/{uuid}.xlsx`, izin 0600); 6 saat sonra silinir | |
+
+### 3.2 İstek gövdesi sınırı
+
+Tüm istekler **1 MB** ile sınırlı; Excel yükleme ucu 5 MB + çok parçalı pay. Sınır ara katmanda,
+gövde okunurken uygulanır (`Content-Length` yoksa da sayılır) → **413**. Starlette çok parçalı
+dosyaları sınırsız diske yazdığından, sınır ayrıştırmadan önce olmalı.
+
 ## 4. Web güvenliği
 
 - **HTTPS zorunlu**, HSTS açık.
