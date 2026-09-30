@@ -47,6 +47,19 @@ jobs:
     name: test
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres # yalnız bu geçici CI kapsayıcısı için
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      PGHOST: localhost
+      PGUSER: postgres
+      PGPASSWORD: postgres
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -57,7 +70,18 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
       - run: uv sync --locked
-      - name: Testler ve kapsam
+      - name: Test veritabanı ve rolleri (sahip + RLS'e tabi uygulama rolü)
+        run: |
+          owner_pw="$(openssl rand -hex 24)"
+          app_pw="$(openssl rand -hex 24)"
+          echo "::add-mask::$owner_pw"
+          echo "::add-mask::$app_pw"
+          DB_OWNER_PASSWORD="$owner_pw" DB_APP_PASSWORD="$app_pw" APP_DB_NAME=site_yonetim_test             bash docker/postgres/10-roles.sh
+          {
+            echo "TEST_DATABASE_ADMIN_URL=postgresql+asyncpg://site_yonetim_owner:${owner_pw}@localhost:5432/site_yonetim_test"
+            echo "TEST_DATABASE_URL=postgresql+asyncpg://site_yonetim_app:${app_pw}@localhost:5432/site_yonetim_test"
+          } >> "$GITHUB_ENV"
+      - name: Testler ve kapsam (birim + mimari + PostgreSQL entegrasyon)
         run: uv run pytest --cov --cov-report=term-missing
 
   audit:

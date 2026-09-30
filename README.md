@@ -21,14 +21,35 @@ uv run uvicorn site_yonetim.main:app --reload   # http://localhost:8000/api/v1/d
 uv run pytest --cov                              # testler
 ```
 
-Docker ile: `docker compose up --build` → `http://localhost:8000/api/v1/health`.
+### Veritabanı
+
+PostgreSQL 16. Uygulama **süper kullanıcı olmayan, RLS'e tabi** `site_yonetim_app` rolüyle,
+göçler tablo sahibi `site_yonetim_owner` ile çalışır. Roller `docker/postgres/10-roles.sh` ile kurulur.
+
+```bash
+docker compose up -d db                 # .env'deki POSTGRES_/DB_*_PASSWORD ile rolleri kurar
+docker compose run --rm migrate         # ya da: uv run alembic upgrade head
+```
+
+Entegrasyon testleri (ayrı veritabanı):
+
+```bash
+docker compose exec -u postgres -e APP_DB_NAME=site_yonetim_test db bash /docker-entrypoint-initdb.d/10-roles.sh
+export TEST_DATABASE_URL=postgresql+asyncpg://site_yonetim_app:…@localhost:5432/site_yonetim_test
+export TEST_DATABASE_ADMIN_URL=postgresql+asyncpg://site_yonetim_owner:…@localhost:5432/site_yonetim_test
+uv run pytest --cov
+```
+
+Değişkenler yoksa entegrasyon testleri yerelde atlanır; CI'da atlanmaz.
+
+Docker ile API: `docker compose up --build api` → `http://localhost:8000/api/v1/health`.
 
 OpenAPI şeması: `GET /api/v1/openapi.json` (frontend tiplerini buradan üretir).
 
 ## CI
 
 Her PR'da GitHub Actions: biçim + lint (güvenlik kuralları dahil) + mypy (strict) + bandit,
-testler (kapsam ≥ %90), bağımlılık açığı taraması (pip-audit), sır taraması (gitleaks),
+testler (birim + mimari + PostgreSQL 16 entegrasyon, kapsam ≥ %90), bağımlılık açığı taraması (pip-audit), sır taraması (gitleaks),
 Docker imajı derleme + imaj açık taraması + duman testi, CodeQL. `main` korumalıdır:
 doğrudan push yok, CI geçmeden PR birleştirilmez.
 

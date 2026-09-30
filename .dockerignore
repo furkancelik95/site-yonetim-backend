@@ -4,5 +4,7 @@
 !uv.lock
 !README.md
 !src/
+!migrations/
+!alembic.ini
 **/__pycache__
 **/*.pyc
