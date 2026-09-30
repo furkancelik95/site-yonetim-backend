@@ -61,6 +61,7 @@ class SiteSpec:
     blocks: tuple[BlockSpec, ...]
     extra_modules: tuple[ModuleKey, ...]
     iban: str
+    monthly_budget: Decimal  # docs/10 §1.3 "Aylık bütçe"
 
 
 # docs/10 §1.3
@@ -70,12 +71,14 @@ SITES: tuple[SiteSpec, ...] = (
         (BlockSpec("A", True, 8, 16), BlockSpec("B", True, 8, 16), BlockSpec("C", False, 4, 16)),
         (ModuleKey.RESERVATIONS, ModuleKey.VISITORS, ModuleKey.PACKAGES, ModuleKey.VALET),
         "TR330006100519786457841326",
+        Decimal(486_000),
     ),
     SiteSpec(
         "Yıldız Sitesi", "yildiz-sitesi", "Ankara", "Çankaya", PropertyKind.RESIDENTIAL, "Standart",
         (BlockSpec("A", True, 6, 12), BlockSpec("B", False, 5, 12)),
         (ModuleKey.VISITORS,),
         "TR620001000222334455667788",
+        Decimal(148_000),
     ),
     SiteSpec(
         "Mimoza Apartmanı", "mimoza-apartmani", "İzmir", "Karşıyaka", PropertyKind.RESIDENTIAL,
@@ -83,6 +86,7 @@ SITES: tuple[SiteSpec, ...] = (
         (BlockSpec("", False, 4, 12),),
         (),
         "TR110011100000000012345678",
+        Decimal(38_500),
     ),
 )  # fmt: skip
 
@@ -207,3 +211,30 @@ def occupancy_for(site: SiteSpec) -> tuple[OccupancySpec, ...]:
         tenant_since = date(2025, rng.randint(1, 12), 1) if has_tenant else None
         result.append(OccupancySpec(unit.number, unit.block, owner, since, tenant, tenant_since))
     return tuple(result)
+
+
+# --- İşletme projesi (docs/10 §1.4) ---------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class BudgetItemSpec:
+    name: str
+    percent: int  # yıllık bütçedeki pay
+    rule: str  # dağıtım kuralının adı (services/finance_setup)
+    charge_type: str
+    elevator_only: bool = False
+
+
+AIDAT = "Aidat"
+DEMIRBAS = "Demirbaş Katılım Payı"
+BUDGET_ITEMS: tuple[BudgetItemSpec, ...] = (
+    BudgetItemSpec("Personel Giderleri (kapıcı, güvenlik)", 32, "Eşit Paylaşım", AIDAT),
+    BudgetItemSpec("Merkezi Isıtma", 24, "Merkezi Isıtma (%70 tüketim + %30 m²)", AIDAT),
+    BudgetItemSpec("Ortak Alan Elektrik ve Su", 11, "Brüt Metrekare", AIDAT),
+    BudgetItemSpec("Temizlik ve Bahçe Bakımı", 9, "Eşit Paylaşım", AIDAT),
+    BudgetItemSpec("Yönetim Hizmet Bedeli", 8, "Daire Tipi Ağırlığı", AIDAT),
+    BudgetItemSpec("Sigorta ve Diğer", 6, "Arsa Payı", AIDAT),
+    BudgetItemSpec("Demirbaş ve Yatırım Katılım Payı", 6, "Arsa Payı", DEMIRBAS),
+    BudgetItemSpec("Asansör Bakım Sözleşmesi", 4, "Eşit Paylaşım", AIDAT, elevator_only=True),
+)
+CHARGED_MONTHS = 6  # son 6 ayın tahakkuku motordan geçirilerek kaydedilir

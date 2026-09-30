@@ -17,6 +17,7 @@ from site_yonetim.db.tenancy import site_scope
 from site_yonetim.domain.text import slugify
 from site_yonetim.models import PropertyKind, Site, UnitType
 from site_yonetim.models.platform import site_name_key
+from site_yonetim.services.finance_setup import ensure_finance_setup
 from site_yonetim.services.sites import provision_site_modules
 
 SITE_NAME_MIN, SITE_NAME_MAX = 3, 120
@@ -97,5 +98,5 @@ async def provision_site(
             UnitType(name=type_name, weight=weight, sort_order=order)
             for order, (type_name, weight) in enumerate(DEFAULT_UNIT_TYPES)
         )
-        await session.flush()
+        await ensure_finance_setup(session)
     return site

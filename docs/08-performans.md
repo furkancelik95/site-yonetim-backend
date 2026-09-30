@@ -39,6 +39,14 @@ Pano ve borçlular her açılışta 450.000 hareketi **toplamamalı.** Bankalar�
 
 Pano artık birkaç satır okur; veri büyüdükçe yavaşlamaz.
 
+**Uygulama (Python backend, `services/ledger.py`):** `account_balances` hesaba yazan her
+işlemde defterden **yeniden hesaplanır** (artımlı toplama değil), ama önce ilgili özet satırları
+**hesap kimliği sırasıyla** `FOR UPDATE` kilitlenir. Aynı hesaba yazan ikinci işlem birincinin
+commit'ini bekler ve onun hareketlerini görerek hesaplar — kayıp güncelleme olmaz, kilitlenme
+(deadlock) olmaz. `oldest_open_due_date` §13 kuralıyla SQL'de (pencere fonksiyonu) bulunur.
+Hesap listeleri tek dizi parametresiyle gider (10.000 hesaplık koşuda parametre sınırı yok).
+`rebuild_balances(site)` onarım içindir; gece mutabakat işi henüz yok.
+
 ## 3. Yasaklar ve zorunluluklar
 
 | # | Kural |
