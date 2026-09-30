@@ -1,7 +1,12 @@
 import pytest
+from sqlalchemy import create_engine, text
 
 from site_yonetim.db.rls import enable_tenant_rls
-from site_yonetim.db.session import create_engine_from_settings, create_session_factory
+from site_yonetim.db.session import (
+    create_engine_from_settings,
+    create_session_factory,
+    install_slow_query_log,
+)
 from site_yonetim.db.tenancy import TenantSession
 from tests.conftest import SettingsFactory
 
@@ -44,14 +49,13 @@ def test_rls_tablo_adi_dogrulanir(bad: str) -> None:
 
 
 def test_yavas_sorgu_parametresiz_loglanir(caplog: pytest.LogCaptureFixture) -> None:
-    from sqlalchemy import create_engine, text
-
-    from site_yonetim.db.session import install_slow_query_log
-
     engine = create_engine("sqlite://")
     install_slow_query_log(engine, threshold_ms=-1)
-    with caplog.at_level("WARNING", logger="site_yonetim.db"), engine.connect() as conn:
-        conn.execute(text("SELECT :email"), {"email": "ayse@example.com"})
+    try:
+        with caplog.at_level("WARNING", logger="site_yonetim.db"), engine.connect() as conn:
+            conn.execute(text("SELECT :email"), {"email": "ayse@example.com"})
+    finally:
+        engine.dispose()
 
     assert "Yavaş sorgu" in caplog.text
     assert "ayse@example.com" not in caplog.text
