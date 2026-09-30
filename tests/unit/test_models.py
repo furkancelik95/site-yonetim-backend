@@ -20,3 +20,11 @@ def test_gorunen_ad() -> None:
     assert unit.display_name("A") == "A-12"
     assert unit.display_name("") == "12"
     assert unit.display_name(None) == "12"
+
+
+def test_site_ad_anahtari_turkce_kurallarla() -> None:
+    from site_yonetim.models import Site
+
+    assert Site(name="AKSU  KONAKLARI").name_key == Site(name="Aksu Konakları").name_key
+    assert Site(name="IŞIK Sitesi").name_key == "ışık sitesi"
+    assert Site(name="İSTANBUL").name_key == "istanbul"

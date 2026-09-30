@@ -42,6 +42,23 @@ uv run pytest --cov
 
 Değişkenler yoksa entegrasyon testleri yerelde atlanır; CI'da atlanmaz.
 
+### Demo verisi (yalnız geliştirme)
+
+`ENVIRONMENT=development` ve `SEED_DEMO_DATA=true` iken uygulama açılışta demo verisini yükler
+(idempotent; veri varsa dokunmaz). Elle: `uv run python -m site_yonetim.cli seed-demo`.
+Üretimde ve testte **reddedilir**.
+
+| E-posta (parola `Demo1234!`) | Rol | Görür |
+|---|---|---|
+| `platform@demo.local` | Platform yöneticisi | site verisi yok |
+| `yonetici@demo.local` | Kent Yönetim — Sahip | 3 site, portföy |
+| `muhasebe@demo.local` | Kent Yönetim — Muhasebe | 3 sitede finans |
+| `mimoza@demo.local` | Mimoza — Yönetici | yalnız Mimoza |
+| `guvenlik@demo.local` · `denetci@demo.local` · `teknik@demo.local` | Aksu — Güvenlik / Denetçi / Teknik Personel | yalnız Aksu |
+
+Siteler: Aksu Konakları (48 bölüm), Yıldız Sitesi (24), Mimoza Apartmanı (12).
+Henüz yok: sakin hesabı, finans/duyuru/talep verisi — ilgili dilimlerle gelecek (docs/10 §1.4).
+
 Docker ile API: `docker compose up --build api` → `http://localhost:8000/api/v1/health`
 (canlılık) ve `/api/v1/health/ready` (veritabanı dahil hazırlık; ulaşılamazsa 503).
 
