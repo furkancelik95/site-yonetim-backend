@@ -1,0 +1,10 @@
+# Yalnız izin verilenler imaja girer (sır ve yerel dosya sızmasın).
+*
+!pyproject.toml
+!uv.lock
+!README.md
+!src/
+!migrations/
+!alembic.ini
+**/__pycache__
+**/*.pyc

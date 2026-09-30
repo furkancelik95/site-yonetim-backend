@@ -6,7 +6,11 @@ Bu dokümanda iki tür madde var:
 
 ---
 
-## 1. Yığın (ÖNERİ)
+## 1. Yığın (KARAR — Furkan, 30.09.2026)
+
+FastAPI yığını seçildi. Tabloda "öneri" olarak kalanlar (arka plan işi kuyruğu, parola
+kütüphanesi, dosya deposu) ilgili iş başladığında kesinleşir. Paket yönetimi **uv**, dağıtım
+birimi **Docker imajı**, CI **GitHub Actions**.
 
 | Katman | Öneri | Neden |
 |---|---|---|
@@ -21,7 +25,6 @@ Bu dokümanda iki tür madde var:
 | Excel | **openpyxl** | İçe/dışa aktarım |
 | Dosya depolama | Yerel disk (geliştirme), S3 uyumlu nesne deposu (üretim) | |
 
-Django + DRF da uygundur; seçilirse aynı ilkeler geçerli.
 
 ## 2. Katmanlar (İLKE)
 

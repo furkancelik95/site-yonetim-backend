@@ -1,0 +1,30 @@
+# Kurulum (bir kez): uv run pre-commit install
+# Yerel kanca atlanabilir; aynı kontroller CI'da da koşar (docs/09-guvenlik-kvkk.md §2).
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: no-commit-to-branch   # main'e doğrudan commit yok; dal aç, PR at
+        args: [--branch, main]
+      - id: detect-private-key
+      - id: check-added-large-files
+        args: [--maxkb=500]
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-toml
+      - id: end-of-file-fixer
+        exclude: ^docs/
+      - id: trailing-whitespace
+        exclude: ^docs/
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.9
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format

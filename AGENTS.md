@@ -34,10 +34,73 @@ Issue ile `docs/` çelişirse **dur ve sor**. Sessizce birini seçme.
 
 ## Teknoloji
 
-- **Dil: Python.** Karar verildi.
-- Framework ve kütüphaneler Furkan'ın kararıdır. Henüz karar verilmediyse önerilen yığın
-  `docs/02-mimari.md` içinde: **FastAPI + SQLAlchemy 2 + Alembic + PostgreSQL + Pydantic v2 + pytest.**
+- **Dil: Python 3.14.** Karar verildi.
+- **Yığın (karar: Furkan, 30.09.2026):** FastAPI + SQLAlchemy 2 (async) + Alembic + PostgreSQL 16
+  + Pydantic v2 + pytest. Paket yönetimi **uv** (`uv.lock` repoda). Çalıştırma **Docker**.
+  Ayrıntı: `docs/02-mimari.md` §1.
 - Frontend: Node.js tabanlı ayrı bir uygulama. Bu repo **yalnızca JSON API** sunar, HTML üretmez.
+
+## Kod düzeni ve komutlar
+
+```
+src/site_yonetim/
+  api/v1/        HTTP: yönlendirme, şema, kimlik/yetki kontrolü
+  services/      işlemi uçtan uca yürütür, transaction burada
+  domain/        SAF iş kuralları — sqlalchemy/fastapi/datetime.now YOK (testle korunur)
+  repositories/  veritabanı erişimi, site kapsamı burada
+  models/        SQLAlchemy modelleri
+  core/          yapılandırma, hata biçimi, log, ara katmanlar
+  db/            model tabanı, oturum, kiracı kapsamı (tenancy.py), RLS (rls.py)
+migrations/      Alembic göçleri — şema değişikliği her zaman göçle
+tests/
+  unit/          HTTP/DB'siz hızlı testler
+  architecture/  mimari kurallar (docs/07 §7)
+  integration/   gerçek PostgreSQL (docs/07 §6) — TEST_DATABASE_URL gerekir
+```
+
+| İş | Komut |
+|---|---|
+| Kurulum | `uv sync` · `uv run pre-commit install` · `cp env.example .env` |
+| Çalıştır | `uv run uvicorn site_yonetim.main:app --reload` ya da `docker compose up --build` |
+| Test | `uv run pytest --cov` (kapsam alt sınırı %90; entegrasyon için `TEST_DATABASE_URL` + `TEST_DATABASE_ADMIN_URL`) |
+| Göç | `uv run alembic revision --autogenerate -m "…"` → gözden geçir → `uv run alembic upgrade head` |
+| Lint / tip | `uv run ruff format . && uv run ruff check . && uv run mypy` |
+| Güvenlik | `uv run bandit -c pyproject.toml -r src` · CI'da ayrıca gitleaks, pip-audit, CodeQL, imaj taraması |
+
+## Kiracı (site) kapsamı — nasıl kullanılır
+
+```python
+from site_yonetim.db.tenancy import site_scope, all_sites_scope
+
+with site_scope(site.id):                 # istek başına bir kez, site çözümlendikten sonra
+    async with session_factory() as s:    # oturum bu kapsama SABİTLENİR
+        units = (await s.scalars(select(Unit))).all()   # WHERE site_id = … otomatik
+        s.add(Block(name="C"))                           # site_id otomatik damgalanır
+```
+
+- Filtreyi elle yazma; varsayılan olarak var. Kapsam yokken kiracı tablosuna dokunmak hata verir.
+- Bir oturum tek siteye aittir; başka site için yeni oturum aç.
+- `all_sites_scope()` yalnız platform paneli, portföy, gece işleri — bilinçli kullan.
+- Uygulama `site_yonetim_app` rolüyle bağlanır (RLS'e tabi); göçler `site_yonetim_owner` ile.
+
+**Siteye bağlı uç nokta** (`/api/v1/sites/{slug}/…`): `api/deps.py` yaşam döngüsünü uygular —
+`SiteContextDep` siteyi çözer (yoksa 404) ve kapsamı açar; `Depends(require_module(ModuleKey.X))`
+modül kapalıysa ya da planda yoksa 404 verir. **Erişim kontrolü (Dilim 2) gelene kadar
+`site_context` gerçek bir uca bağlanmaz** — `tests/architecture/test_routes.py` bunu engeller.
+Modül aç/kapa: `services/sites.set_module_enabled` (çekirdek `finance` kapatılamaz, planda
+olmayan açılamaz; kapatmak veriyi silmez).
+
+**Yeni kiracı tablosu eklerken:** `TenantMixin` + `__table_args__ = tenant_table_args(...)`;
+başka kiracı tablosuna FK → `tenant_fk("x_id", "tablo")` (bileşik, site dışına bağlanamaz);
+göçte `enable_tenant_rls(op, "tablo")`. Unutursan `tests/architecture/test_models.py` ve
+`tests/integration/test_schema.py` kırılır.
+
+## Git akışı
+
+- **main'e doğrudan commit/push yok.** Her iş için dal aç (`feat/…`, `fix/…`, `chore/…`, `docs/…`),
+  **PR** at; CI geçmeden birleştirilmez (dal koruması açık).
+- Her geliştirmeye başlamadan önce frontend reposunu güncelle (`git fetch && git pull`) —
+  sözleşme değişikliklerini kaçırma.
 
 ## ASLA / HER ZAMAN — tartışmaya kapalı kurallar
 

@@ -3,10 +3,56 @@
 Site, apartman, iş merkezi ve AVM yönetim platformunun **API ve iş mantığı**.
 Çok kiracılı (her site ayrı kiracı), JSON API; web ve mobil arayüzler bu API'yi kullanır.
 
-- **Dil:** Python
-- **Önerilen yığın:** FastAPI · SQLAlchemy 2 · Alembic · PostgreSQL · Pydantic v2 · pytest
-  (karar: Furkan — `docs/02-mimari.md`)
+- **Dil:** Python 3.14
+- **Yığın:** FastAPI · SQLAlchemy 2 · Alembic · PostgreSQL · Pydantic v2 · pytest · uv · Docker
+  (`docs/02-mimari.md`)
 - **Frontend:** [site-yonetim-frontend](https://github.com/furkancelik95/site-yonetim-frontend)
+
+## Hızlı başlangıç
+
+Gerekenler: Python 3.14, [uv](https://docs.astral.sh/uv/), isteğe bağlı Docker.
+
+```bash
+uv sync                       # bağımlılıklar (uv.lock'tan)
+uv run pre-commit install     # commit öncesi sır taraması, lint, main'e commit engeli
+cp env.example .env           # yerel ayarlar — .env repoya girmez
+
+uv run uvicorn site_yonetim.main:app --reload   # http://localhost:8000/api/v1/docs
+uv run pytest --cov                              # testler
+```
+
+### Veritabanı
+
+PostgreSQL 16. Uygulama **süper kullanıcı olmayan, RLS'e tabi** `site_yonetim_app` rolüyle,
+göçler tablo sahibi `site_yonetim_owner` ile çalışır. Roller `docker/postgres/10-roles.sh` ile kurulur.
+
+```bash
+docker compose up -d db                 # .env'deki POSTGRES_/DB_*_PASSWORD ile rolleri kurar
+docker compose run --rm migrate         # ya da: uv run alembic upgrade head
+```
+
+Entegrasyon testleri (ayrı veritabanı):
+
+```bash
+docker compose exec -u postgres -e APP_DB_NAME=site_yonetim_test db bash /docker-entrypoint-initdb.d/10-roles.sh
+export TEST_DATABASE_URL=postgresql+asyncpg://site_yonetim_app:…@localhost:5432/site_yonetim_test
+export TEST_DATABASE_ADMIN_URL=postgresql+asyncpg://site_yonetim_owner:…@localhost:5432/site_yonetim_test
+uv run pytest --cov
+```
+
+Değişkenler yoksa entegrasyon testleri yerelde atlanır; CI'da atlanmaz.
+
+Docker ile API: `docker compose up --build api` → `http://localhost:8000/api/v1/health`
+(canlılık) ve `/api/v1/health/ready` (veritabanı dahil hazırlık; ulaşılamazsa 503).
+
+OpenAPI şeması: `GET /api/v1/openapi.json` (frontend tiplerini buradan üretir).
+
+## CI
+
+Her PR'da GitHub Actions: biçim + lint (güvenlik kuralları dahil) + mypy (strict) + bandit,
+testler (birim + mimari + PostgreSQL 16 entegrasyon, kapsam ≥ %90), bağımlılık açığı taraması (pip-audit), sır taraması (gitleaks),
+Docker imajı derleme + imaj açık taraması + duman testi, CodeQL. `main` korumalıdır:
+doğrudan push yok, CI geçmeden PR birleştirilmez.
 
 ## Yapay zekâ ile çalışıyorsan
 

@@ -1,0 +1,55 @@
+# Yerel geliştirme. Üretim yapılandırması DEĞİLDİR.
+#   cp env.example .env   (parolaları doldur)
+#   docker compose up -d db              → yalnız veritabanı (uv run ile geliştirirken)
+#   docker compose run --rm migrate      → alembic upgrade head
+#   docker compose up --build api        → API http://localhost:8000/api/v1/health
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD .env içinde tanımlı olmalı}
+      DB_OWNER_PASSWORD: ${DB_OWNER_PASSWORD:?DB_OWNER_PASSWORD .env içinde tanımlı olmalı}
+      DB_APP_PASSWORD: ${DB_APP_PASSWORD:?DB_APP_PASSWORD .env içinde tanımlı olmalı}
+      APP_DB_NAME: site_yonetim
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ./docker/postgres/10-roles.sh:/docker-entrypoint-initdb.d/10-roles.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_ADMIN_URL: postgresql+asyncpg://site_yonetim_owner:${DB_OWNER_PASSWORD}@db:5432/site_yonetim
+    depends_on:
+      db:
+        condition: service_healthy
+    profiles: [tools]
+
+  api:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://site_yonetim_app:${DB_APP_PASSWORD}@db:5432/site_yonetim
+      ALLOWED_HOSTS: localhost,127.0.0.1
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  db-data:
