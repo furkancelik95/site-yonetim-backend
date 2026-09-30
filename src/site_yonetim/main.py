@@ -1,5 +1,6 @@
 """Uygulama fabrikası. Çalıştırma: `uvicorn site_yonetim.main:app`."""
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -13,6 +14,9 @@ from site_yonetim.core.errors import install_error_handlers
 from site_yonetim.core.logging import configure_logging
 from site_yonetim.core.middleware import RequestContextMiddleware, SecurityHeadersMiddleware
 from site_yonetim.db.session import create_engine_from_settings, create_session_factory
+from site_yonetim.seed.demo import seed_demo
+
+logger = logging.getLogger(__name__)
 
 OPENAPI_URL = f"{API_V1_PREFIX}/openapi.json"
 DOCS_URL = f"{API_V1_PREFIX}/docs"
@@ -26,6 +30,11 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         engine = create_engine_from_settings(settings)
         app.state.engine = engine
         app.state.session_factory = create_session_factory(engine)
+        if settings.demo_data_allowed:  # yalnız development + SEED_DEMO_DATA=true
+            try:
+                await seed_demo(settings, app.state.session_factory)
+            except Exception:
+                logger.exception("Demo verisi yüklenemedi (göçler çalıştırıldı mı?)")
     try:
         yield
     finally:

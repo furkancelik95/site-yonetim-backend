@@ -43,6 +43,7 @@ Tablo ve sütun adları `snake_case`, İngilizce. Kullanıcıya görünen etiket
 | Sütun | Tip | Not |
 |---|---|---|
 | name | TEXT | |
+| name_key | TEXT **UNIQUE** | adın Türkçe kurallarla küçük harfli, tek boşluklu hali — ad benzersizliği (`04` §15; PostgreSQL `lower()` Türkçeyi bilmez) |
 | slug | TEXT **UNIQUE** | URL'de kullanılır: `/sites/{slug}/...`. Üretimi: `04-is-kurallari.md` §11 |
 | address, city, district | TEXT NULL | |
 | property_kind | TEXT | `residential` · `mixed` · `office` · `shopping_center` |

@@ -5,9 +5,10 @@ from enum import StrEnum
 
 from sqlalchemy import CheckConstraint, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import ARRAY
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, validates
 
 from site_yonetim.db.base import Base, enum_check
+from site_yonetim.domain.text import tr_lower
 
 
 class PropertyKind(StrEnum):
@@ -49,6 +50,9 @@ class Site(Base):
     )
 
     name: Mapped[str] = mapped_column(Text)
+    # Benzersizlik anahtarı: Türkçe kurallarla küçük harf + tek boşluk ("AKSU KONAKLARI" ile
+    # "Aksu Konakları" aynı site). PostgreSQL lower() Türkçeyi bilmediği için uygulamada üretilir.
+    name_key: Mapped[str] = mapped_column(Text, unique=True)
     slug: Mapped[str] = mapped_column(String(60), unique=True)
     address: Mapped[str | None] = mapped_column(Text)
     city: Mapped[str | None] = mapped_column(Text)
@@ -61,3 +65,12 @@ class Site(Base):
     fiscal_year_start_month: Mapped[int] = mapped_column(default=1)
     iban: Mapped[str | None] = mapped_column(Text)
     bank_name: Mapped[str | None] = mapped_column(Text)
+
+    @validates("name")
+    def _set_name_key(self, _key: str, value: str) -> str:
+        self.name_key = site_name_key(value)
+        return value
+
+
+def site_name_key(name: str) -> str:
+    return tr_lower(" ".join(name.split()))

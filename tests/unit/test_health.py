@@ -1,3 +1,4 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from site_yonetim.main import create_app
@@ -51,3 +52,27 @@ def test_veritabani_yoksa_siteye_bagli_uc_500_doner(client: TestClient) -> None:
 
     assert response.status_code == 500
     assert response.json()["error"]["code"] == "internal_error"
+
+
+async def test_demo_yuklemesi_basarisiz_olsa_da_uygulama_acilir(
+    make_settings: SettingsFactory,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import site_yonetim.main as main_module
+
+    async def broken_seed(*_: object) -> bool:
+        raise RuntimeError("tablo yok")
+
+    monkeypatch.setattr(main_module, "seed_demo", broken_seed)
+    settings = make_settings(
+        environment="development",
+        seed_demo_data=True,
+        database_url="postgresql+asyncpg://u:p@127.0.0.1:1/db",
+    )
+    app = create_app(settings)
+    async with app.router.lifespan_context(app):
+        assert app.state.session_factory is not None
+
+    # create_app kök log işleyicisini JSON/stdout olarak kurar
+    assert "Demo verisi yüklenemedi" in capsys.readouterr().out
