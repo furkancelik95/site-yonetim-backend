@@ -5,6 +5,8 @@ ortam kontrolü burada, yazmadan önce yapılır. İdempotent: demo verisi varsa
 """
 
 import logging
+from datetime import date, datetime, time
+from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -12,10 +14,24 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from site_yonetim.core.config import Environment, Settings
 from site_yonetim.core.security import hash_password
 from site_yonetim.db.tenancy import site_scope
+from site_yonetim.domain.charging.periods import YearMonth
+from site_yonetim.domain.finance import (
+    BudgetStatus,
+    ExpenseCategoryKind,
+    Frequency,
+    PayerRule,
+    ScopeKind,
+)
+from site_yonetim.domain.money import distribute
 from site_yonetim.domain.structure import PartyRole
 from site_yonetim.domain.text import normalize_person_name
 from site_yonetim.models import (
+    AllocationRule,
     Block,
+    BudgetItem,
+    BudgetPlan,
+    ChargeType,
+    ExpenseCategory,
     Organization,
     OrganizationMembership,
     Person,
@@ -28,6 +44,8 @@ from site_yonetim.models import (
 )
 from site_yonetim.seed.demo_data import (
     ACCOUNTS,
+    BUDGET_ITEMS,
+    CHARGED_MONTHS,
     DEMO_PASSWORD,
     ORGANIZATION_NAME,
     ORGANIZATION_PLAN,
@@ -38,6 +56,8 @@ from site_yonetim.seed.demo_data import (
     occupancy_for,
     units_for,
 )
+from site_yonetim.services import charging
+from site_yonetim.services.charging import BUSINESS_TZ
 from site_yonetim.services.provisioning import provision_site
 from site_yonetim.services.sites import set_module_enabled
 from site_yonetim.services.structure import add_party
@@ -56,9 +76,15 @@ def ensure_demo_allowed(settings: Settings) -> None:
         )
 
 
-async def seed_demo(settings: Settings, factory: async_sessionmaker[AsyncSession]) -> bool:
-    """Demo verisini yükler. Yüklediyse True, zaten varsa False döner."""
+async def seed_demo(
+    settings: Settings, factory: async_sessionmaker[AsyncSession], *, today: date | None = None
+) -> bool:
+    """Demo verisini yükler. Yüklediyse True, zaten varsa False döner.
+
+    Tahakkuklar `today`'e göre son 6 ay için kesilir (varsayılan: Türkiye saatiyle bugün).
+    """
     ensure_demo_allowed(settings)
+    today = today or datetime.now(BUSINESS_TZ).date()
 
     async with factory() as session:
         if await session.scalar(
@@ -124,6 +150,7 @@ async def seed_demo(settings: Settings, factory: async_sessionmaker[AsyncSession
                 await _seed_structure(session, site, spec)
                 for key in spec.extra_modules:
                     await set_module_enabled(session, site, key, enable=True)
+                await _seed_finance(session, spec, today)
                 session.add_all(
                     SiteMembership(user_id=user_ids[account.email], role=account.site_role)
                     for account in ACCOUNTS
@@ -186,6 +213,57 @@ async def _seed_people(session: AsyncSession, spec: SiteSpec, blocks: dict[str, 
             await session.flush()
             await add_party(session, unit=unit, block=block, person=tenant,
                             role=PartyRole.TENANT, start_date=occ.tenant_since)  # fmt: skip
+
+
+async def _seed_finance(session: AsyncSession, spec: SiteSpec, today: date) -> None:
+    """Kesinleşmiş işletme projesi + son 6 ayın tahakkuku — tutarlar motordan (docs/10 §1.4)."""
+    rules = {r.name: r.id for r in await session.scalars(select(AllocationRule))}
+    types = {t.name: t for t in await session.scalars(select(ChargeType))}
+    categories = {c.kind: c.id for c in await session.scalars(select(ExpenseCategory))}
+    elevator_blocks = list(await session.scalars(select(Block.id).where(Block.has_elevator)))
+    year = today.year
+    plan = BudgetPlan(
+        fiscal_year=year,
+        name=f"{year} İşletme Projesi",
+        status=BudgetStatus.FINALIZED.value,
+        notified_on=date(year, 1, 2),
+        objection_deadline=date(year, 1, 9),
+        finalized_on=date(year, 1, 10),
+    )
+    session.add(plan)
+    await session.flush()
+    specs = [s for s in BUDGET_ITEMS if elevator_blocks or not s.elevator_only]
+    annual = spec.monthly_budget * 12
+    amounts = distribute(annual, [Decimal(s.percent) for s in specs])
+    for order, (item, amount) in enumerate(zip(specs, amounts, strict=True)):
+        charge_type = types[item.charge_type]
+        owner_pays = charge_type.payer_rule == PayerRule.OWNER.value
+        category = (
+            ExpenseCategoryKind.CAPITAL_IMPROVEMENT if owner_pays else ExpenseCategoryKind.OPERATING
+        )
+        session.add(
+            BudgetItem(
+                budget_plan_id=plan.id,
+                name=item.name,
+                expense_category_id=categories[category.value],
+                charge_type_id=charge_type.id,
+                allocation_rule_id=rules[item.rule],
+                annual_amount=amount,
+                frequency=Frequency.MONTHLY.value,
+                scope_kind=(ScopeKind.BLOCKS if item.elevator_only else ScopeKind.WHOLE_SITE).value,
+                scope_block_ids=elevator_blocks if item.elevator_only else None,
+                sort_order=order,
+            )
+        )
+    await session.flush()
+
+    months = [YearMonth.of(today)]
+    while len(months) < CHARGED_MONTHS:
+        months.insert(0, months[0].previous())
+    for month in months:
+        prepared = await charging.prepare(session, today, charge_date=month.first_day)
+        posted_at = datetime.combine(month.first_day, time(9, 30), BUSINESS_TZ)
+        await charging.post(session, prepared, posted_by="Demo verisi", now=posted_at)
 
 
 def _person(first: str, last: str) -> Person:

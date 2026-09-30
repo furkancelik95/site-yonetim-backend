@@ -1,5 +1,8 @@
 """Demo verisi ve site kurulumu — docs/10 (gerçek PostgreSQL, RLS'e tabi rol)."""
 
+from datetime import date
+from decimal import Decimal
+
 import httpx2
 import pytest
 from pydantic import SecretStr
@@ -11,9 +14,15 @@ from site_yonetim.core.config import Settings, get_settings
 from site_yonetim.db.tenancy import all_sites_scope, site_scope
 from site_yonetim.main import create_app
 from site_yonetim.models import (
+    AccountBalance,
     Block,
+    BudgetPlan,
+    Charge,
+    ChargeRun,
     LedgerAccount,
+    LedgerEntry,
     Organization,
+    Period,
     Person,
     Plan,
     Site,
@@ -204,3 +213,33 @@ async def test_site_kurulumu_ayni_ad_ya_da_slug_reddedilir(
             with pytest.raises(ProvisioningError) as exc:
                 await provision_site(session, name=name, slug=slug)
         assert exc.value.code == "site_already_exists"
+
+
+async def test_demo_finansi_motordan_gecer(
+    dev_settings: Settings, session_factory: Factory, admin_engine: object
+) -> None:
+    """docs/10 §1.4: kesinleşmiş proje + son 6 ayın tahakkuku; tutarlar elle yazılmaz."""
+    await seed_demo(dev_settings, session_factory, today=date(2026, 9, 30))
+    async with session_factory() as session:
+        sites = {s.slug: s.id for s in await session.scalars(select(Site))}
+    for spec in SITES:
+        with site_scope(sites[spec.slug]):
+            async with session_factory() as session:
+                plans = (await session.scalars(select(BudgetPlan))).all()
+                runs = (
+                    await session.execute(
+                        select(Period.month, func.sum(Charge.amount))
+                        .join(ChargeRun, ChargeRun.period_id == Period.id)
+                        .join(Charge, Charge.charge_run_id == ChargeRun.id)
+                        .group_by(Period.month)
+                        .order_by(Period.month)
+                    )
+                ).all()
+                ledger_total = await session.scalar(select(func.sum(LedgerEntry.debit)))
+                summary_total = await session.scalar(select(func.sum(AccountBalance.balance)))
+        assert [p.status for p in plans] == ["finalized"]
+        assert [month for month, _ in runs] == [4, 5, 6, 7, 8, 9]
+        # Asansörsüz sitede (Mimoza) yıllık bütçe kalan kalemlere oranlanır; aylık kalem her ay
+        # ayrı yuvarlanır (K3) — kuruş farkı olabilir.
+        assert all(abs(total - spec.monthly_budget) < Decimal("0.10") for _, total in runs), runs
+        assert ledger_total == summary_total  # özet bakiye defterle tutar

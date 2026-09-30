@@ -128,6 +128,17 @@ draft ──tebliğ──> notified ──7 gün itiraz süresi──> finalized
 | `yearly` | `annual_amount` |
 | `one_time` | `annual_amount` |
 
+**Kalem hangi kesime girer** (karar: Furkan, 30.09.2026 — dokümanda tutar vardı, zaman yoktu):
+
+| `frequency` | Kesildiği dönem |
+|---|---|
+| `monthly` | her ay |
+| `quarterly` | Ocak, Nisan, Temmuz, Ekim |
+| `yearly` | projenin mali yılının (`fiscal_year`) Ocak'ı |
+| `one_time` | o kalemin **geçerli** (ters kaydı alınmamış) bir kesimi yoksa — bir kez. Kesimi ters kaydedilirse yeniden kesilebilir |
+
+Önizleme, takvim gereği o dönem kesilmeyen kalemleri `not_due_items` olarak listeler.
+
 > **Referans uygulamada durum:** aylık tutar her ay ayrı yuvarlanıyor. 1.000 TL/yıl → 83,33 × 12 =
 > 999,96 — yılda 4 kuruş kayıp. **Doğrusu:** yıllık tutar 12 aya `distribute()` ile bölünür
 > (`distribute(1000, [1]*12)` → ilk 4 ay 83,34, sonraki 8 ay 83,33), dönem sırasına göre ilgili
@@ -197,6 +208,8 @@ Sonra `distribute(tutar, ağırlıklar)`.
    100 olmalı. Tutar mevcut yüzdelere oranlanarak dağıtıldı."). **Durma**, devam et.
 2. Tutarı bileşenlere böl: `bileşen_tutarları = distribute(tutar, [yüzdeler])` — bu adım da kuruş kaybetmez.
 3. Her bileşeni kendi türüyle bölümlere dağıt; bir bileşenin verisi hiçbir bölümde yoksa uyar, o bileşeni atla.
+   Atlanan bileşenin payı kalan bileşenlere yüzdeleriyle oranlanır (adım 2 bu bileşenler
+   üzerinden yapılır) — kalem toplamı her zaman kalem tutarına eşit kalır (§4.7 kontrolü).
 4. Bölüm başına bileşen paylarını topla.
 
 ### 4.5 Kim öder? — KMK m.22
@@ -209,7 +222,11 @@ Kalemin `charge_type.payer_rule`'u belirler. Tip bulunamazsa varsayılan `occupa
 
 "Aktif" = `unit_party.is_active_on(charge_date)`. Kiracı eylülde çıktıysa ekim tahakkuku
 malikin oturan hesabına yazılır.
-Hesap = `(unit_id, person_id, kind)` eşleşen `ledger_account`. Bulunamazsa → `no_active_party`.
+Hesap = `(unit_id, person_id, kind)` eşleşen, **kapalı olmayan** `ledger_account`. Ödeyen hiç
+yoksa → `no_active_party`; ödeyen var ama hesabı yoksa → `missing_ledger_account`.
+
+Aynı gün birden çok aktif malik (hisseli mülkiyet) ya da kiracı varsa borç **tek kişiye** yazılır:
+hissesi büyük olan, eşitse başlangıcı eski olan. Hisse oranında bölme açık karar → `12` K17.
 
 ### 4.6 Satır ve açıklama
 Her satır kendi dayanağını taşır — sakin "bu tutar nasıl hesaplandı" diye sorduğunda cevap satırdadır:
