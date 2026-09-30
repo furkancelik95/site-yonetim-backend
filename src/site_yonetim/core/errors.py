@@ -95,6 +95,10 @@ _VALIDATION_MESSAGES: dict[str, str] = {
     "value_error": "Geçersiz değer.",
     "extra_forbidden": "Bu alan tanınmıyor.",
     "json_invalid": "Gövde geçerli bir JSON değil.",
+    "money_type": 'Tutar metin olarak gönderilmeli (ör. "1234.56").',
+    "money_format": 'Geçerli bir tutar olmalı (ör. "1234.56"; binlik ayıraç kullanmayın).',
+    "money_precision": "Tutar en fazla 2 ondalık (kuruş) içerebilir.",
+    "money_range": "Tutar izin verilen aralığın dışında.",
 }
 _VALIDATION_FALLBACK = "Geçersiz değer."
 
