@@ -4,8 +4,10 @@ Her değer ortam değişkeninden okunur (docs/02-mimari.md §7). Sır koda girme
 `env.example` → `.env` kopyalanır, `.env` repoya girmez.
 """
 
+import tempfile
 from enum import StrEnum
 from functools import lru_cache
+from pathlib import Path
 from typing import Annotated, Self
 
 from pydantic import Field, SecretStr, field_validator, model_validator
@@ -49,6 +51,9 @@ class Settings(BaseSettings):
     )
     api_docs_enabled: bool = True
     seed_demo_data: bool = False
+    # Onay bekleyen Excel aktarımları (docs/11 §1); boşsa sistemin geçici klasörü.
+    # Birden çok API kopyası çalışıyorsa hepsinin gördüğü ortak bir birim olmalı.
+    import_storage_dir: Path | None = None
     log_level: str = "INFO"
 
     @field_validator("cors_origins", "allowed_hosts", mode="before")
@@ -84,6 +89,10 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.environment is Environment.PRODUCTION
+
+    @property
+    def import_dir(self) -> Path:
+        return self.import_storage_dir or Path(tempfile.gettempdir()) / "site-yonetim-imports"
 
     @property
     def demo_data_allowed(self) -> bool:

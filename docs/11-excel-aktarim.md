@@ -107,6 +107,42 @@ Tek transaction:
 *(Öneri — referansta yok)* Plan tavanı: aktarım sonrası bölüm sayısı planın `max_units`'ini
 aşacaksa önizlemede **uyarı** göster (engelleme değil). Platform panelinde "tavan aşıldı" zaten görünür.
 
+## 5. Uygulama notları (Python backend)
+
+Kod: `domain/imports/` (saf doğrulayıcı, sayı okuma) · `services/imports.py` (dosya, depo,
+yazma) · `api/v1/imports.py` (uçlar).
+
+- **Dosya güvenliği** (`09` §3.1): `.xlsx` uzantısı + ZIP imzası; en fazla 5 MB (istek gövdesi
+  ara katmanda, ayrıştırmadan önce kesilir → 413). Açılmış boyut ≤ 50 MB ve ≤ 500 arşiv
+  girdisi (zip bombası). XML `defusedxml` ile okunur (XXE). Yalnız saklanmış hücre değerleri
+  okunur: formül çalıştırılmaz, dış bağlantı ve makro okunmaz. En fazla **5.000 veri satırı**
+  ve 60 sütun.
+- **Sayfa:** adı `Daireler` olan sayfa, yoksa ilk sayfa. İlk dolu satır başlıktır.
+- **Zorunlu sütunlar:** `Daire No`, `Malik Ad`, `Malik Soyad`. Biri yoksa dosya bütün olarak
+  reddedilir (satır satır hata üretmek anlamsız). Aynı alan iki başlıkla gelirse ilki kullanılır,
+  uyarı verilir.
+- **Başlık ve kullanım eşlemesi ASCII'ye katlanarak yapılır:** `KIRACI AD`, `Kiracı Ad`,
+  `kiraci ad` aynı başlıktır; `ISYERI` → commercial. (Türkçe kurala göre `I` → `ı` olduğu için
+  büyük ASCII yazım aksi hâlde eşleşmezdi.)
+- **Blok** boş olabilir (tek bloklu site); en fazla 40 karakter. **Daire No** en fazla 20.
+  **Daire tipi** 40 karakteri aşarsa uyarı, tip boş. Aynı bölüm tespiti: blok adı Türkçe
+  kurallarla harf duyarsız, numara birebir.
+- **Arsa payı pay > payda** → uyarı ve **arsa payı boş** (tek elden giriş kuralıyla aynı).
+- **Sayı hücresi** (Excel'in sayı olarak sakladığı) kültür sorunu taşımaz, doğrudan okunur;
+  yalnız metin hücreleri §3.1 ile. `0.250` binlik sayılmaz (tam kısmı 0).
+- **Geçici depo:** `IMPORT_STORAGE_DIR/{site_id}/{user_id}/{import_id}.xlsx` (boşsa sistemin
+  geçici klasörü). `import_id` tahmin edilemez; aktarımı **yalnız yükleyen kullanıcı, aynı
+  sitede** onaylar. Onay dosyayı atomik olarak sahiplenir (ikinci onay 404); yazma hata
+  verirse dosya geri konur. Süresi dolanlar her yüklemede ve `python -m site_yonetim.cli
+  purge-imports` ile silinir (saatlik zamanlanmış iş önerilir). **Birden çok API kopyası**
+  çalışıyorsa depo ortak bir birim olmalı.
+- **Onay dosyayı yeniden doğrular**; önizlemeden sonra sitede oluşan bölümler de atlanır.
+  Aynı anda çakışan yazım (benzersizlik ihlali) → 409, hiçbir şey yazılmaz.
+- Aktarılacak yeni bölüm yoksa önizlemede `import_id = null` (dosya saklanmaz).
+- **Kişi tekilleştirme yapılmaz:** her satırın maliki/kiracısı yeni kişidir. Aynı kişinin
+  birden çok bölümü varsa kayıtlar sonra birleştirilir — açık karar `12` K16.
+- Denetim kaydı (`09` §6) gelince toplu içe aktarma oraya yazılacak.
+
 ## Referans
 
 `brhnnkaraa6/siteyonetimi`:
