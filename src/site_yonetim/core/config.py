@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     )
 
     environment: Environment = Environment.DEVELOPMENT
+    # Uygulama rolü: süper kullanıcı değil, BYPASSRLS yok (docs/02-mimari.md §3).
+    database_url: SecretStr | None = None
+    # Tablo sahibi: yalnız göçler (alembic) kullanır.
+    database_admin_url: SecretStr | None = None
+    database_pool_size: int = Field(default=10, ge=1, le=100)
+    database_max_overflow: int = Field(default=10, ge=0, le=100)
     jwt_secret: SecretStr = SecretStr(PLACEHOLDER_SECRET)
     jwt_access_minutes: int = Field(default=15, ge=1, le=60)
     cors_origins: Annotated[list[str], NoDecode] = Field(default_factory=list)

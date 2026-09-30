@@ -35,6 +35,9 @@ RUN groupadd --system --gid 10001 app \
 COPY --from=builder --chown=root:root /opt/venv /opt/venv
 
 WORKDIR /app
+# Göçler imajla gelir: `docker compose run --rm migrate` → alembic upgrade head
+COPY --chown=root:root alembic.ini ./
+COPY --chown=root:root migrations ./migrations
 USER app
 
 EXPOSE 8000

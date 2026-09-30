@@ -1,1 +1,18 @@
-"""SQLAlchemy modelleri (docs/03-veri-modeli.md)."""
+"""SQLAlchemy modelleri (docs/03-veri-modeli.md).
+
+Her model burada içe aktarılır ki `Base.metadata` eksiksiz olsun (alembic ve mimari testler).
+"""
+
+from site_yonetim.models.platform import Organization, Plan, PropertyKind, Site
+from site_yonetim.models.structure import Block, Unit, UnitType, UnitUsage
+
+__all__ = [
+    "Block",
+    "Organization",
+    "Plan",
+    "PropertyKind",
+    "Site",
+    "Unit",
+    "UnitType",
+    "UnitUsage",
+]
