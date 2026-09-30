@@ -9,6 +9,13 @@ from enum import StrEnum
 from site_yonetim.domain.text import slugify
 
 
+class UnitUsage(StrEnum):
+    RESIDENTIAL = "residential"
+    COMMERCIAL = "commercial"
+    STORAGE = "storage"
+    PARKING = "parking"
+
+
 class PartyRole(StrEnum):
     OWNER = "owner"  # malik
     TENANT = "tenant"  # kiracı

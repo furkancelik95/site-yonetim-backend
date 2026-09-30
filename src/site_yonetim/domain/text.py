@@ -53,6 +53,17 @@ _SLUG_MAP = str.maketrans(
         "ü": "u", "Ü": "u",
     }
 )  # fmt: skip
+
+
+def ascii_fold(s: str) -> str:
+    """Karşılaştırma anahtarı, harf duyarsız ve ASCII: `KIRACI`, `kiracı`, `Kİracı` → `kiraci`.
+
+    Excel'de büyük ASCII harfle yazılmış başlık/değerler (`ISYERI`) Türkçe kuralla küçültülünce
+    `ısyerı` olur; eşleme için harfler katlanır. Kayıtta değil, yalnız karşılaştırmada kullanılır.
+    """
+    return s.translate(_SLUG_MAP).lower()
+
+
 _SLUG_SEPARATORS = re.compile(r"[\s\-_.]+")
 _SLUG_DISALLOWED = re.compile(r"[^a-z0-9-]")
 _SLUG_DASHES = re.compile(r"-{2,}")
