@@ -1,0 +1,132 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# En az yetki: iş akışı yalnız kodu okur.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.14"
+  UV_VERSION: "0.12.21"
+
+# Üçüncü taraf action'lar etiketle değil commit SHA'sıyla sabitlenir (etiket sonradan
+# başka koda taşınabilir). Güncellemeyi Dependabot yapar.
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+      - run: uv sync --locked
+      - name: Biçim
+        run: uv run ruff format --check .
+      - name: Lint (güvenlik kuralları dahil)
+        run: uv run ruff check --output-format=github .
+      - name: Tip kontrolü
+        run: uv run mypy
+      - name: Bandit
+        run: uv run bandit -q -c pyproject.toml -r src
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+      - run: uv sync --locked
+      - name: Testler ve kapsam
+        run: uv run pytest --cov --cov-report=term-missing
+
+  audit:
+    name: audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+      - name: Bağımlılıklarda bilinen açık (kilit dosyasındaki tüm paketler)
+        run: |
+          uv export --locked --no-emit-project --format requirements-txt > requirements.lock.txt
+          uvx --from pip-audit pip-audit --requirement requirements.lock.txt --require-hashes --disable-pip
+
+  secrets:
+    name: secrets
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  docker:
+    name: docker
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: İmajı derle
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          load: true
+          push: false
+          tags: site-yonetim-backend:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: İmajda açık taraması (düzeltmesi olan yüksek/kritik açık varsa kırılır)
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          image: site-yonetim-backend:ci
+          fail-build: true
+          severity-cutoff: high
+          only-fixed: true
+          output-format: table
+      - name: Duman testi (kapsayıcı açılıyor, root değil, sağlık ucu yanıt veriyor)
+        run: |
+          docker run -d --name api --read-only --tmpfs /tmp --cap-drop ALL \
+            -e ENVIRONMENT=test -p 8000:8000 site-yonetim-backend:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8000/api/v1/health; then break; fi
+            sleep 1
+          done
+          curl -fsS http://localhost:8000/api/v1/health | grep -q '"ok"'
+          test "$(docker exec api id -u)" != "0"
+      - name: Kapsayıcı logu
+        if: failure()
+        run: docker logs api || true

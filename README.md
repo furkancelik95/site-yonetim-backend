@@ -3,10 +3,34 @@
 Site, apartman, iş merkezi ve AVM yönetim platformunun **API ve iş mantığı**.
 Çok kiracılı (her site ayrı kiracı), JSON API; web ve mobil arayüzler bu API'yi kullanır.
 
-- **Dil:** Python
-- **Önerilen yığın:** FastAPI · SQLAlchemy 2 · Alembic · PostgreSQL · Pydantic v2 · pytest
-  (karar: Furkan — `docs/02-mimari.md`)
+- **Dil:** Python 3.14
+- **Yığın:** FastAPI · SQLAlchemy 2 · Alembic · PostgreSQL · Pydantic v2 · pytest · uv · Docker
+  (`docs/02-mimari.md`)
 - **Frontend:** [site-yonetim-frontend](https://github.com/furkancelik95/site-yonetim-frontend)
+
+## Hızlı başlangıç
+
+Gerekenler: Python 3.14, [uv](https://docs.astral.sh/uv/), isteğe bağlı Docker.
+
+```bash
+uv sync                       # bağımlılıklar (uv.lock'tan)
+uv run pre-commit install     # commit öncesi sır taraması, lint, main'e commit engeli
+cp env.example .env           # yerel ayarlar — .env repoya girmez
+
+uv run uvicorn site_yonetim.main:app --reload   # http://localhost:8000/api/v1/docs
+uv run pytest --cov                              # testler
+```
+
+Docker ile: `docker compose up --build` → `http://localhost:8000/api/v1/health`.
+
+OpenAPI şeması: `GET /api/v1/openapi.json` (frontend tiplerini buradan üretir).
+
+## CI
+
+Her PR'da GitHub Actions: biçim + lint (güvenlik kuralları dahil) + mypy (strict) + bandit,
+testler (kapsam ≥ %90), bağımlılık açığı taraması (pip-audit), sır taraması (gitleaks),
+Docker imajı derleme + imaj açık taraması + duman testi, CodeQL. `main` korumalıdır:
+doğrudan push yok, CI geçmeden PR birleştirilmez.
 
 ## Yapay zekâ ile çalışıyorsan
 

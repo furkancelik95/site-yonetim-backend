@@ -34,10 +34,41 @@ Issue ile `docs/` çelişirse **dur ve sor**. Sessizce birini seçme.
 
 ## Teknoloji
 
-- **Dil: Python.** Karar verildi.
-- Framework ve kütüphaneler Furkan'ın kararıdır. Henüz karar verilmediyse önerilen yığın
-  `docs/02-mimari.md` içinde: **FastAPI + SQLAlchemy 2 + Alembic + PostgreSQL + Pydantic v2 + pytest.**
+- **Dil: Python 3.14.** Karar verildi.
+- **Yığın (karar: Furkan, 30.09.2026):** FastAPI + SQLAlchemy 2 (async) + Alembic + PostgreSQL 16
+  + Pydantic v2 + pytest. Paket yönetimi **uv** (`uv.lock` repoda). Çalıştırma **Docker**.
+  Ayrıntı: `docs/02-mimari.md` §1.
 - Frontend: Node.js tabanlı ayrı bir uygulama. Bu repo **yalnızca JSON API** sunar, HTML üretmez.
+
+## Kod düzeni ve komutlar
+
+```
+src/site_yonetim/
+  api/v1/        HTTP: yönlendirme, şema, kimlik/yetki kontrolü
+  services/      işlemi uçtan uca yürütür, transaction burada
+  domain/        SAF iş kuralları — sqlalchemy/fastapi/datetime.now YOK (testle korunur)
+  repositories/  veritabanı erişimi, site kapsamı burada
+  models/        SQLAlchemy modelleri
+  core/          yapılandırma, hata biçimi, log, ara katmanlar
+tests/
+  unit/          HTTP/DB'siz hızlı testler
+  architecture/  mimari kurallar (docs/07 §7)
+```
+
+| İş | Komut |
+|---|---|
+| Kurulum | `uv sync` · `uv run pre-commit install` · `cp env.example .env` |
+| Çalıştır | `uv run uvicorn site_yonetim.main:app --reload` ya da `docker compose up --build` |
+| Test | `uv run pytest --cov` (kapsam alt sınırı %90) |
+| Lint / tip | `uv run ruff format . && uv run ruff check . && uv run mypy` |
+| Güvenlik | `uv run bandit -c pyproject.toml -r src` · CI'da ayrıca gitleaks, pip-audit, CodeQL, imaj taraması |
+
+## Git akışı
+
+- **main'e doğrudan commit/push yok.** Her iş için dal aç (`feat/…`, `fix/…`, `chore/…`, `docs/…`),
+  **PR** at; CI geçmeden birleştirilmez (dal koruması açık).
+- Her geliştirmeye başlamadan önce frontend reposunu güncelle (`git fetch && git pull`) —
+  sözleşme değişikliklerini kaçırma.
 
 ## ASLA / HER ZAMAN — tartışmaya kapalı kurallar
 

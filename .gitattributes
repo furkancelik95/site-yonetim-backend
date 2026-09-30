@@ -1,0 +1,5 @@
+# Repoda her metin dosyası LF (Docker/CI Linux üzerinde çalışır).
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.xlsx binary
