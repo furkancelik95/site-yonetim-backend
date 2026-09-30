@@ -92,3 +92,17 @@ def test_demo_verisi_gelistirme_disinda_reddedilir(
 
 def test_demo_verisi_gelistirmede_izinli(make_settings: SettingsFactory) -> None:
     ensure_demo_allowed(make_settings(environment="development", seed_demo_data=True))
+
+
+def test_her_bolume_malik_kiracilar_yalniz_konutta_ve_telefon_yok() -> None:
+    from site_yonetim.seed.demo_data import occupancy_for
+
+    for site in SITES:
+        units = {(u.block, u.number): u for u in units_for(site)[0]}
+        occupancy = occupancy_for(site)
+        assert len(occupancy) == len(units)
+        for occ in occupancy:
+            if occ.tenant:
+                assert units[(occ.block, occ.number)].usage is UnitUsage.RESIDENTIAL
+                assert occ.tenant_since is not None
+    assert occupancy_for(SITES[0]) == occupancy_for(SITES[0])  # sabit tohum

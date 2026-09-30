@@ -10,9 +10,20 @@ from site_yonetim import cli
 from site_yonetim.core.config import Settings, get_settings
 from site_yonetim.db.tenancy import all_sites_scope, site_scope
 from site_yonetim.main import create_app
-from site_yonetim.models import Block, Organization, Plan, Site, SiteModule, Unit, UnitType, User
+from site_yonetim.models import (
+    Block,
+    LedgerAccount,
+    Organization,
+    Person,
+    Plan,
+    Site,
+    SiteModule,
+    Unit,
+    UnitType,
+    User,
+)
 from site_yonetim.seed.demo import DemoSeedRefusedError, seed_demo
-from site_yonetim.seed.demo_data import DEMO_PASSWORD
+from site_yonetim.seed.demo_data import DEMO_PASSWORD, SITES, occupancy_for
 from site_yonetim.services.provisioning import ProvisioningError, provision_site
 from tests.conftest import SettingsFactory
 from tests.integration.conftest import DatabaseUrls, login_headers
@@ -47,6 +58,11 @@ async def test_demo_verisi_yuklenir(
 
     with all_sites_scope():
         assert await _count(session_factory, Unit) == 84
+        tenants = sum(1 for spec in SITES for o in occupancy_for(spec) if o.tenant)
+        assert await _count(session_factory, Person) == 84 + tenants
+        # her malik: -M ve (kiracı eklenmeden önce) -O; her kiracı: -K
+        assert await _count(session_factory, LedgerAccount) == 84 * 2 + tenants
+        assert tenants > 0
         assert await _count(session_factory, Block) == 6
         assert await _count(session_factory, UnitType) == 9  # site başına 3
 

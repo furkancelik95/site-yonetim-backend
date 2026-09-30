@@ -6,6 +6,7 @@ Rastgele ama **sabit tohumlu**: her kurulumda aynı daireler, aynı m² ve arsa 
 import math
 import random
 from dataclasses import dataclass
+from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
 from site_yonetim.domain.modules import ModuleKey
@@ -163,3 +164,46 @@ ACCOUNTS: tuple[AccountSpec, ...] = (
         "teknik@demo.local", "Ergün Kılıç", site_slug="aksu-konaklari", site_role="Teknik Personel"
     ),
 )
+
+
+# --- Kişiler (docs/10 §1.4) ---------------------------------------------------
+# Telefon/e-posta ÜRETİLMEZ: uydurma bir numara gerçek bir kişiye ait olabilir (KVKK).
+
+FIRST_NAMES = (
+    "Ayşe", "Fatma", "Zeynep", "Elif", "Emine", "Hatice", "Merve", "Özlem", "Gül", "İpek",
+    "Mehmet", "Ahmet", "Mustafa", "Ali", "Hüseyin", "Hasan", "İbrahim", "Murat", "Emre", "Can",
+    "Burak", "Serkan", "Oğuz", "Çağla", "Şule", "Ümit", "Işıl", "Gökhan", "Tuğba", "Selim",
+)  # fmt: skip
+LAST_NAMES = (
+    "Yılmaz", "Kaya", "Demir", "Şahin", "Çelik", "Yıldız", "Yıldırım", "Öztürk", "Aydın",
+    "Özdemir", "Arslan", "Doğan", "Kılıç", "Aslan", "Çetin", "Kara", "Koç", "Kurt", "Özkan",
+    "Şimşek", "Polat", "Erdoğan", "Güneş", "Aksoy", "Tekin", "Işık", "Uçar", "Bulut",
+)  # fmt: skip
+TENANT_RATIO = 0.35
+OWNER_SINCE_YEARS = (2012, 2024)
+
+
+@dataclass(frozen=True, slots=True)
+class OccupancySpec:
+    number: str
+    block: str
+    owner: tuple[str, str]
+    owner_since: date
+    tenant: tuple[str, str] | None
+    tenant_since: date | None
+
+
+def occupancy_for(site: SiteSpec) -> tuple[OccupancySpec, ...]:
+    """Her bölüme bir malik; konutların ~%35'ine kiracı. Sabit tohumlu."""
+    # Güvenlik amaçlı değil: tekrarlanabilir demo verisi için sabit tohum.
+    rng = random.Random(f"{SEED}:people:{site.slug}")  # noqa: S311  # nosec B311
+    units, _ = units_for(site)
+    result = []
+    for unit in units:
+        owner = (rng.choice(FIRST_NAMES), rng.choice(LAST_NAMES))
+        since = date(rng.randint(*OWNER_SINCE_YEARS), rng.randint(1, 12), 1)
+        has_tenant = unit.usage is UnitUsage.RESIDENTIAL and rng.random() < TENANT_RATIO
+        tenant = (rng.choice(FIRST_NAMES), rng.choice(LAST_NAMES)) if has_tenant else None
+        tenant_since = date(2025, rng.randint(1, 12), 1) if has_tenant else None
+        result.append(OccupancySpec(unit.number, unit.block, owner, since, tenant, tenant_since))
+    return tuple(result)
