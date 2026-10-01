@@ -36,6 +36,7 @@ from site_yonetim.domain.imports.unit_validator import (
     Severity,
     UnitRow,
 )
+from site_yonetim.models.audit import AuditAction, record
 from site_yonetim.services import imports as svc
 
 router = APIRouter(prefix="/sites/{slug}/imports/units", tags=["excel aktarımı"])
@@ -251,6 +252,15 @@ async def confirm_units(
             outcome = await svc.apply_import(
                 ctx.session, result.rows, start_date=svc.import_start_date(today)
             )
+            record(
+                ctx.session, AuditAction.IMPORT, "units", import_id,
+                {
+                    "created_units": outcome.created_units,
+                    "created_people": outcome.created_people,
+                    "created_accounts": outcome.created_accounts,
+                    "skipped": outcome.skipped,
+                },
+            )  # fmt: skip
             await ctx.session.commit()
         except IntegrityError as exc:
             await ctx.session.rollback()

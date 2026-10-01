@@ -37,6 +37,7 @@ from site_yonetim.domain.files import MAX_FILE_BYTES
 from site_yonetim.domain.finance import FinanceRuleError
 from site_yonetim.domain.text import format_money_tr
 from site_yonetim.models import CashAccount, Expense, ExpenseCategory, StoredFile
+from site_yonetim.models.audit import AuditAction, record
 from site_yonetim.services import expenses as svc
 from site_yonetim.services import exports
 from site_yonetim.services.files import FileStore
@@ -369,7 +370,11 @@ async def download_file(file_id: uuid.UUID, ctx: ExpensesRead, store: StoreDep) 
     row = await svc.stored_file(ctx.session, file_id)
     if row is None or not await svc.is_expense_document(ctx.session, file_id):
         raise NotFoundError("Belge bulunamadı.")
-    return send_document(row, store)
+    response = send_document(row, store)
+    # Kişisel veri içerebilecek belge indirildi (docs/09 §6).
+    record(ctx.session, AuditAction.DOWNLOAD, "stored_files", row.id, {"file_name": row.file_name})
+    await ctx.session.commit()
+    return response
 
 
 def send_document(row: StoredFile, store: FileStore) -> Response:

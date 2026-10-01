@@ -44,6 +44,7 @@ from site_yonetim.models import (
     Unit,
     UnitParty,
 )
+from site_yonetim.models.audit import AuditAction, record
 from site_yonetim.services import accounts as accounts_svc
 from site_yonetim.services import announcements as announcements_svc
 from site_yonetim.services import requests as requests_svc
@@ -427,4 +428,8 @@ async def expense_document(file_id: uuid.UUID, ctx: Resident, store: StoreDep) -
     row = await stored_file(ctx.session, file_id) if linked else None
     if row is None:
         raise NotFoundError("Belge bulunamadı.")
-    return send_document(row, store)
+    response = send_document(row, store)
+    # Kişisel veri içerebilecek belge indirildi (docs/09 §6).
+    record(ctx.session, AuditAction.DOWNLOAD, "stored_files", row.id, {"file_name": row.file_name})
+    await ctx.session.commit()
+    return response

@@ -97,7 +97,7 @@ ziyaretçi bilgisi, borç bilgisi.
 | **Saklama süreleri** | Henüz belirlenmedi → `12-acik-kararlar.md` |
 | **Barındırma** | Veri Türkiye'de (KVKK m.9) |
 
-## 6. Denetim kaydı (audit log) — yapılacak
+## 6. Denetim kaydı (audit log) — uygulandı
 
 Referans uygulamada ayrı bir denetim tablosu yok (değişmez defter ve ters kayıt zinciri var).
 Yeni backend'de baştan olmalı:
@@ -109,6 +109,22 @@ Yeni backend'de baştan olmalı:
 - Tek bir yerden yazılsın (SQLAlchemy olayı / servis katmanı ortak fonksiyonu) — her uç noktaya
   elle eklenmesin.
 - `audit.read` izni olan görür (Yönetici, Denetçi). Kayıt değiştirilemez ve silinemez.
+
+**Uygulama** (`models/audit.py`, göç 0012, uç `GET /sites/{slug}/audit` — `06` §2.15):
+- Oturum olayı (`after_flush`): denetlenen tablolardaki (`AUDITED_TABLES`: tahakkuk koşusu,
+  tahsilat, gider, kasa hesabı/hareketi, bütçe planı/kalemi, dönem, borç türü, dağıtım kuralı,
+  gecikme politikası, modül, site üyeliği) her ekleme/değişiklik/silme **aynı flush ve aynı
+  transaction'da** yazılır — işlem geri alınırsa kaydı da geri alınır. Güncellemede yalnız
+  değişen alanlar (`before`/`after`).
+- İş olayı düzeyinde: koşunun ürettiği borç/defter satırları (türetilmiş, zaten değişmez)
+  ayrıca yazılmaz. Toplu aktarım (`import`) ve belge indirme (`download`) model değişikliği
+  olmadığı için `record()` ile tek satır.
+- Kim: istekte `current_user` aktörü (kullanıcı, ad, IP) bağlama koyar; istek dışı (demo, CLI)
+  `user_id` boş.
+- Değişmezlik: `audit_log_immutable` tetikleyicisi (`forbid_history_change`), RLS ile site
+  izolasyonu.
+- IP, uygulamaya gelen bağlantının adresidir; ters vekil arkasında doğru istemci adresi için
+  vekil başlıklarına güven ayarı gerekir (güvenlik sertleştirme işi).
 
 ## Referans
 
