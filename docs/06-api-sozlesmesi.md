@@ -247,13 +247,15 @@ borçlu bir cari hesabı olanlar. Yayından sonra taraf değişse de teslim list
 ### 2.12 Güvenlik (modül: `visitors`, `packages`)
 | Yöntem | Yol | İzin | Durum | Not |
 |---|---|---|---|---|
-| GET | `/sites/{slug}/packages?status=waiting` | `security.packages` | R | |
-| POST | `/sites/{slug}/packages` | `security.packages` | R | 4 haneli teslim kodu üretir, sakine bildirim |
-| POST | `/sites/{slug}/packages/{id}/deliver` | `security.packages` | R | `{pickup_code, delivered_to}` |
-| GET | `/sites/{slug}/visitors?date=` | `security.visitors` | R | |
-| POST | `/sites/{slug}/visitors` | `security.visitors` | R | |
-| POST | `/sites/{slug}/visitors/{id}/enter` · `/exit` | `security.visitors` | R | |
-| GET | `/sites/{slug}/units/lookup?q=` | `security.*` | R | güvenlik için daire arama: **yalnız bölüm adı ve oturan adı** — borç ve telefon **yok** |
+| GET | `/sites/{slug}/packages?status=&unit_id=` | `security.packages` | R | sayfalı, yeni üstte |
+| POST | `/sites/{slug}/packages` | `security.packages` | R | `{unit_id, person_id?, carrier?, note?}` → 4 haneli teslim kodu üretir (`secrets`). **Kod güvenliğe dönmez** — sakin `resident/packages`'ta görür. Bildirim gönderimi yok (`12` K5) |
+| POST | `/sites/{slug}/packages/{id}/deliver` | `security.packages` | R | `{pickup_code, delivered_to}` — kod sabit zamanlı doğrulanır; hatalı 422, teslim edilmiş 409 |
+| GET | `/sites/{slug}/visitors?date=&status=` | `security.visitors` | R | gün (boşsa bugün): beklenen gün ya da kayıt günü |
+| POST | `/sites/{slug}/visitors` | `security.visitors` | R | `{unit_id, full_name, kind, host_person_id?, phone?, plate_number?, expected_on?, note?, enter_now}` — bugünse hemen içeri, ileri tarihse `expected` |
+| POST | `/sites/{slug}/visitors/{id}/enter` · `/exit` | `security.visitors` | R | yalnız `expected` → giriş, `entered` → çıkış (aksi 409) |
+| GET | `/sites/{slug}/units/lookup?q=` | `security.*` | R | güvenlik için daire arama (en fazla 20): **yalnız bölüm adı ve oturan adı** (kiracı/oturan, yoksa malik) — borç ve telefon **yok** |
+
+Modül kapalıysa ilgili uçlar 404; `units/lookup` için iki modülden biri açık olmalı.
 
 ### 2.13 Modüller
 | Yöntem | Yol | İzin | Durum | Not |
@@ -269,6 +271,7 @@ borçlu bir cari hesabı olanlar. Yayından sonra taraf değişse de teslim list
 | GET | `/sites/{slug}/resident/announcements` | sakin | R | kendisine teslim edilen, süresi geçmemiş duyurular (+ `read_at`). Modül kapalıysa 404 |
 | GET · POST | `/sites/{slug}/resident/requests` | sakin | R | kendi talepleri / yeni talep — her zaman kendi adına, yalnız kendi bölümü ya da ortak alan (422 `unit_not_yours`). Modül kapalıysa 404 |
 | GET | `/sites/{slug}/resident/expenses?year=` | sakin | **Y** | sitenin **gerçekleşen** gider dökümü (geri alınan ve düzeltmeler hariç) + `total_amount`; satırda `document_id`. Şeffaflık vaadinin karşılığı |
+| GET | `/sites/{slug}/resident/packages` | sakin | Y | dairelerine gelen, teslim bekleyen kargolar **teslim koduyla** (modül: `packages`) |
 | GET | `/sites/{slug}/resident/files/{id}` | sakin | Y | **fatura görüntüsü** — yalnız gerçekleşen bir giderin belgesi; başka dosya 404 |
 
 "Sakin" = üyeliğinde `person_id` olan kullanıcı; yoksa **403** ("Bu ekran yalnız sakinler

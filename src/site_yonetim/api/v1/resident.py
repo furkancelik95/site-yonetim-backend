@@ -32,6 +32,7 @@ from site_yonetim.domain.finance import LedgerSource
 from site_yonetim.domain.modules import ModuleKey
 from site_yonetim.domain.money import ZERO
 from site_yonetim.domain.operations import STATUS_LABELS, RequestStatus
+from site_yonetim.domain.security import PackageStatus
 from site_yonetim.domain.structure import AccountKind, PartyRole
 from site_yonetim.models import (
     Block,
@@ -46,6 +47,7 @@ from site_yonetim.models import (
 from site_yonetim.services import accounts as accounts_svc
 from site_yonetim.services import announcements as announcements_svc
 from site_yonetim.services import requests as requests_svc
+from site_yonetim.services import security as security_svc
 from site_yonetim.services.expenses import realized, stored_file
 
 router = APIRouter(prefix="/sites/{slug}/resident", tags=["sakin"])
@@ -306,6 +308,41 @@ async def new_request(
     return await requests_api.create_for(
         ctx, body.model_copy(update={"reported_by_person_id": None}), current, today, own=True
     )
+
+
+# --- Kargolarım -------------------------------------------------------------------------
+
+
+class MyPackage(BaseModel):
+    id: uuid.UUID
+    unit_name: str
+    carrier: str | None
+    received_at: dt.datetime
+    pickup_code: str = Field(description="teslim kodu — kargoyu alırken güvenliğe söylenir")
+
+
+@router.get("/packages", summary="Bekleyen kargolarım (teslim koduyla)")
+async def my_packages(ctx: Resident, today: TodayDep) -> list[MyPackage]:
+    """Kişinin bugün bağlı olduğu bölümlere gelen, teslim bekleyen kargolar. Teslim kodu yalnız
+    burada görünür (güvenlik uçları kodu döndürmez)."""
+    _module(ctx, ModuleKey.PACKAGES)
+    units = await security_svc.person_unit_ids(ctx.session, _person(ctx), today)
+    rows = list(
+        await ctx.session.scalars(
+            security_svc.packages_query(status=PackageStatus.WAITING, unit_ids=units).limit(50)
+        )
+    )
+    names = await security_svc.unit_names(ctx.session, {p.unit_id for p in rows})
+    return [
+        MyPackage(
+            id=p.id,
+            unit_name=names.get(p.unit_id, "—"),
+            carrier=p.carrier,
+            received_at=p.received_at,
+            pickup_code=p.pickup_code,
+        )
+        for p in rows
+    ]
 
 
 # --- Site giderleri (şeffaflık) --------------------------------------------------------

@@ -27,6 +27,7 @@ from site_yonetim.models import (
     LedgerAccount,
     LedgerEntry,
     Organization,
+    Package,
     Payment,
     PaymentAllocation,
     Period,
@@ -392,3 +393,25 @@ async def test_demo_pano_ozeti_defterle_tutar(
     assert Decimal(finance["total_charged"]) == charged
     assert Decimal(finance["total_collected"]) == paid
     assert finance["debtor_count"] > 0
+
+
+async def test_demo_kapi_kayitlari(
+    dev_settings: Settings, session_factory: Factory, admin_engine: object, api: httpx2.AsyncClient
+) -> None:
+    """docs/10 §1.4: güvenlik modülü açık sitelerde kargo ve ziyaretçi kayıtları."""
+    await seed_demo(dev_settings, session_factory, today=date(2026, 9, 30))
+    guard = await login_headers(api, "guvenlik@demo.local", DEMO_PASSWORD)
+    packages = (await api.get("/api/v1/sites/aksu-konaklari/packages", headers=guard)).json()
+    assert packages["total"] == 5
+    assert sum(1 for p in packages["items"] if p["status"] == "delivered") == 2
+    visitors = (
+        await api.get(
+            "/api/v1/sites/aksu-konaklari/visitors", params={"date": "2026-09-30"}, headers=guard
+        )
+    ).json()
+    assert visitors["total"] == 4
+    async with session_factory() as session:
+        mimoza = await session.scalar(select(Site.id).where(Site.slug == "mimoza-apartmani"))
+    with site_scope(mimoza):  # type: ignore[arg-type]
+        async with session_factory() as session:
+            assert await session.scalar(select(func.count()).select_from(Package)) == 0
