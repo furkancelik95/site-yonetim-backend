@@ -277,6 +277,11 @@ Modül kapalıysa ilgili uçlar 404; `units/lookup` için iki modülden biri aç
 "Sakin" = üyeliğinde `person_id` olan kullanıcı; yoksa **403** ("Bu ekran yalnız sakinler
 içindir"). Sakin, `requests.read` izni olmadan da kendi taleplerini görür (`05` §6).
 
+### 2.15 Denetim kaydı (`09` §6)
+| Yöntem | Yol | İzin | Durum | Not |
+|---|---|---|---|---|
+| GET | `/sites/{slug}/audit?entity=&entity_id=&action=&user_id=&from=&to=` | `audit.read` | R | sayfalı, yeni üstte. Satır: `{id, at, user_id, actor_name, action, entity, entity_id, before, after, ip}`. `action`: `create` · `update` · `delete` · `import` · `download`. `entity` tablo adıdır (`payments`, `expenses`, `budget_items`, `site_modules` …). Güncellemede `before`/`after` yalnız değişen alanları taşır. `from`/`to` iş günü (İstanbul). `user_id` null: sistem (demo, gece işi) |
+
 ---
 
 ## 3. Sıralama önerisi

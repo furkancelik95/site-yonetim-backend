@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from site_yonetim.api.v1 import (
     announcements,
+    audit,
     auth,
     budget,
     cash,
@@ -44,3 +45,4 @@ api_router.include_router(reports.router)
 api_router.include_router(dashboard.router)
 api_router.include_router(resident.router)
 api_router.include_router(portfolio.router)
+api_router.include_router(audit.router)

@@ -4,6 +4,7 @@ Her model burada içe aktarılır ki `Base.metadata` eksiksiz olsun (alembic ve 
 """
 
 from site_yonetim.domain.structure import UnitUsage
+from site_yonetim.models.audit import AuditLog
 from site_yonetim.models.cash import (
     CashAccount,
     CashBalance,
@@ -50,6 +51,7 @@ __all__ = [
     "AllocationRule",
     "Announcement",
     "AnnouncementDelivery",
+    "AuditLog",
     "AuthSession",
     "Block",
     "BudgetItem",

@@ -31,6 +31,7 @@ from site_yonetim.db.tenancy import site_scope
 from site_yonetim.domain.access import Permission, SiteAccess, UserAccess
 from site_yonetim.domain.modules import ModuleKey
 from site_yonetim.models import Site, User
+from site_yonetim.models.audit import Actor, set_actor
 from site_yonetim.services.access import load_user_access
 from site_yonetim.services.auth import authenticate
 from site_yonetim.services.sites import available_modules, find_site_by_slug
@@ -89,6 +90,7 @@ class CurrentUser:
 
 
 async def current_user(
+    request: Request,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
     settings: SettingsDep,
     session: SessionDep,
@@ -104,6 +106,8 @@ async def current_user(
         session, user_id=claims.user_id, session_id=claims.session_id, now=now
     )
     user_id_var.set(str(user.id))
+    # Denetim kaydında "kim": istek görevi boyunca geçerli (docs/09 §6).
+    set_actor(Actor(user.id, user.full_name, request.client.host if request.client else None))
     return CurrentUser(user=user, session_id=claims.session_id)
 
 
