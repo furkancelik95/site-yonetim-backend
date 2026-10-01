@@ -109,7 +109,7 @@ async def portfolio(
                 )
             }
             overdue = and_(Request.due_at.is_not(None), Request.due_at < now)
-            requests = {
+            request_counts = {
                 site_id: (open_count, late)
                 for site_id, open_count, late in await session.execute(
                     select(Request.site_id, func.count(), func.count(case((overdue, 1))))
@@ -129,7 +129,7 @@ async def portfolio(
             )
         site_requests = None
         if site_id in request_set:
-            open_count, late = requests.get(site_id, (0, 0))
+            open_count, late = request_counts.get(site_id, (0, 0))
             site_requests = SiteRequests(open_count, late)
         rows.append(PortfolioRow(site_id, units.get(site_id, 0), finance, site_requests))
     return rows
