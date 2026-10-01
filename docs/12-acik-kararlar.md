@@ -24,6 +24,7 @@ silinir ve ilgili dokümana taşınır.
 | **K16** | Excel aktarımında aynı kişinin birden çok bölümü | Tekilleştirme yok: her satırın maliki/kiracısı ayrı kişi kaydı (`11` §5) | Aynı ad + aynı telefon/e-posta → tek kişi; önizlemede "birleştirilecek" diye göster. Yanlış birleştirme kişisel veri karıştırır, bu yüzden kural ürün kararı | Burhan + ürün | Kişi birleştirme |
 | **K17** | Hisseli mülkiyette (birden çok aktif malik) borç kime | Tek kişiye: hissesi büyük, eşitse başlangıcı eski olan (`04` §4.5) | Hisse oranında bölmek (her malike `distribute` ile pay) — ama her malikin ayrı cari hesabı ve ayrı tahsilatı gerekir | Burhan + ürün | Tahakkuk |
 | **K18** | Talep durum geçişleri ve sakinin yetkileri | Her durumdan her duruma geçilebilir (aynı durum hariç); `resolved`/`closed` için çözüm metni zorunlu; yeniden açmak serbest. Sakin kendi talebine yorum yazar, durumunu değiştiremez/iptal edemez | Kapalı/iptal talep yeniden açılamasın ya da yalnız 7 gün içinde; sakin kendi açık talebini iptal edebilsin; durum değişince sakine bildirim | Burhan + ürün | Talep akışı |
+| **K19** | Portföyde site "sağlık durumu" | Hesaplanmıyor; ham ölçüler dönüyor (tahsilat oranı, açık bakiye, geciken talep) | Örn. tahsilat oranı ≥ %90 ve 60+ gün borç yok → iyi; %70–90 → dikkat; altı → sorunlu. Eşikler ürün kararı | Burhan + ürün | Portföy rozeti |
 
 ## PRD ile repo dokümanları arasındaki çelişkiler
 

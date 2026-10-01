@@ -13,6 +13,7 @@ from site_yonetim.api.v1 import (
     me,
     payments,
     platform,
+    portfolio,
     reports,
     requests,
     resident,
@@ -42,3 +43,4 @@ api_router.include_router(expenses.router)
 api_router.include_router(reports.router)
 api_router.include_router(dashboard.router)
 api_router.include_router(resident.router)
+api_router.include_router(portfolio.router)

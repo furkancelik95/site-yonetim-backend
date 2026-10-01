@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, Response, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 
-from site_yonetim.api.deps import PlatformAdminDep, SessionDep
+from site_yonetim.api.deps import FactoryDep, PlatformAdminDep, SessionDep
 from site_yonetim.api.schemas import Page, PageParams, Written
 from site_yonetim.core.errors import ApiError, NotFoundError
 from site_yonetim.db.tenancy import site_scope
@@ -22,6 +22,7 @@ from site_yonetim.domain.validation import (
     normalize_tax_number,
 )
 from site_yonetim.models import Organization, Plan, PropertyKind, Site
+from site_yonetim.services import portfolio
 from site_yonetim.services.platform import PlatformRuleError, create_customer, require_plan
 from site_yonetim.services.provisioning import ProvisioningError, provision_site
 from site_yonetim.services.sites import available_modules
@@ -34,6 +35,86 @@ def _rule_error(exc: PlatformRuleError | ProvisioningError) -> ApiError:
         return ApiError(HTTPStatus.CONFLICT, exc.code, exc.message)
     fields = {exc.field: exc.message} if exc.field else None
     return ApiError(HTTPStatus.UNPROCESSABLE_ENTITY, exc.code, exc.message, fields)
+
+
+# --- Özet (docs/06 §2.2) ---------------------------------------------------------
+
+
+class SiteUsageOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    slug: str
+    organization_name: str | None
+    plan_name: str | None
+    units: int
+    max_units: int | None
+    over_cap: bool = Field(description="bölüm sayısı plan tavanını aşmış")
+
+
+class CustomerUsageOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    plan_name: str | None
+    site_count: int
+    units: int
+
+
+class OverviewOut(BaseModel):
+    customer_count: int
+    site_count: int
+    unit_count: int
+    over_cap_sites: list[SiteUsageOut]
+    customers: Page[CustomerUsageOut]
+    sites: Page[SiteUsageOut]
+
+
+def _site_usage(u: portfolio.SiteUsage) -> SiteUsageOut:
+    return SiteUsageOut(
+        id=u.site.id,
+        name=u.site.name,
+        slug=u.site.slug,
+        organization_name=u.organization_name,
+        plan_name=u.plan_name,
+        units=u.units,
+        max_units=u.max_units,
+        over_cap=u.over_cap,
+    )
+
+
+@router.get("/overview", summary="Platform özeti (yalnız kullanım ölçüsü)")
+async def overview(
+    _: PlatformAdminDep, factory: FactoryDep, params: Annotated[PageParams, Depends()]
+) -> OverviewOut:
+    """Müşteri, site, bölüm sayıları ve tavanı aşan siteler. Borç ya da sakin verisi yok."""
+    data = await portfolio.overview(factory)
+    window = slice(params.offset, params.offset + params.page_size)
+    return OverviewOut(
+        customer_count=data.customer_count,
+        site_count=data.site_count,
+        unit_count=data.unit_count,
+        over_cap_sites=[_site_usage(u) for u in data.over_cap],
+        customers=Page(
+            items=[
+                CustomerUsageOut(
+                    id=c.organization.id,
+                    name=c.organization.name,
+                    plan_name=c.plan_name,
+                    site_count=c.site_count,
+                    units=c.units,
+                )
+                for c in data.customers[window]
+            ],
+            page=params.page,
+            page_size=params.page_size,
+            total=data.customer_count,
+        ),
+        sites=Page(
+            items=[_site_usage(u) for u in data.sites[window]],
+            page=params.page,
+            page_size=params.page_size,
+            total=data.site_count,
+        ),
+    )
 
 
 # --- Planlar ------------------------------------------------------------------
