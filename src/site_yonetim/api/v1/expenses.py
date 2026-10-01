@@ -36,8 +36,9 @@ from site_yonetim.domain.access import Permission
 from site_yonetim.domain.files import MAX_FILE_BYTES
 from site_yonetim.domain.finance import FinanceRuleError
 from site_yonetim.domain.text import format_money_tr
-from site_yonetim.models import Expense
+from site_yonetim.models import CashAccount, Expense, ExpenseCategory
 from site_yonetim.services import expenses as svc
+from site_yonetim.services import exports
 from site_yonetim.services.files import FileStore
 
 router = APIRouter(prefix="/sites/{slug}", tags=["gider"])
@@ -151,6 +152,57 @@ async def _expense(ctx: SiteContext, expense_id: uuid.UUID, *, lock: bool = Fals
     return expense
 
 
+@router.get(
+    "/expenses/export.xlsx",
+    summary="Giderler Excel (aynı filtreler, sayfalama yok)",
+    response_class=Response,
+    responses={200: {"content": {exports.XLSX_MEDIA_TYPE: {}}}},
+)
+async def export_expenses(
+    ctx: ExpensesRead,
+    year: Annotated[int | None, Query(ge=2000, le=2100)] = None,
+    category_id: uuid.UUID | None = None,
+    paid: Literal["all", "paid", "unpaid"] = "all",
+) -> Response:
+    session = ctx.session
+    rows = list(
+        await session.scalars(svc.list_query(year=year, category_id=category_id, paid=paid))
+    )
+    categories = dict(
+        (await session.execute(select(ExpenseCategory.id, ExpenseCategory.name))).all()
+    )
+    accounts = dict((await session.execute(select(CashAccount.id, CashAccount.name))).all())
+
+    def status_of(e: Expense) -> str:
+        if e.reversal_of_id is not None:
+            return "Düzeltme kaydı"
+        return "Geri alındı" if e.is_reversed else ""
+
+    data = exports.expense_rows_xlsx(
+        [
+            (
+                e.date,
+                e.description,
+                categories.get(e.expense_category_id),
+                e.vendor,
+                e.document_number,
+                e.amount,
+                e.paid_on is not None,
+                e.paid_on,
+                accounts.get(e.cash_account_id) if e.cash_account_id else None,
+                status_of(e),
+            )
+            for e in rows
+        ]
+    )
+    name = f"giderler-{year}.xlsx" if year else "giderler.xlsx"
+    return Response(
+        data,
+        media_type=exports.XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="{name}"'},
+    )
+
+
 @router.get("/expenses/{expense_id}", summary="Gider")
 async def get_expense(expense_id: uuid.UUID, ctx: ExpensesRead) -> ExpenseOut:
     return ExpenseOut.of(await _expense(ctx, expense_id))
@@ -250,9 +302,13 @@ async def pay_expense(
             return replayed(stored.status_code, stored.body)
         expense = await _expense(ctx, expense_id, lock=True)
         await svc.pay(
-            ctx.session, expense, cash_account_id=body.cash_account_id, paid_on=body.paid_on,
-            today=today, created_by=current.user.full_name,
-        )  # fmt: skip
+            ctx.session,
+            expense,
+            cash_account_id=body.cash_account_id,
+            paid_on=body.paid_on,
+            today=today,
+            created_by=current.user.full_name,
+        )
     except FinanceRuleError as exc:
         raise finance_error(exc) from exc
     result = Written(
