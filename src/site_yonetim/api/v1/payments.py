@@ -265,6 +265,7 @@ class PaymentOut(BaseModel):
     reference: str | None
     note: str | None
     status: PaymentStatus
+    cash_account_id: uuid.UUID | None
     created_by_name: str | None
     created_at: dt.datetime
 
@@ -279,6 +280,7 @@ class PaymentOut(BaseModel):
             reference=payment.reference,
             note=payment.note,
             status=PaymentStatus(payment.status),
+            cash_account_id=payment.cash_account_id,
             created_by_name=payment.created_by_name,
             created_at=payment.created_at,
         )
@@ -291,6 +293,9 @@ class PaymentIn(BaseModel):
     method: PaymentMethod
     reference: str | None = Field(default=None, max_length=100, description="boşsa referans kodu")
     note: str | None = Field(default=None, max_length=500)
+    cash_account_id: uuid.UUID | None = Field(
+        default=None, description="paranın girdiği kasa/banka hesabı (kasaya giriş hareketi)"
+    )
 
 
 class PaymentResultOut(BaseModel):
@@ -344,6 +349,7 @@ async def record_payment(
             note=body.note,
             today=today,
             recorded_by=current.user.full_name,
+            cash_account_id=body.cash_account_id,
         )
     except FinanceRuleError as exc:
         raise finance_error(exc) from exc

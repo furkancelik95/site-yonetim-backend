@@ -318,3 +318,33 @@ REQUESTS: tuple[RequestSpec, ...] = (
                 location="Otopark girişi", resolution="Temizlik yapıldı."),
     RequestSpec("Bahçe sulama sistemi arızalı", "garden", "normal", "open", location="Ön bahçe"),
 )  # fmt: skip
+
+
+# --- Kasa ve gider (docs/10 §1.4) ------------------------------------------------
+
+BANK_OPENING_FACTOR = Decimal("1.4")  # Banka açılışı = aylık bütçe × 1,4
+CASH_OPENING = Decimal(2500)
+UNPAID_SHARE_THIS_MONTH = 1 / 3  # bu ayın faturalarının ~üçte biri ödenmemiş
+
+
+@dataclass(frozen=True, slots=True)
+class ExpenseSpec:
+    description: str
+    vendor: str
+    share: Decimal  # aylık bütçedeki payı
+    capital: bool = False  # demirbaş kategorisi
+    elevator_only: bool = False
+    once_months_ago: int | None = None  # tek seferlik: kaç ay önce
+
+
+EXPENSES: tuple[ExpenseSpec, ...] = (
+    ExpenseSpec("Kapıcı ve güvenlik maaşları", "Personel bordrosu", Decimal("0.30")),
+    ExpenseSpec("Doğalgaz faturası", "Doğalgaz dağıtım", Decimal("0.22")),
+    ExpenseSpec("Ortak alan elektriği", "Elektrik dağıtım", Decimal("0.07")),
+    ExpenseSpec("Temizlik hizmeti", "Temiz Hizmet Ltd.", Decimal("0.08")),
+    ExpenseSpec("Asansör bakımı", "Asansör Servis A.Ş.", Decimal("0.04"), elevator_only=True),
+    ExpenseSpec("Bahçe bakımı", "Yeşil Peyzaj", Decimal("0.04")),
+    ExpenseSpec("Su deposu temizliği", "Hijyen Su", Decimal("0.02")),
+    ExpenseSpec("Kamera sistemi yenileme", "Güvenlik Sistemleri", Decimal("0.05"),
+                capital=True, once_months_ago=2),
+)  # fmt: skip

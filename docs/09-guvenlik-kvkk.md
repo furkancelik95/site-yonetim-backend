@@ -40,6 +40,12 @@ En ağır hata türü budur: bir yönetim şirketinin, başka bir şirketin saki
 | SHA-256 saklanır | aynı belgenin iki kez yüklenmesi görülebilir |
 | Üretimde virüs taraması (ör. ClamAV) — **yapılacak** | |
 
+**Uygulama (Python backend):** `domain/files.py` (uzantı + imza + boyut, ad temizleme) ve
+`services/files.py` (kök dışına çıkış reddi, `O_EXCL` ile üzerine yazmama, izin 0600).
+Kök `FILE_STORAGE_ROOT`; Docker'da salt okunur kök dosya sisteminde yazılabilir tek birim
+`files-data:/data/files`. Gider kaydı reddedilirse ya da transaction geri alınırsa yazılmış dosya
+silinir. Gövde sınırı gider ucu için 10 MB + pay (§3.2).
+
 ### 3.1 Excel içe aktarma dosyası (`11-excel-aktarim.md`)
 
 | Kural | Neden |

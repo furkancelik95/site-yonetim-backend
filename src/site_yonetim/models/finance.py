@@ -348,6 +348,7 @@ class Payment(TenantMixin, Base):
     __tablename__ = "payments"
     __table_args__ = tenant_table_args(
         tenant_fk("ledger_account_id", "ledger_accounts"),
+        tenant_fk("cash_account_id", "cash_accounts"),
         CheckConstraint("amount > 0", name="amount_positive"),
         CheckConstraint(enum_check("method", PaymentMethod), name="method"),
         CheckConstraint(enum_check("status", PaymentStatus), name="status"),
@@ -359,7 +360,6 @@ class Payment(TenantMixin, Base):
     amount: Mapped[Decimal] = mapped_column(MONEY)
     date: Mapped[dt.date] = mapped_column(Date)
     method: Mapped[str] = mapped_column(Text)
-    # Paranın girdiği kasa/banka hesabı — kasa diliminde `cash_accounts`'a bağlanacak.
     cash_account_id: Mapped[uuid.UUID | None]
     reference: Mapped[str | None] = mapped_column(Text)  # boşsa hesabın referans kodu
     note: Mapped[str | None] = mapped_column(Text)

@@ -18,8 +18,12 @@ from site_yonetim.models import (
     Announcement,
     Block,
     BudgetPlan,
+    CashAccount,
+    CashBalance,
+    CashMovement,
     Charge,
     ChargeRun,
+    Expense,
     LedgerAccount,
     LedgerEntry,
     Organization,
@@ -322,3 +326,49 @@ async def test_demo_duyuru_ve_talep(
     manager = await login_headers(api, "yonetici@demo.local", DEMO_PASSWORD)
     requests_page = (await api.get("/api/v1/sites/aksu-konaklari/requests", headers=manager)).json()
     assert requests_page["total"] == 6
+
+
+async def test_demo_kasa_ve_gider(
+    dev_settings: Settings, session_factory: Factory, admin_engine: object
+) -> None:
+    """docs/10 §1.4: Banka + Kasa; tahsilat paranın girdiği hesaba, ödenen gider kasadan düşer."""
+    await seed_demo(dev_settings, session_factory, today=date(2026, 9, 30))
+    async with session_factory() as session:
+        sites = {s.slug: s.id for s in await session.scalars(select(Site))}
+    for spec in SITES:
+        with site_scope(sites[spec.slug]):
+            async with session_factory() as session:
+                summary = dict(
+                    (
+                        await session.execute(
+                            select(CashAccount.name, CashBalance.balance).join(
+                                CashBalance, CashBalance.cash_account_id == CashAccount.id
+                            )
+                        )
+                    ).all()
+                )
+                ledger = dict(
+                    (
+                        await session.execute(
+                            select(
+                                CashAccount.name,
+                                func.sum(CashMovement.inflow - CashMovement.outflow),
+                            )
+                            .join(CashMovement, CashMovement.cash_account_id == CashAccount.id)
+                            .group_by(CashAccount.name)
+                        )
+                    ).all()
+                )
+                cash_paid = await session.scalar(
+                    select(func.sum(Payment.amount)).where(Payment.method == "cash")
+                )
+                unpaid = await session.scalar(
+                    select(func.count()).select_from(Expense).where(Expense.paid_on.is_(None))
+                )
+                expense_count = await session.scalar(select(func.count()).select_from(Expense))
+        assert set(summary) == {"Banka Hesabı", "Kasa"}
+        assert summary == ledger  # özet bakiye = hareket defteri
+        assert cash_paid is not None
+        assert summary["Kasa"] == Decimal(2500) + cash_paid  # kasadan gider ödenmedi
+        assert unpaid
+        assert (expense_count or 0) >= 6 * 6

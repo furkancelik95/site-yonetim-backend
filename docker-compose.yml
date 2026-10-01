@@ -38,6 +38,9 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://site_yonetim_app:${DB_APP_PASSWORD}@db:5432/site_yonetim
       ALLOWED_HOSTS: localhost,127.0.0.1
+      FILE_STORAGE_ROOT: /data/files
+    volumes:
+      - files-data:/data/files  # salt okunur kökte yazılabilir tek yer: belgeler
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
@@ -53,3 +56,4 @@ services:
 
 volumes:
   db-data:
+  files-data:

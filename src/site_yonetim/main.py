@@ -19,6 +19,7 @@ from site_yonetim.core.middleware import (
     SecurityHeadersMiddleware,
 )
 from site_yonetim.db.session import create_engine_from_settings, create_session_factory
+from site_yonetim.domain.files import MAX_FILE_BYTES
 from site_yonetim.seed.demo import seed_demo
 from site_yonetim.services.imports import MAX_UPLOAD_BYTES
 
@@ -31,6 +32,7 @@ DOCS_URL = f"{API_V1_PREFIX}/docs"
 MAX_BODY_BYTES = 1024 * 1024
 _UPLOAD_LIMITS = (
     (re.compile(rf"{API_V1_PREFIX}/sites/[^/]+/imports/units"), MAX_UPLOAD_BYTES + 64 * 1024),
+    (re.compile(rf"{API_V1_PREFIX}/sites/[^/]+/expenses"), MAX_FILE_BYTES + 64 * 1024),
 )
 
 

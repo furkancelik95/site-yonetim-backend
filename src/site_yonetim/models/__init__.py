@@ -4,6 +4,13 @@ Her model burada içe aktarılır ki `Base.metadata` eksiksiz olsun (alembic ve 
 """
 
 from site_yonetim.domain.structure import UnitUsage
+from site_yonetim.models.cash import (
+    CashAccount,
+    CashBalance,
+    CashMovement,
+    Expense,
+    StoredFile,
+)
 from site_yonetim.models.finance import (
     AccountBalance,
     AllocationComponent,
@@ -45,10 +52,14 @@ __all__ = [
     "Block",
     "BudgetItem",
     "BudgetPlan",
+    "CashAccount",
+    "CashBalance",
+    "CashMovement",
     "Charge",
     "ChargeLine",
     "ChargeRun",
     "ChargeType",
+    "Expense",
     "ExpenseCategory",
     "IdempotencyKey",
     "LateFeePolicy",
@@ -67,6 +78,7 @@ __all__ = [
     "Site",
     "SiteMembership",
     "SiteModule",
+    "StoredFile",
     "Unit",
     "UnitParty",
     "UnitType",

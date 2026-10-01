@@ -17,6 +17,7 @@ from site_yonetim.core.config import Environment, Settings
 from site_yonetim.core.security import hash_password
 from site_yonetim.db.tenancy import site_scope
 from site_yonetim.domain.access import UserKind
+from site_yonetim.domain.cash import CashSource
 from site_yonetim.domain.charging.payments import PaymentMethod
 from site_yonetim.domain.charging.periods import YearMonth
 from site_yonetim.domain.finance import (
@@ -26,7 +27,7 @@ from site_yonetim.domain.finance import (
     PayerRule,
     ScopeKind,
 )
-from site_yonetim.domain.money import distribute
+from site_yonetim.domain.money import distribute, round_money
 from site_yonetim.domain.operations import (
     Audience,
     Importance,
@@ -43,6 +44,7 @@ from site_yonetim.models import (
     Block,
     BudgetItem,
     BudgetPlan,
+    CashAccount,
     Charge,
     ChargeType,
     ExpenseCategory,
@@ -61,11 +63,14 @@ from site_yonetim.models import (
 from site_yonetim.seed.demo_data import (
     ACCOUNTS,
     ANNOUNCEMENTS,
+    BANK_OPENING_FACTOR,
     BUDGET_ITEMS,
+    CASH_OPENING,
     CASH_SHARE,
     CHARGED_MONTHS,
     CURRENT_MONTH_FACTOR,
     DEMO_PASSWORD,
+    EXPENSES,
     LAST_MONTH_FACTOR,
     OLDER_MONTHS_BONUS,
     ORGANIZATION_NAME,
@@ -77,11 +82,12 @@ from site_yonetim.seed.demo_data import (
     RESIDENT,
     SEED,
     SITES,
+    UNPAID_SHARE_THIS_MONTH,
     SiteSpec,
     occupancy_for,
     units_for,
 )
-from site_yonetim.services import announcements, charging, payments, requests
+from site_yonetim.services import announcements, cash, charging, expenses, payments, requests
 from site_yonetim.services.charging import BUSINESS_TZ
 from site_yonetim.services.provisioning import provision_site
 from site_yonetim.services.sites import set_module_enabled
@@ -296,7 +302,74 @@ async def _seed_finance(session: AsyncSession, spec: SiteSpec, today: date) -> N
         prepared = await charging.prepare(session, today, charge_date=month.first_day)
         posted_at = datetime.combine(month.first_day, time(9, 30), BUSINESS_TZ)
         runs.append(await charging.post(session, prepared, posted_by="Demo verisi", now=posted_at))
-    await _seed_payments(session, spec, [r.run.id for r in runs], months, today)
+    banks = await _seed_cash_accounts(session, spec, months[0].first_day)
+    await _seed_payments(session, spec, [r.run.id for r in runs], months, today, banks)
+    await _seed_expenses(session, spec, months, today, banks)
+
+
+async def _seed_cash_accounts(
+    session: AsyncSession, spec: SiteSpec, opened_on: date
+) -> dict[PaymentMethod, CashAccount]:
+    """Site açılışındaki iki hesaba açılış bakiyesi. Açılış demo geçmişinin başında: ekstrede
+    tüm tahsilat ve giderler açılıştan sonra görünsün (docs/10 §1.4 "3 ay önce" yerine)."""
+    accounts = {a.name: a for a in await session.scalars(select(CashAccount))}
+    bank, till = accounts["Banka Hesabı"], accounts["Kasa"]
+    for account, opening in (
+        (bank, spec.monthly_budget * BANK_OPENING_FACTOR),
+        (till, CASH_OPENING),
+    ):
+        account.opening_balance = opening
+        account.opening_date = opened_on
+        await cash.add_movement(
+            session, account, day=opened_on, inflow=opening, description="Açılış bakiyesi",
+            source=CashSource.OPENING, created_by="Demo verisi",
+        )  # fmt: skip
+    return {PaymentMethod.CASH: till, PaymentMethod.BANK_TRANSFER: bank}
+
+
+async def _seed_expenses(
+    session: AsyncSession,
+    spec: SiteSpec,
+    months: list[YearMonth],
+    today: date,
+    accounts: dict[PaymentMethod, CashAccount],
+) -> None:
+    """Son 6 ayın giderleri; bu ayın ~üçte biri ödenmemiş, ödenenler Banka'dan düşer."""
+    rng = random.Random(f"{SEED}:expenses:{spec.slug}")  # noqa: S311  # nosec B311
+    categories = {c.kind: c.id for c in await session.scalars(select(ExpenseCategory))}
+    has_elevator = any(block.has_elevator for block in spec.blocks)
+    bank = accounts[PaymentMethod.BANK_TRANSFER]
+    for months_ago, month in enumerate(reversed(months)):
+        for item in EXPENSES:
+            if item.elevator_only and not has_elevator:
+                continue
+            if item.once_months_ago is not None and item.once_months_ago != months_ago:
+                continue
+            factor = Decimal(1) + Decimal(rng.randint(-5, 5)) / 100
+            amount = round_money(spec.monthly_budget * item.share * factor)
+            day = min(month.first_day.replace(day=rng.randint(3, 20)), today)
+            unpaid = months_ago == 0 and rng.random() < UNPAID_SHARE_THIS_MONTH
+            paid_on = min(day + timedelta(days=rng.randint(0, 5)), today)
+            kind = (
+                ExpenseCategoryKind.CAPITAL_IMPROVEMENT if item.capital
+                else ExpenseCategoryKind.OPERATING
+            )  # fmt: skip
+            await expenses.create(
+                session,
+                expenses.NewExpense(
+                    expense_category_id=categories[kind.value],
+                    description=item.description,
+                    amount=amount,
+                    day=day,
+                    vendor=item.vendor,
+                    document_number=f"F{month.year}{month.month:02d}-{rng.randint(1000, 9999)}",
+                    paid=not unpaid,
+                    paid_on=None if unpaid else paid_on,
+                    cash_account_id=None if unpaid else bank.id,
+                ),
+                today=today,
+                created_by="Demo verisi",
+            )
 
 
 def _pay_probability(rate: Decimal, months_ago: int) -> Decimal:
@@ -313,8 +386,10 @@ async def _seed_payments(
     run_ids: list[uuid.UUID],
     months: list[YearMonth],
     today: date,
+    cash_accounts: dict[PaymentMethod, CashAccount],
 ) -> None:
-    """Her borç, ayına göre olasılıkla tamamen ödenir; tahsilat gerçek servisten geçer (FIFO)."""
+    """Her borç, ayına göre olasılıkla tamamen ödenir; tahsilat gerçek servisten geçer (FIFO)
+    ve paranın girdiği hesaba yazılır: nakit Kasa'ya, havale Banka'ya."""
     rng = random.Random(f"{SEED}:payments:{spec.slug}")  # noqa: S311  # nosec B311
     accounts = {a.id: a for a in await session.scalars(select(LedgerAccount))}
     planned: list[tuple[date, uuid.UUID, Decimal, PaymentMethod]] = []
@@ -343,6 +418,7 @@ async def _seed_payments(
             note=None,
             today=today,
             recorded_by="Demo verisi",
+            cash_account_id=cash_accounts[method].id,
         )
 
 

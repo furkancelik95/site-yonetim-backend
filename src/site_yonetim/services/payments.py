@@ -1,7 +1,8 @@
 """Tahsilat — docs/04 §5. Açık site kapsamında; transaction'ı çağıran yönetir.
 
 Tek transaction'da: tahsilat satırı, açık borçlara FIFO mahsup, cari hesaba tahsilatın tamamı
-kadar alacak hareketi, özet bakiye. (Kasaya giriş — adım 4 — kasa diliminde.)
+kadar alacak hareketi, özet bakiye ve — kasa/banka hesabı seçildiyse — kasaya giriş (adım 4).
+Birlikte: borç kapanır **ve** para bir yere girer.
 
 Hesap önce kilitlenir (`ledger.lock_accounts`): aynı hesaba eşzamanlı iki tahsilat aynı açık
 borcu iki kez kapatamaz; ikincisi birincinin mahsuplarını görerek dağıtır.
@@ -16,6 +17,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from site_yonetim.db.tenancy import current_scope
+from site_yonetim.domain.cash import CashSource
 from site_yonetim.domain.charging.payments import (
     AllocationResult,
     OpenDebt,
@@ -34,7 +36,7 @@ from site_yonetim.models import (
     PaymentAllocation,
     Period,
 )
-from site_yonetim.services import ledger
+from site_yonetim.services import cash, ledger
 
 # Açık borç = borç hareketi − yapılmış mahsuplar; ters kaydı alınmış borç açık değildir.
 _OPEN_DEBTS = text(
@@ -96,6 +98,7 @@ async def record_payment(
     note: str | None,
     today: date,
     recorded_by: str,
+    cash_account_id: uuid.UUID | None = None,
 ) -> RecordedPayment:
     check_amount(amount)
     if day > today:
@@ -119,6 +122,7 @@ async def record_payment(
             f"{day:%m/%Y} dönemi kapalı; bu tarihe tahsilat yazılamaz.",
             conflict=True,
         )
+    cash_account = await cash.active_account(session, cash_account_id) if cash_account_id else None
     reference = _clean(reference) or account.reference_code
     note = _clean(note)
 
@@ -130,6 +134,7 @@ async def record_payment(
         amount=amount,
         date=day,
         method=method.value,
+        cash_account_id=cash_account.id if cash_account else None,
         reference=reference,
         note=note,
         status=PaymentStatus.CONFIRMED.value,
@@ -152,4 +157,10 @@ async def record_payment(
         )
     )
     await ledger.refresh_balances(session, [account.id])
+    if cash_account is not None:
+        await cash.add_movement(
+            session, cash_account, day=day, inflow=amount,
+            description=f"Tahsilat — {account.reference_code}", source=CashSource.PAYMENT,
+            source_id=payment.id, reference=reference, created_by=recorded_by,
+        )  # fmt: skip
     return RecordedPayment(payment, result, await balance_of(session, account.id))

@@ -11,11 +11,13 @@ Seed komutu idempotent olmalı: veri varsa hiçbir şey yapmaz.
 > geliştirmede açılışta otomatik. Yüklenenler: planlar, şirket, 3 site, bloklar, daire tipleri,
 > 84 bölüm, modüller, §2'deki hesaplar (sakin dahil), işletme projesi, son 6 ayın tahakkuku ve
 > tahsilatı (FIFO'dan geçer), site başına 4 duyuru (biri sabit, biri süresi geçmiş) ve farklı
-> durum/öncelikte 6 talep. **Henüz yok:** kasa/banka hesapları ve tahsilatın kasaya girişi,
-> giderler, kargo/ziyaretçi — ilgili tablolar gelince eklenecek. Site
+> durum/öncelikte 6 talep, Banka ve Kasa hesapları (tahsilat paranın girdiği hesaba yazılır),
+> son 6 ayın giderleri (bu ayın ~üçte biri ödenmemiş). Hesapların açılışı "3 ay önce" yerine
+> **demo geçmişinin başında**: tahsilat/gider hareketleri ekstrede açılıştan sonra görünsün.
+> **Henüz yok:** kargo/ziyaretçi. Site
 > kurulumunda (§3) bugün kurulanlar: site, modüller, gecikme politikası, gider kategorileri,
-> tahakkuk tipleri, dağıtım kuralları, daire tipleri (`services/provisioning.py`); kasa
-> hesapları (adım 8) kasa diliminde.
+> tahakkuk tipleri, dağıtım kuralları, daire tipleri, kasa hesapları
+> (`services/provisioning.py`).
 
 ---
 

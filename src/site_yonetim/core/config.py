@@ -54,6 +54,8 @@ class Settings(BaseSettings):
     # Onay bekleyen Excel aktarımları (docs/11 §1); boşsa sistemin geçici klasörü.
     # Birden çok API kopyası çalışıyorsa hepsinin gördüğü ortak bir birim olmalı.
     import_storage_dir: Path | None = None
+    # Yüklenen belgeler (fatura görüntüsü) — web kökünün DIŞINDA, kalıcı birim (docs/09 §3).
+    file_storage_root: Path = Path("var/files")
     log_level: str = "INFO"
 
     @field_validator("cors_origins", "allowed_hosts", mode="before")
