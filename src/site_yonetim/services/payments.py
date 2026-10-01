@@ -36,7 +36,7 @@ from site_yonetim.models import (
     PaymentAllocation,
     Period,
 )
-from site_yonetim.services import cash, ledger
+from site_yonetim.services import cash, ledger, summary
 
 # Açık borç = borç hareketi − yapılmış mahsuplar; ters kaydı alınmış borç açık değildir.
 _OPEN_DEBTS = text(
@@ -157,6 +157,7 @@ async def record_payment(
         )
     )
     await ledger.refresh_balances(session, [account.id])
+    await summary.add_collected(session, day, amount)
     if cash_account is not None:
         await cash.add_movement(
             session, cash_account, day=day, inflow=amount,

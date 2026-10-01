@@ -6,6 +6,7 @@ from site_yonetim.api.v1 import (
     budget,
     cash,
     charges,
+    dashboard,
     expenses,
     health,
     imports,
@@ -36,3 +37,4 @@ api_router.include_router(announcements.router)
 api_router.include_router(cash.router)
 api_router.include_router(expenses.router)
 api_router.include_router(reports.router)
+api_router.include_router(dashboard.router)

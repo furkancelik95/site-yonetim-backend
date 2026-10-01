@@ -261,6 +261,23 @@ class AccountBalance(TenantMixin, Base):
     oldest_open_due_date: Mapped[dt.date | None] = mapped_column(Date)
 
 
+class SiteFinanceSummary(TenantMixin, Base):
+    """Site ve dönem başına pano sayıları (docs/08 §2) — tahakkuk, ters kayıt ve tahsilatla aynı
+    transaction'da artımlı güncellenir. `charged`: o dönem kesilen (geçerli) borç; `collected`:
+    tarihi o ayda olan onaylı tahsilat."""
+
+    __tablename__ = "site_finance_summary"
+    __table_args__ = tenant_table_args(
+        UniqueConstraint("site_id", "year", "month"),
+        CheckConstraint("month BETWEEN 1 AND 12", name="month_range"),
+    )
+
+    year: Mapped[int]
+    month: Mapped[int]
+    charged: Mapped[Decimal] = mapped_column(MONEY, default=Decimal(0))
+    collected: Mapped[Decimal] = mapped_column(MONEY, default=Decimal(0))
+
+
 # --- Tahakkuk (§7) --------------------------------------------------------------------
 
 

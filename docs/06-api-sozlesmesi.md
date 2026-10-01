@@ -130,7 +130,7 @@ Her hata aynı gövdeyi döner:
 | Yöntem | Yol | İzin | Durum | Not |
 |---|---|---|---|---|
 | GET | `/sites/{slug}` | erişim | R | site bilgisi + açık modüller + kullanıcının o sitedeki izinleri |
-| GET | `/sites/{slug}/dashboard` | `finance.read` | R | toplam tahakkuk/tahsilat, bu ay, açık bakiye, borçlu sayısı, ilk 5 borçlu, açık talepler, son duyurular, son giderler. **Özet tablodan**, `08-performans.md` |
+| GET | `/sites/{slug}/dashboard` | `finance.read` | R | toplam tahakkuk/tahsilat, bu ay, açık bakiye, borçlu sayısı, ilk 5 borçlu, açık talepler, son duyurular, son giderler. **Özet tablodan**, `08-performans.md`. Yanıt: `finance{total_charged, total_collected, month_charged, month_collected, open_balance, debtor_count, over_30_days, over_60_days, average_debt}`, `top_debtors[]`, `requests` (modül + `requests.read`, yoksa null), `announcements` (son 3), `expenses` (son 5, `expenses.read`), `cash_balance` (`finance.cash.read`) |
 | GET | `/sites/{slug}/units` | `units.read` | R | sayfalı; `q` (no / blok+no / unvan), `block_id`, `is_active`. bölüm, blok, tip, m², arsa payı, kullanım, **bugünkü** malik ve kiracı adları. Bakiye finans diliminde eklenecek |
 | GET | `/sites/{slug}/units/{id}` | `units.read` | Y | bölüm ayrıntısı + taraflar (geçmiş dahil) + hesaplar |
 | POST | `/sites/{slug}/units` | `units.manage` | Y | elle bölüm ekleme |
@@ -258,8 +258,8 @@ borçlu bir cari hesabı olanlar. Yayından sonra taraf değişse de teslim list
 ### 2.13 Modüller
 | Yöntem | Yol | İzin | Durum | Not |
 |---|---|---|---|---|
-| GET | `/sites/{slug}/modules` | `modules.manage` | R | modül, açık mı, planda var mı |
-| POST | `/sites/{slug}/modules/{key}/toggle` | `modules.manage` | R | çekirdek (`finance`) kapatılamaz; planda yoksa açılamaz |
+| GET | `/sites/{slug}/modules` | `modules.manage` | R | `[{key, enabled, in_plan, available, is_core}]` |
+| POST | `/sites/{slug}/modules/{key}/toggle` | `modules.manage` | R | durumu tersine çevirir; çekirdek (`finance`) kapatılamaz, planda yoksa açılamaz (409); bilinmeyen anahtar 404. Kapatmak veriyi silmez |
 
 ### 2.14 Sakin (kendi verisi — `person_id` ile süzülür)
 | Yöntem | Yol | İzin | Durum | Not |
