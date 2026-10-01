@@ -250,3 +250,71 @@ OLDER_MONTHS_BONUS = Decimal("0.04")
 CASH_SHARE = 0.25  # ~%25 nakit, gerisi havale
 PAYMENT_DAYS = (2, 25)  # ayın 2'si – 25'i
 RESIDENT = AccountSpec("sakin@demo.local", "", site_slug="aksu-konaklari", site_role="Sakin")
+
+
+# --- Duyuru ve talep (docs/10 §1.4) ----------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class AnnouncementSpec:
+    title: str
+    body: str
+    importance: str = "normal"
+    is_pinned: bool = False
+    days_ago: int = 0
+    valid_days: int | None = None  # yayından sonra kaç gün yürürlükte
+
+
+ANNOUNCEMENTS: tuple[AnnouncementSpec, ...] = (
+    AnnouncementSpec(
+        "Olağan genel kurul toplantısı",
+        "Yıllık olağan genel kurul toplantımız ayın son cumartesi saat 14:00'te sosyal tesiste "
+        "yapılacaktır. Gündem ve vekâletname örneği yönetim ofisindedir.",
+        importance="important",
+        is_pinned=True,
+        days_ago=3,
+    ),
+    AnnouncementSpec(
+        "Planlı su kesintisi",
+        "Depo temizliği nedeniyle cumartesi 10:00–14:00 arasında su verilemeyecektir.",
+        importance="critical",
+        days_ago=1,
+        valid_days=4,
+    ),
+    AnnouncementSpec(
+        "Aidat ödeme hatırlatması",
+        "Bu ayın aidat vadesi 15'idir. Havale açıklamasına referans kodunuzu yazmayı unutmayın.",
+        days_ago=12,
+    ),
+    AnnouncementSpec(
+        "Bahçe ilaçlaması tamamlandı",
+        "Ortak bahçe alanlarının ilaçlaması tamamlandı.",
+        days_ago=40,
+        valid_days=7,  # süresi geçmiş: yalnız yönetici görür
+    ),
+)
+
+
+@dataclass(frozen=True, slots=True)
+class RequestSpec:
+    title: str
+    category: str
+    priority: str
+    status: str  # son durum
+    location: str | None = None
+    resolution: str | None = None
+    assignee: str | None = None
+
+
+REQUESTS: tuple[RequestSpec, ...] = (
+    RequestSpec("Asansör kat arasında duruyor", "elevator", "urgent", "in_progress",
+                location="A blok asansör", assignee="Asansör firması"),
+    RequestSpec("Mutfak lavabosu sızdırıyor", "plumbing", "normal", "open"),
+    RequestSpec("Merdiven lambası yanmıyor", "electrical", "low", "resolved",
+                location="B blok 3. kat", resolution="Ampul değiştirildi.", assignee="Teknik ekip"),
+    RequestSpec("Kalorifer peteği ısınmıyor", "heating", "high", "waiting",
+                assignee="Teknik ekip"),
+    RequestSpec("Otopark girişi kirli", "cleaning", "normal", "closed",
+                location="Otopark girişi", resolution="Temizlik yapıldı."),
+    RequestSpec("Bahçe sulama sistemi arızalı", "garden", "normal", "open", location="Ön bahçe"),
+)  # fmt: skip

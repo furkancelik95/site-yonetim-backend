@@ -25,6 +25,12 @@ from site_yonetim.models.finance import (
 )
 from site_yonetim.models.identity import AuthSession, OrganizationMembership, SiteMembership, User
 from site_yonetim.models.modules import SiteModule
+from site_yonetim.models.operations import (
+    Announcement,
+    AnnouncementDelivery,
+    Request,
+    RequestEvent,
+)
 from site_yonetim.models.people import LedgerAccount, Person, UnitParty
 from site_yonetim.models.platform import Organization, Plan, PropertyKind, Site
 from site_yonetim.models.structure import Block, Unit, UnitType
@@ -33,6 +39,8 @@ __all__ = [
     "AccountBalance",
     "AllocationComponent",
     "AllocationRule",
+    "Announcement",
+    "AnnouncementDelivery",
     "AuthSession",
     "Block",
     "BudgetItem",
@@ -54,6 +62,8 @@ __all__ = [
     "Person",
     "Plan",
     "PropertyKind",
+    "Request",
+    "RequestEvent",
     "Site",
     "SiteMembership",
     "SiteModule",

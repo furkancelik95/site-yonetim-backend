@@ -459,6 +459,9 @@ Kurallar: `09-guvenlik-kvkk.md` §3.
 | due_at | TIMESTAMPTZ NULL | |
 | resolved_at | TIMESTAMPTZ NULL | |
 | resolution | TEXT NULL | **`resolved`/`closed` yapılırken zorunlu** |
+| created_by_name | TEXT NULL | talebi açan kullanıcının adı (Python backend) |
+
+`(site_id, number)` UNIQUE; numara site başına işlem kilidi altında `max + 1`. İndeks `(site_id, status)`.
 
 ### `request_events` [K] — talebin geçmişi (değişmez)
 | Sütun | Tip | Not |
@@ -468,6 +471,8 @@ Kurallar: `09-guvenlik-kvkk.md` §3.
 | description | TEXT | |
 | actor_name | TEXT NULL | |
 | new_status | TEXT NULL | |
+
+UPDATE/DELETE tetikleyiciyle reddedilir.
 
 ### `announcements` [K]
 | Sütun | Tip | Not |

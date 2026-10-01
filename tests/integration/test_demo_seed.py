@@ -15,6 +15,7 @@ from site_yonetim.db.tenancy import all_sites_scope, site_scope
 from site_yonetim.main import create_app
 from site_yonetim.models import (
     AccountBalance,
+    Announcement,
     Block,
     BudgetPlan,
     Charge,
@@ -27,6 +28,7 @@ from site_yonetim.models import (
     Period,
     Person,
     Plan,
+    Request,
     Site,
     SiteModule,
     Unit,
@@ -290,3 +292,33 @@ async def test_demo_tahsilat_ve_sakin(
     )
     assert statement.status_code == 200
     assert Decimal(statement.json()["account"]["balance"]) > 0
+
+
+async def test_demo_duyuru_ve_talep(
+    dev_settings: Settings, session_factory: Factory, admin_engine: object, api: httpx2.AsyncClient
+) -> None:
+    """docs/10 §1.4: duyurular ve farklı durum/öncelikte talepler; sakin yalnız yürürlükteki
+    duyuruları görür."""
+    await seed_demo(dev_settings, session_factory, today=date(2026, 9, 30))
+    async with session_factory() as session:
+        sites = {s.slug: s.id for s in await session.scalars(select(Site))}
+    for slug in sites.values():
+        with site_scope(slug):
+            async with session_factory() as session:
+                statuses = set(await session.scalars(select(Request.status)))
+                announcement_count = await session.scalar(
+                    select(func.count()).select_from(Announcement)
+                )
+        assert statuses == {"open", "in_progress", "waiting", "resolved", "closed"}
+        assert announcement_count == 4
+
+    resident = await login_headers(api, "sakin@demo.local", DEMO_PASSWORD)
+    listed = (await api.get("/api/v1/sites/aksu-konaklari/announcements", headers=resident)).json()
+    assert [a["title"] for a in listed["items"]] == [
+        "Olağan genel kurul toplantısı",
+        "Planlı su kesintisi",
+        "Aidat ödeme hatırlatması",
+    ]
+    manager = await login_headers(api, "yonetici@demo.local", DEMO_PASSWORD)
+    requests_page = (await api.get("/api/v1/sites/aksu-konaklari/requests", headers=manager)).json()
+    assert requests_page["total"] == 6

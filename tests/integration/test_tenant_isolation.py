@@ -19,7 +19,7 @@ from site_yonetim.db.tenancy import (
     current_scope,
     site_scope,
 )
-from site_yonetim.models import Block, Unit
+from site_yonetim.models import Announcement, Block, Unit
 from tests.integration.conftest import TwoSites
 
 Factory = async_sessionmaker[AsyncSession]
@@ -42,6 +42,26 @@ async def test_6_1_a_kapsaminda_yalniz_a_verisi(
     assert len(blocks) == 1
     assert {unit.site_id for unit in units} == {two_sites.site_a}
     assert blocks[0].name == "Aksu A"
+
+
+async def test_6_1_duyurular_yalniz_a_sitesinin(
+    session_factory: Factory, two_sites: TwoSites
+) -> None:
+    """07 §6.1: A kapsamında tüm duyurular "Aksu" içerir."""
+    for site_id, titles in (
+        (two_sites.site_a, ("Aksu su kesintisi", "Aksu genel kurul")),
+        (two_sites.site_b, ("Yıldız asansör bakımı",)),
+    ):
+        with site_scope(site_id):
+            async with session_factory() as session, session.begin():
+                session.add_all(Announcement(title=t, body="…") for t in titles)
+
+    with site_scope(two_sites.site_a):
+        async with session_factory() as session:
+            announcements = (await session.scalars(select(Announcement))).all()
+
+    assert len(announcements) == 2
+    assert all("Aksu" in a.title for a in announcements)
 
 
 async def test_6_2_b_kapsaminda_yalniz_b_verisi(

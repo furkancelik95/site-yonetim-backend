@@ -7,10 +7,10 @@ ortam kontrolü burada, yazmadan önce yapılır. İdempotent: demo verisi varsa
 import logging
 import random
 import uuid
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from site_yonetim.core.config import Environment, Settings
@@ -27,11 +27,19 @@ from site_yonetim.domain.finance import (
     ScopeKind,
 )
 from site_yonetim.domain.money import distribute
+from site_yonetim.domain.operations import (
+    Audience,
+    Importance,
+    RequestCategory,
+    RequestPriority,
+    RequestStatus,
+)
 from site_yonetim.domain.structure import AccountKind, PartyRole
 from site_yonetim.domain.text import normalize_person_name
 from site_yonetim.models import (
     AccountBalance,
     AllocationRule,
+    Announcement,
     Block,
     BudgetItem,
     BudgetPlan,
@@ -46,11 +54,13 @@ from site_yonetim.models import (
     Site,
     SiteMembership,
     Unit,
+    UnitParty,
     UnitType,
     User,
 )
 from site_yonetim.seed.demo_data import (
     ACCOUNTS,
+    ANNOUNCEMENTS,
     BUDGET_ITEMS,
     CASH_SHARE,
     CHARGED_MONTHS,
@@ -63,6 +73,7 @@ from site_yonetim.seed.demo_data import (
     ORGANIZATION_TAX_NUMBER,
     PAYMENT_DAYS,
     PLANS,
+    REQUESTS,
     RESIDENT,
     SEED,
     SITES,
@@ -70,7 +81,7 @@ from site_yonetim.seed.demo_data import (
     occupancy_for,
     units_for,
 )
-from site_yonetim.services import charging, payments
+from site_yonetim.services import announcements, charging, payments, requests
 from site_yonetim.services.charging import BUSINESS_TZ
 from site_yonetim.services.provisioning import provision_site
 from site_yonetim.services.sites import set_module_enabled
@@ -165,6 +176,7 @@ async def seed_demo(
                 for key in spec.extra_modules:
                     await set_module_enabled(session, site, key, enable=True)
                 await _seed_finance(session, spec, today)
+                await _seed_operations(session, spec, today)
                 session.add_all(
                     SiteMembership(user_id=user_ids[account.email], role=account.site_role)
                     for account in ACCOUNTS
@@ -332,6 +344,78 @@ async def _seed_payments(
             today=today,
             recorded_by="Demo verisi",
         )
+
+
+async def _seed_operations(session: AsyncSession, spec: SiteSpec, today: date) -> None:
+    """Duyurular ve farklı durumdaki talepler — servislerden geçer (docs/10 §1.4)."""
+    for item in ANNOUNCEMENTS:
+        published_on = today - timedelta(days=item.days_ago)
+        await announcements.publish(
+            session,
+            announcements.NewAnnouncement(
+                title=item.title,
+                body=item.body,
+                importance=Importance(item.importance),
+                audience=Audience.ALL_RESIDENTS,
+                block_ids=(),
+                channels=(),
+                expires_on=None,
+                is_pinned=item.is_pinned,
+            ),
+            published_by="Site Yönetimi",
+            now=datetime.combine(published_on, time(10), BUSINESS_TZ),
+            today=published_on,
+        )
+    # Süreli duyuruların bitişi sonradan yazılır: geçmiş tarihli yayın doğrulamaya takılmasın.
+    for item in ANNOUNCEMENTS:
+        if item.valid_days is not None:
+            await session.execute(
+                update(Announcement)
+                .where(Announcement.title == item.title)
+                .values(expires_on=today - timedelta(days=item.days_ago - item.valid_days))
+            )
+
+    rng = random.Random(f"{SEED}:requests:{spec.slug}")  # noqa: S311  # nosec B311
+    reporters = list(
+        await session.execute(
+            select(UnitParty.person_id, UnitParty.unit_id).where(
+                UnitParty.role != PartyRole.PROXY.value
+            )
+        )
+    )
+    for index, demand in enumerate(REQUESTS):
+        person_id, unit_id = rng.choice(reporters)
+        common = demand.location is not None
+        opened = datetime.combine(
+            today - timedelta(days=len(REQUESTS) - index), time(9), BUSINESS_TZ
+        )
+        request = await requests.create(
+            session,
+            requests.NewRequest(
+                title=demand.title,
+                description=None,
+                category=RequestCategory(demand.category),
+                priority=RequestPriority(demand.priority),
+                unit_id=None if common else unit_id,
+                location=demand.location,
+                reported_by_person_id=person_id,
+            ),
+            actor="Demo verisi",
+        )
+        if demand.assignee:
+            await requests.assign(session, request, demand.assignee, actor="Site Yönetimi")
+        target = RequestStatus(demand.status)
+        path = {
+            RequestStatus.IN_PROGRESS: [RequestStatus.IN_PROGRESS],
+            RequestStatus.WAITING: [RequestStatus.IN_PROGRESS, RequestStatus.WAITING],
+            RequestStatus.RESOLVED: [RequestStatus.IN_PROGRESS, RequestStatus.RESOLVED],
+            RequestStatus.CLOSED: [RequestStatus.CLOSED],
+        }.get(target, [])
+        for step, status in enumerate(path, start=1):
+            await requests.change_status(
+                session, request, status, demand.resolution, actor="Site Yönetimi",
+                now=opened + timedelta(hours=4 * step),
+            )  # fmt: skip
 
 
 async def _seed_resident(
