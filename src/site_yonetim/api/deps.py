@@ -16,6 +16,7 @@ import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from http import HTTPStatus
 from typing import Annotated
 from zoneinfo import ZoneInfo
 
@@ -24,7 +25,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from site_yonetim.core.config import Settings
-from site_yonetim.core.errors import ForbiddenError, NotFoundError, UnauthorizedError
+from site_yonetim.core.errors import ApiError, ForbiddenError, NotFoundError, UnauthorizedError
 from site_yonetim.core.logging import user_id_var
 from site_yonetim.core.security import InvalidTokenError, decode_access_token
 from site_yonetim.db.tenancy import site_scope
@@ -111,7 +112,27 @@ async def current_user(
     return CurrentUser(user=user, session_id=claims.session_id)
 
 
-CurrentUserDep = Annotated[CurrentUser, Depends(current_user)]
+# Geçici parolayla açılmış oturum: yalnız `/me` ve parola değişikliği (docs/05 §8.1).
+AuthenticatedUserDep = Annotated[CurrentUser, Depends(current_user)]
+
+
+class PasswordChangeRequiredError(ApiError):
+    def __init__(self) -> None:
+        super().__init__(
+            HTTPStatus.FORBIDDEN,
+            "password_change_required",
+            "Devam etmeden önce geçici parolanızı değiştirin.",
+        )
+
+
+async def password_changed(current: AuthenticatedUserDep) -> CurrentUser:
+    """Varsayılan kapı: geçici parola değiştirilmeden hiçbir uç çalışmaz."""
+    if current.user.must_change_password:
+        raise PasswordChangeRequiredError
+    return current
+
+
+CurrentUserDep = Annotated[CurrentUser, Depends(password_changed)]
 
 
 async def user_access(current: CurrentUserDep, factory: FactoryDep) -> UserAccess:

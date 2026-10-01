@@ -2,17 +2,21 @@
 
 uv run python -m site_yonetim.cli seed-demo       # demo verisi (yalnız development)
 uv run python -m site_yonetim.cli purge-imports   # süresi dolan Excel aktarımlarını sil (cron)
+uv run python -m site_yonetim.cli purge-login-throttle  # dolmuş giriş sayaçlarını sil (gece)
+uv run python -m site_yonetim.cli reconcile [--fix]    # özet bakiye ↔ defter mutabakatı (gece)
 """
 
 import argparse
 import asyncio
+import logging
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from site_yonetim.core.config import get_settings
 from site_yonetim.core.logging import configure_logging
 from site_yonetim.db.session import create_engine_from_settings, create_session_factory
 from site_yonetim.seed.demo import DemoSeedRefusedError, ensure_demo_allowed, seed_demo
+from site_yonetim.services import login_throttle, reconciliation
 from site_yonetim.services.imports import ImportStore
 
 
@@ -40,17 +44,73 @@ def _purge_imports() -> int:
     return 0
 
 
+async def _purge_login_throttle() -> int:
+    """Penceresi dolmuş IP sayaçları (docs/05 §8.1); günde bir kez yeter."""
+    settings = get_settings()
+    engine = create_engine_from_settings(settings)
+    try:
+        removed = await login_throttle.purge(
+            create_session_factory(engine),
+            now=datetime.now(UTC),
+            window=timedelta(minutes=settings.login_ip_window_minutes),
+        )
+    finally:
+        await engine.dispose()
+    print(f"{removed} dolmuş giriş sayacı silindi.")
+    return 0
+
+
+logger = logging.getLogger("site_yonetim.reconciliation")
+
+
+async def _reconcile(*, fix: bool) -> int:
+    """Gece mutabakatı (docs/08 §2). Fark varsa her biri ERROR olarak loglanır (alarm) ve çıkış
+    kodu 1 olur; `--fix` farklı sitelerin özetlerini defterden yeniden üretir."""
+    engine = create_engine_from_settings(get_settings())
+    factory = create_session_factory(engine)
+    try:
+        found = await reconciliation.find_mismatches(factory)
+        for m in found:
+            logger.error(
+                "Mutabakat tutmadı: %s site_id=%s anahtar=%s alan=%s defter=%s özet=%s",
+                m.kind, m.site_id, m.key, m.field, m.expected, m.actual,
+            )  # fmt: skip
+        if not found:
+            print("Mutabakat tuttu: fark yok.")
+            return 0
+        print(f"{len(found)} fark bulundu.")
+        if not fix:
+            return 1
+        sites = {m.site_id for m in found}
+        await reconciliation.repair(factory, sites)
+        remaining = await reconciliation.find_mismatches(factory)
+    finally:
+        await engine.dispose()
+    if remaining:
+        print(f"Onarımdan sonra {len(remaining)} fark kaldı.")
+        return 1
+    print(f"{len(sites)} sitenin özetleri defterden yeniden üretildi; onarıldı.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="site_yonetim.cli")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("seed-demo", help="Demo verisini yükle (yalnız development)")
     sub.add_parser("purge-imports", help="Süresi dolan Excel aktarım dosyalarını sil")
+    sub.add_parser("purge-login-throttle", help="Penceresi dolmuş giriş sayaçlarını sil")
+    reconcile = sub.add_parser("reconcile", help="Özet bakiyeleri defterle karşılaştır")
+    reconcile.add_argument("--fix", action="store_true", help="Farklı siteleri onar")
     args = parser.parse_args(argv)
     configure_logging(get_settings().log_level)
     if args.command == "seed-demo":
         return asyncio.run(_seed_demo())
     if args.command == "purge-imports":
         return _purge_imports()
+    if args.command == "purge-login-throttle":
+        return asyncio.run(_purge_login_throttle())
+    if args.command == "reconcile":
+        return asyncio.run(_reconcile(fix=args.fix))
     return 1  # pragma: no cover — argparse zorunlu alt komut
 
 

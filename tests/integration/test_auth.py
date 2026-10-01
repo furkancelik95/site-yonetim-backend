@@ -138,6 +138,7 @@ async def test_me_kullanici_bilgisi(api: httpx2.AsyncClient, user: User) -> None
         "kind": "staff",
         "is_platform_admin": False,
         "can_see_portfolio": False,
+        "must_change_password": False,
         "sites": [],
     }
 

@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.dependencies.models import Dependant
 from fastapi.routing import APIRoute, iter_route_contexts
 
-from site_yonetim.api.deps import current_user, platform_admin, site_context
+from site_yonetim.api.deps import current_user, password_changed, platform_admin, site_context
 from site_yonetim.main import create_app
 from tests.conftest import SettingsFactory
 
@@ -26,6 +26,8 @@ PUBLIC_ROUTES = {
     "/api/v1/auth/refresh",  # çerezle doğrular
     "/api/v1/auth/logout",  # her zaman 204; varsa oturumu iptal eder
 }
+# Geçici parolalı oturumun erişebildiği uçlar (docs/05 §8.1). Gerisi `password_changed` ister.
+PASSWORD_PENDING_ROUTES = {"/api/v1/me", "/api/v1/auth/change-password"}
 
 
 def _calls(dependant: Dependant) -> set[object]:
@@ -62,6 +64,20 @@ def test_her_uc_kimlik_ister(routes: list[tuple[str, set[object]]]) -> None:
     assert offenders == [], (
         "Kimliksiz uç: current_user ekleyin ya da bilinçli olarak beyaz listeye alın"
     )
+
+
+def test_gecici_parolada_yalniz_me_ve_parola_degisikligi(
+    routes: list[tuple[str, set[object]]],
+) -> None:
+    offenders = [
+        path
+        for path, calls in routes
+        if path not in PUBLIC_ROUTES | PASSWORD_PENDING_ROUTES and password_changed not in calls
+    ]
+    paths = {path for path, _ in routes}
+
+    assert paths >= PASSWORD_PENDING_ROUTES
+    assert offenders == [], "Bu uç geçici parolalı oturuma açık: CurrentUserDep kullanın"
 
 
 def test_site_uclari_site_baglamindan_gecer(routes: list[tuple[str, set[object]]]) -> None:

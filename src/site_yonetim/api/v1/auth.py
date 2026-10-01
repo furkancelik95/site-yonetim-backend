@@ -4,16 +4,24 @@ Erişim jetonu yanıt gövdesinde döner (frontend bellekte tutar). Yenileme jet
 httpOnly + SameSite=Lax (+ üretimde Secure) çerezde taşınır; JavaScript okuyamaz.
 """
 
+from datetime import timedelta
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Cookie, Request, Response, status
 from pydantic import BaseModel, Field
 
-from site_yonetim.api.deps import NowDep, SessionDep, SettingsDep
+from site_yonetim.api.deps import (
+    AuthenticatedUserDep,
+    FactoryDep,
+    NowDep,
+    SessionDep,
+    SettingsDep,
+)
 from site_yonetim.core.config import Settings
 from site_yonetim.core.errors import ForbiddenError, UnauthorizedError
 from site_yonetim.core.security import InvalidTokenError, create_access_token, decode_access_token
 from site_yonetim.services import auth as auth_service
+from site_yonetim.services import login_throttle
 
 router = APIRouter(prefix="/auth", tags=["kimlik"])
 
@@ -31,6 +39,15 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: Literal["bearer"] = "bearer"  # noqa: S105 — şema türü, sır değil
     expires_in: int = Field(description="Erişim jetonunun ömrü, saniye")
+    must_change_password: bool = Field(
+        description="true: geçici parola — parola değiştirme ekranına yönlendir; değiştirilene "
+        "kadar diğer uçlar 403 `password_change_required`"
+    )
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=1, max_length=256)
 
 
 def _issue(
@@ -50,7 +67,11 @@ def _issue(
         samesite="lax",
     )
     response.headers["Cache-Control"] = "no-store"
-    return TokenResponse(access_token=token, expires_in=settings.jwt_access_minutes * 60)
+    return TokenResponse(
+        access_token=token,
+        expires_in=settings.jwt_access_minutes * 60,
+        must_change_password=issued.user.must_change_password,
+    )
 
 
 def _clear_cookie(settings: Settings, response: Response) -> None:
@@ -74,20 +95,50 @@ def _check_origin(request: Request, settings: Settings) -> None:
 @router.post("/login", summary="Giriş")
 async def login(
     body: LoginRequest,
+    request: Request,
     response: Response,
     settings: SettingsDep,
     session: SessionDep,
+    factory: FactoryDep,
     now: NowDep,
 ) -> TokenResponse:
-    """E-posta + parola. 5 hatalı denemede hesap 15 dakika kilitlenir (429)."""
-    issued = await auth_service.login(
-        session,
-        email=body.email,
-        password=body.password,
+    """E-posta + parola. 5 hatalı denemede hesap 15 dakika kilitlenir (429 `account_locked`);
+    aynı adresten pencerede çok hatalı deneme 429 `too_many_attempts` (parola denenmez)."""
+    ip = request.client.host if request.client else None
+    async with login_throttle.guard(
+        factory,
+        ip=ip,
         now=now,
-        session_hours=settings.session_hours,
-    )
+        limit=settings.login_ip_max_failures,
+        window=timedelta(minutes=settings.login_ip_window_minutes),
+    ):
+        issued = await auth_service.login(
+            session,
+            email=body.email,
+            password=body.password,
+            now=now,
+            session_hours=settings.session_hours,
+        )
     return _issue(settings, response, issued)
+
+
+@router.post(
+    "/change-password", status_code=status.HTTP_204_NO_CONTENT, summary="Parolayı değiştir"
+)
+async def change_password(
+    body: ChangePasswordRequest, current: AuthenticatedUserDep, session: SessionDep, now: NowDep
+) -> Response:
+    """Geçici parolada zorunlu; her zaman kullanılabilir. Diğer oturumlar iptal edilir, bu
+    oturum sürer. Hatalı mevcut parola hesap kilidi sayacını artırır."""
+    await auth_service.change_password(
+        session,
+        user=current.user,
+        current_password=body.current_password,
+        new_password=body.new_password,
+        keep_session_id=current.session_id,
+        now=now,
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/refresh", summary="Oturumu yenile")

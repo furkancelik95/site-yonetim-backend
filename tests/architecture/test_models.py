@@ -19,6 +19,7 @@ GLOBAL_TABLES = {
     "users",
     "organization_memberships",
     "auth_sessions",  # oturum kullanıcıya aittir, siteye değil
+    "login_throttle",  # IP bazlı giriş hız sınırı; giriş site bağlamından önce
 }
 
 TABLES: list[Table] = list(Base.metadata.sorted_tables)

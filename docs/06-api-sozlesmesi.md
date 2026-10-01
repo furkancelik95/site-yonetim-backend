@@ -107,10 +107,11 @@ Her hata aynı gövdeyi döner:
 ### 2.1 Kimlik
 | Yöntem | Yol | İzin | Durum | Not |
 |---|---|---|---|---|
-| POST | `/auth/login` | — | R | `{email, password}` → `{access_token, token_type: "bearer", expires_in}` + `sy_refresh` çerezi. Hatalı: 401 `invalid_credentials`; 5 hatada 15 dk kilit: 429 `account_locked` |
+| POST | `/auth/login` | — | R | `{email, password}` → `{access_token, token_type: "bearer", expires_in, must_change_password}` + `sy_refresh` çerezi. Hatalı: 401 `invalid_credentials`; 5 hatada 15 dk kilit: 429 `account_locked`; aynı adresten 15 dk'da 20 hatalı deneme: 429 `too_many_attempts` (+ `Retry-After`, parola denenmez) |
+| POST | `/auth/change-password` | giriş | R | `{current_password, new_password}` → 204. Geçici parolada (`must_change_password: true`) zorunlu; o zamana kadar `/me` dışındaki uçlar 403 `password_change_required`. Hatalar 422: `invalid_current_password` (hesap kilidi sayacını artırır), `weak_password` (en az 8), `password_unchanged`. Başarılıysa **diğer oturumlar iptal**, bu oturum sürer |
 | POST | `/auth/refresh` | çerez | Y | gövde yok; çerezle → yeni `access_token` + yeni çerez. Geçersiz/süresi dolmuş: 401 `session_expired`. Frontend `credentials: "include"` ile çağırır |
 | POST | `/auth/logout` | — | R | Bearer ve/veya çerez; oturumu iptal eder, çerezi siler. Her zaman 204 |
-| GET | `/me` | giriş | R | `UserAccess` — `05-yetki.md` §4. Frontend yönlendirmesi buna bakar |
+| GET | `/me` | giriş | R | `UserAccess` — `05-yetki.md` §4 + `must_change_password`. Frontend yönlendirmesi buna bakar (geçici paroladayken de çalışır) |
 
 ### 2.2 Platform (yalnız platform yöneticisi — değilse 404)
 | Yöntem | Yol | Durum | Not |
