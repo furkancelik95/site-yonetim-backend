@@ -76,6 +76,11 @@ dosyaları sınırsız diske yazdığından, sınır ayrıştırmadan önce olma
 - Yenileme jetonu **httpOnly + Secure + SameSite** çerezde; çerezle korunan yazma işlemlerinde
   CSRF koruması.
 - **Hız sınırı:** giriş denemesi (5 hatada 15 dk kilit), parola sıfırlama, dosya yükleme.
+  Uygulandı: hesap kilidi + IP bazlı giriş sınırı (15 dk'da 20 hatalı deneme → 429, `05` §8.1);
+  dosya boyutu sınırı (ara katman). Parola sıfırlama ucu henüz yok.
+- **Gerçek istemci adresi:** API ters vekil arkasındaysa uvicorn'a vekilin adresi
+  `FORWARDED_ALLOW_IPS` ile verilir (yalnız oradan gelen `X-Forwarded-For` güvenilir). Verilmezse
+  hız sınırı ve denetim kaydındaki IP vekilin adresi olur — üretimde zorunlu ayar.
 - Hata yanıtında yığın izi (stack trace) **yok**; ayrıntı yalnız sunucu logunda.
 - SQL her zaman parametreli (ORM). String birleştirerek SQL **yazılmaz.**
 - Frontend'e dönen metinde HTML yok; kullanıcı girdisi olduğu gibi döner, kaçışlamayı frontend yapar.

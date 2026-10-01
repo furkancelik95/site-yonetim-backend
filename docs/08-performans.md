@@ -45,7 +45,16 @@ işlemde defterden **yeniden hesaplanır** (artımlı toplama değil), ama önce
 commit'ini bekler ve onun hareketlerini görerek hesaplar — kayıp güncelleme olmaz, kilitlenme
 (deadlock) olmaz. `oldest_open_due_date` §13 kuralıyla SQL'de (pencere fonksiyonu) bulunur.
 Hesap listeleri tek dizi parametresiyle gider (10.000 hesaplık koşuda parametre sınırı yok).
-`rebuild_balances(site)` onarım içindir; gece mutabakat işi henüz yok.
+`rebuild_balances(site)` onarım içindir.
+
+**Gece mutabakatı (uygulandı, `services/reconciliation.py`):** `python -m site_yonetim.cli
+reconcile` üç özeti (`account_balances` ← `ledger_entries`, `cash_balances` ← `cash_movements`,
+`site_finance_summary` ← geçerli koşuların borcu + onaylı tahsilat, göç 0010 tanımı) defterle
+karşılaştırır. Bilinçli tüm siteler kapsamında **üç toplu sorgu** — site başına döngü yok; gece,
+trafik yokken çalışır (milyonlarca satırda tam tarama). Fark varsa her biri `ERROR` logu
+(`Mutabakat tutmadı: …` — alarm buna kurulur) ve çıkış kodu **1**. `--fix` yalnız farklı
+sitelerin özetlerini defterden yeniden üretir; özet satırları kilitlenir, eşzamanlı yazım
+kaybolmaz. Zamanlama: günde bir (cron / Kubernetes CronJob), `purge-login-throttle` ile birlikte.
 
 `site_finance_summary(site, year, month, charged, collected)` uygulandı: tahakkuk kaydı
 (+), ters kaydı (−) ve tahsilat (tarihinin ayına) aynı transaction'da `INSERT … ON CONFLICT DO

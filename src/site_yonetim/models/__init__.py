@@ -32,7 +32,13 @@ from site_yonetim.models.finance import (
     SiteFinanceSummary,
     UnitWeight,
 )
-from site_yonetim.models.identity import AuthSession, OrganizationMembership, SiteMembership, User
+from site_yonetim.models.identity import (
+    AuthSession,
+    LoginThrottle,
+    OrganizationMembership,
+    SiteMembership,
+    User,
+)
 from site_yonetim.models.modules import SiteModule
 from site_yonetim.models.operations import (
     Announcement,
@@ -69,6 +75,7 @@ __all__ = [
     "LateFeePolicy",
     "LedgerAccount",
     "LedgerEntry",
+    "LoginThrottle",
     "Organization",
     "OrganizationMembership",
     "Package",

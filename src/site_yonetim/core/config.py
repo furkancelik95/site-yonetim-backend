@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     jwt_access_minutes: int = Field(default=15, ge=1, le=60)
     # Oturum ömrü: kayan pencere (docs/05 §8). Her yenilemede uzar.
     session_hours: int = Field(default=8, ge=1, le=24)
+    # IP bazlı giriş hız sınırı (docs/09 §4): pencerede bu kadar hatalı denemeden sonra 429.
+    # Ters vekil arkasında gerçek istemci adresi için FORWARDED_ALLOW_IPS (uvicorn) verilmeli.
+    login_ip_max_failures: int = Field(default=20, ge=1, le=10_000)
+    login_ip_window_minutes: int = Field(default=15, ge=1, le=24 * 60)
     # Yenileme jetonu çerezi: httpOnly + SameSite=Lax; üretimde Secure zorunlu.
     refresh_cookie_secure: bool = True
     cors_origins: Annotated[list[str], NoDecode] = Field(default_factory=list)

@@ -139,8 +139,20 @@ UserAccess
 - **Pasif açık üyelik** o sitedeki türetilmiş (şirket) erişimini de kapatır — bir sitedeki
   erişimi kaldırmanın güvenilir yolu.
 - **Platform yöneticisinin** kayıtta site üyeliği olsa bile yok sayılır (§5).
-- Henüz yok: IP bazlı hız sınırı (paylaşılan depo gerekir), mobil için gövdeyle yenileme,
-  OTP/2FA, denetim kaydı (`09` §6).
+- **IP bazlı hız sınırı** (paylaşılan depo PostgreSQL, `login_throttle`): bir adresten 15 dakikada
+  20 hatalı deneme (`LOGIN_IP_MAX_FAILURES`, `LOGIN_IP_WINDOW_MINUTES`) → 429
+  `too_many_attempts`, parola denenmez. Parola püskürtmeye (çok hesaba az deneme) karşı; hesap
+  kilidinin yanında ikinci katman. Adresin sayaç satırı giriş boyunca kilitlenir — aynı
+  adresten girişler sıraya girer, paralel denemeler sınırı aşamaz. Yalnız hatalı deneme
+  sayılır; başarılı giriş sayacı **sıfırlamaz** (geçerli bir hesapla araya giriş sokarak sınır
+  atlatılamaz). Ters vekil arkasında `FORWARDED_ALLOW_IPS` verilmezse bütün istekler vekilin
+  adresinden gelmiş sayılır.
+- **Geçici parola:** platformun açtığı ilk yetkili `must_change_password` ile başlar. Değiştirene
+  kadar yalnız `/me`, `/auth/*` ve `POST /auth/change-password` çalışır; diğer her uç 403
+  `password_change_required` (varsayılan kapı `password_changed`, `tests/architecture`).
+  Değişiklikte mevcut parola doğrulanır (yanlışsa hesap kilidi sayacı artar), diğer oturumlar
+  iptal edilir.
+- Henüz yok: mobil için gövdeyle yenileme, OTP/2FA, parola sıfırlama (e-posta altyapısı yok).
 
 ## 9. Demo hesapları
 

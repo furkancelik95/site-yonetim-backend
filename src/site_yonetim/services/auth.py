@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from http import HTTPStatus
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from site_yonetim.core.errors import ApiError, UnauthorizedError
@@ -25,7 +25,7 @@ from site_yonetim.core.security import (
     password_needs_rehash,
     verify_password,
 )
-from site_yonetim.domain.login import LoginState, normalize_email
+from site_yonetim.domain.login import LoginState, normalize_email, password_problem
 from site_yonetim.models import AuthSession, User
 
 logger = logging.getLogger(__name__)
@@ -44,6 +44,22 @@ class AccountLockedError(ApiError):
             "Çok fazla hatalı giriş denemesi yapıldı. Hesap 15 dakika kilitlendi; "
             "daha sonra tekrar deneyin.",
         )
+
+
+class TooManyAttemptsError(ApiError):
+    def __init__(self, retry_after_seconds: int) -> None:
+        super().__init__(
+            HTTPStatus.TOO_MANY_REQUESTS,
+            "too_many_attempts",
+            "Bu ağdan çok fazla hatalı giriş denemesi yapıldı. "
+            f"{max(1, retry_after_seconds // 60)} dakika sonra tekrar deneyin.",
+            headers={"Retry-After": str(retry_after_seconds)},
+        )
+
+
+class PasswordChangeError(ApiError):
+    def __init__(self, code: str, field: str, message: str) -> None:
+        super().__init__(HTTPStatus.UNPROCESSABLE_ENTITY, code, message, fields={field: message})
 
 
 class SessionExpiredError(UnauthorizedError):
@@ -184,3 +200,62 @@ async def authenticate(
     if user is None or not user.is_active:
         raise SessionExpiredError
     return user
+
+
+async def change_password(
+    session: AsyncSession,
+    *,
+    user: User,
+    current_password: str,
+    new_password: str,
+    keep_session_id: uuid.UUID,
+    now: datetime,
+) -> None:
+    """Parola değişikliği: mevcut parola doğrulanır (hesap kilidi kuralı burada da işler).
+
+    Başarılıysa geçici parola işareti kalkar ve kullanıcının **diğer bütün oturumları**
+    iptal edilir (parolası ele geçmiş olabilecek başka cihazlar düşer); bu oturum sürer.
+    """
+    locked = await session.scalar(select(User).where(User.id == user.id).with_for_update())
+    if locked is None:  # bu arada silinmiş olabilir
+        raise SessionExpiredError
+    state = LoginState(locked.failed_login_count, locked.locked_until)
+    if state.is_locked(now):
+        await session.rollback()
+        raise AccountLockedError
+    if not verify_password(locked.password_hash, current_password):
+        new_state = state.after_failure(now)
+        locked.failed_login_count = new_state.failed_count
+        locked.locked_until = new_state.locked_until
+        await session.commit()
+        if new_state.is_locked(now):
+            logger.warning("Hesap kilitlendi (parola değişikliği): user_id=%s", locked.id)
+            raise AccountLockedError
+        raise PasswordChangeError(
+            "invalid_current_password", "current_password", "Mevcut parola hatalı."
+        )
+    problem = password_problem(new_password)
+    if problem is not None:
+        await session.rollback()
+        raise PasswordChangeError("weak_password", "new_password", problem)
+    if verify_password(locked.password_hash, new_password):
+        await session.rollback()
+        raise PasswordChangeError(
+            "password_unchanged", "new_password", "Yeni parola mevcut paroladan farklı olmalı."
+        )
+
+    locked.password_hash = hash_password(new_password)
+    locked.must_change_password = False
+    locked.failed_login_count = 0
+    locked.locked_until = None
+    await session.execute(
+        update(AuthSession)
+        .where(
+            AuthSession.user_id == locked.id,
+            AuthSession.id != keep_session_id,
+            AuthSession.revoked_at.is_(None),
+        )
+        .values(revoked_at=now)
+    )
+    await session.commit()
+    logger.info("Parola değiştirildi: user_id=%s", locked.id)

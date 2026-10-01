@@ -63,6 +63,7 @@ async def create_customer(
         email=admin_email,
         password_hash=hash_password(temporary_password),
         full_name=admin_full_name,
+        must_change_password=True,  # ilk girişte değiştirmek zorunda (docs/05 §8.1)
     )
     session.add_all([organization, admin])
     await session.flush()

@@ -94,6 +94,7 @@ async def test_musteri_acilir_gecici_parola_bir_kez_ve_calisir(
         headers=await login_headers(api, "kerem@kent.example", data["temporary_password"]),
     )
     assert me.json()["full_name"] == "Kerem Yıldırım"
+    assert me.json()["must_change_password"] is True  # ilk girişte değiştirmek zorunda
 
 
 async def test_ayni_eposta_ile_ikinci_musteri_409(

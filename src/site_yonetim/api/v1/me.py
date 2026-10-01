@@ -7,10 +7,11 @@ ekranı, tek siteli personel → o site, çok siteli → portföy.
 import uuid
 
 from fastapi import APIRouter
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from site_yonetim.api.deps import UserAccessDep
+from site_yonetim.api.deps import AuthenticatedUserDep, FactoryDep
 from site_yonetim.domain.access import SiteAccess, UserAccess
+from site_yonetim.services.access import load_user_access
 
 router = APIRouter(tags=["kimlik"])
 
@@ -47,20 +48,26 @@ class MeResponse(BaseModel):
     kind: str
     is_platform_admin: bool
     can_see_portfolio: bool
+    must_change_password: bool = Field(
+        description="true: geçici parola — önce `POST /auth/change-password`"
+    )
     sites: list[SiteAccessOut]
 
     @classmethod
-    def of(cls, access: UserAccess) -> MeResponse:
+    def of(cls, access: UserAccess, *, must_change_password: bool = False) -> MeResponse:
         return cls(
             user_id=access.user_id,
             full_name=access.full_name,
             kind=access.kind.value,
             is_platform_admin=access.is_platform_admin,
             can_see_portfolio=access.can_see_portfolio,
+            must_change_password=must_change_password,
             sites=[SiteAccessOut.of(site) for site in access.sites],
         )
 
 
 @router.get("/me", summary="Oturumdaki kullanıcı ve erişimleri")
-async def me(access: UserAccessDep) -> MeResponse:
-    return MeResponse.of(access)
+async def me(current: AuthenticatedUserDep, factory: FactoryDep) -> MeResponse:
+    """Geçici paroladayken de çalışır (frontend yönlendirmeyi buradan yapar)."""
+    access = await load_user_access(factory, current.user)
+    return MeResponse.of(access, must_change_password=current.user.must_change_password)
