@@ -496,6 +496,13 @@ Site adından URL eki üretilir: "Aksu Konakları" → `aksu-konaklari`.
 - Ayrıca: bugünkü toplam kasa/banka bakiyesi, seçilebilir yıllar (gider/tahsilat olan yıllar +
   bu yıl).
 
+> **Uygulama (Python backend):** elle kasa girişinin ters kaydı (giriş → çıkış) o ayın gelirinden
+> düşer; aktarım ve açılış gelir değildir. "O yılın projesi" = `fiscal_year` o yıl olan
+> **kesinleşmiş** proje, yoksa yerini yenisine bırakmış (`superseded`) olanı; taslak sayılmaz.
+> **Aidat tahsilat özeti** (`/reports/collections`): dönem başına geçerli koşunun kestiği borç ve
+> o borç hareketlerine yapılan mahsuplar — "kasaya ne girdi"den farklı olarak "kesilenin ne kadarı
+> kapandı" sorusu.
+
 ## 13. Borçlu listesi
 
 - Bakiye = `SUM(debit) − SUM(credit)`; **bakiye > 0,005** olan hesaplar listelenir, büyükten küçüğe.

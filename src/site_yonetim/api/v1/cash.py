@@ -11,7 +11,7 @@ from decimal import Decimal
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from site_yonetim.api.deps import CurrentUserDep, NowDep, SiteContext, TodayDep, require_permission
@@ -30,6 +30,7 @@ from site_yonetim.domain.money import ZERO
 from site_yonetim.domain.text import format_money_tr
 from site_yonetim.models import CashAccount, CashMovement
 from site_yonetim.services import cash as svc
+from site_yonetim.services import exports
 
 router = APIRouter(prefix="/sites/{slug}", tags=["kasa ve banka"])
 CashRead = Annotated[SiteContext, Depends(require_permission(Permission.FINANCE_CASH_READ))]
@@ -204,9 +205,13 @@ async def account_statement(
 ) -> StatementOut:
     account = await _account(ctx, account_id)
     statement = await svc.statement(
-        ctx.session, account.id, date_from=date_from, date_to=date_to,
-        offset=paging.offset, limit=paging.page_size,
-    )  # fmt: skip
+        ctx.session,
+        account.id,
+        date_from=date_from,
+        date_to=date_to,
+        offset=paging.offset,
+        limit=paging.page_size,
+    )
     return StatementOut(
         account=await _account_out(ctx, account.id),
         opening=statement.opening,
@@ -224,6 +229,47 @@ async def account_statement(
             page_size=paging.page_size,
             total=statement.count,
         ),
+    )
+
+
+@router.get(
+    "/cash-accounts/{account_id}/statement/export.xlsx",
+    summary="Hesap ekstresi Excel (sayfalama yok, tüm aralık)",
+    response_class=Response,
+    responses={200: {"content": {exports.XLSX_MEDIA_TYPE: {}}}},
+)
+async def export_statement(
+    account_id: uuid.UUID,
+    ctx: CashRead,
+    date_from: Annotated[dt.date | None, Query(alias="from")] = None,
+    date_to: Annotated[dt.date | None, Query(alias="to")] = None,
+) -> Response:
+    account = await _account(ctx, account_id)
+    statement = await svc.statement(
+        ctx.session, account.id, date_from=date_from, date_to=date_to, offset=0, limit=None
+    )
+    sources = {
+        CashSource.MANUAL: "Elle", CashSource.PAYMENT: "Tahsilat", CashSource.EXPENSE: "Gider",
+        CashSource.TRANSFER: "Aktarım", CashSource.OPENING: "Açılış",
+    }  # fmt: skip
+    rows = [
+        (
+            line.movement.date,
+            line.movement.description,
+            line.movement.reference,
+            line.movement.inflow,
+            line.movement.outflow,
+            line.running_balance,
+            sources[CashSource(line.movement.source)],
+            "Geri alındı" if line.is_reversed else None,
+        )
+        for line in reversed(statement.lines)
+    ]
+    data = exports.statement_xlsx(account.name, statement.opening, statement.closing, rows)
+    return Response(
+        data,
+        media_type=exports.XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": 'attachment; filename="ekstre.xlsx"'},
     )
 
 
@@ -257,10 +303,16 @@ async def manual_movement(
         if (stored := await idem.replay(ctx.session, now)) is not None:
             return replayed(stored.status_code, stored.body)
         movement = await svc.manual_movement(
-            ctx.session, account_id=body.cash_account_id, day=body.date,
-            direction=body.direction, amount=body.amount, description=body.description,
-            reference=body.reference, today=today, created_by=current.user.full_name,
-        )  # fmt: skip
+            ctx.session,
+            account_id=body.cash_account_id,
+            day=body.date,
+            direction=body.direction,
+            amount=body.amount,
+            description=body.description,
+            reference=body.reference,
+            today=today,
+            created_by=current.user.full_name,
+        )
     except FinanceRuleError as exc:
         raise finance_error(exc) from exc
     label = "giriş" if body.direction is Direction.IN else "çıkış"
@@ -302,9 +354,15 @@ async def transfer(
         if (stored := await idem.replay(ctx.session, now)) is not None:
             return replayed(stored.status_code, stored.body)
         out, incoming = await svc.transfer(
-            ctx.session, from_id=body.from_id, to_id=body.to_id, day=body.date,
-            amount=body.amount, note=body.note, today=today, created_by=current.user.full_name,
-        )  # fmt: skip
+            ctx.session,
+            from_id=body.from_id,
+            to_id=body.to_id,
+            day=body.date,
+            amount=body.amount,
+            note=body.note,
+            today=today,
+            created_by=current.user.full_name,
+        )
     except FinanceRuleError as exc:
         raise finance_error(exc) from exc
     result = Written(

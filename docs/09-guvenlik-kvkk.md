@@ -57,6 +57,12 @@ silinir. Gövde sınırı gider ucu için 10 MB + pay (§3.2).
 | Ayrıştırma iş parçacığında (olay döngüsü bloke olmaz); en fazla 5.000 satır, 60 sütun | |
 | Geçici dosya adı sunucu üretir (`{site_id}/{user_id}/{uuid}.xlsx`, izin 0600); 6 saat sonra silinir | |
 
+### 3.3 Excel çıktıları — formül enjeksiyonu
+
+Dışa aktarılan Excel'lerde kullanıcıdan gelen her metin (açıklama, tedarikçi, ad…) **metin
+hücresi** olarak yazılır (`services/exports.py`). `=HYPERLINK(…)`, `+`, `-`, `@` ile başlayan bir
+değer formül olarak çalışmaz. Para `Decimal` olarak yazılır (`#,##0.00`), float kullanılmaz.
+
 ### 3.2 İstek gövdesi sınırı
 
 Tüm istekler **1 MB** ile sınırlı; Excel yükleme ucu 5 MB + çok parçalı pay. Sınır ara katmanda,

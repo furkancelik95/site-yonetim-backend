@@ -12,6 +12,7 @@ from site_yonetim.api.v1 import (
     me,
     payments,
     platform,
+    reports,
     requests,
     sites,
     structure,
@@ -34,3 +35,4 @@ api_router.include_router(requests.router)
 api_router.include_router(announcements.router)
 api_router.include_router(cash.router)
 api_router.include_router(expenses.router)
+api_router.include_router(reports.router)
