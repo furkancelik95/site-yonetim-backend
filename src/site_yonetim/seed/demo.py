@@ -27,6 +27,7 @@ from site_yonetim.domain.finance import (
     PayerRule,
     ScopeKind,
 )
+from site_yonetim.domain.modules import ModuleKey
 from site_yonetim.domain.money import distribute, round_money
 from site_yonetim.domain.operations import (
     Audience,
@@ -35,6 +36,7 @@ from site_yonetim.domain.operations import (
     RequestPriority,
     RequestStatus,
 )
+from site_yonetim.domain.security import VisitorKind
 from site_yonetim.domain.structure import AccountKind, PartyRole
 from site_yonetim.domain.text import normalize_person_name
 from site_yonetim.models import (
@@ -87,7 +89,15 @@ from site_yonetim.seed.demo_data import (
     occupancy_for,
     units_for,
 )
-from site_yonetim.services import announcements, cash, charging, expenses, payments, requests
+from site_yonetim.services import (
+    announcements,
+    cash,
+    charging,
+    expenses,
+    payments,
+    requests,
+    security,
+)
 from site_yonetim.services.charging import BUSINESS_TZ
 from site_yonetim.services.provisioning import provision_site
 from site_yonetim.services.sites import set_module_enabled
@@ -183,6 +193,7 @@ async def seed_demo(
                     await set_module_enabled(session, site, key, enable=True)
                 await _seed_finance(session, spec, today)
                 await _seed_operations(session, spec, today)
+                await _seed_gate(session, spec, today)
                 session.add_all(
                     SiteMembership(user_id=user_ids[account.email], role=account.site_role)
                     for account in ACCOUNTS
@@ -492,6 +503,48 @@ async def _seed_operations(session: AsyncSession, spec: SiteSpec, today: date) -
                 session, request, status, demand.resolution, actor="Site Yönetimi",
                 now=opened + timedelta(hours=4 * step),
             )  # fmt: skip
+
+
+async def _seed_gate(session: AsyncSession, spec: SiteSpec, today: date) -> None:
+    """Güvenlik modülü açık sitelerde kargo ve ziyaretçi kayıtları (docs/10 §1.4)."""
+    rng = random.Random(f"{SEED}:gate:{spec.slug}")  # noqa: S311  # nosec B311
+    units = list(await session.scalars(select(Unit.id).order_by(Unit.id)))
+    morning = datetime.combine(today, time(9), BUSINESS_TZ)
+    if ModuleKey.PACKAGES in spec.extra_modules:
+        for index, carrier in enumerate(
+            ("Yurtiçi Kargo", "Aras Kargo", "MNG Kargo", "PTT Kargo", "Sürat Kargo")
+        ):
+            package = await security.receive_package(
+                session, unit_id=rng.choice(units), person_id=None, carrier=carrier, note=None,
+                now=morning - timedelta(hours=index * 7), received_by="Demo verisi",
+            )  # fmt: skip
+            if index >= 3:  # eskiler teslim edilmiş
+                await security.deliver_package(
+                    session, package, pickup_code=package.pickup_code, delivered_to="Daire sakini",
+                    now=morning - timedelta(hours=index * 7 - 2), delivered_by="Demo verisi",
+                )  # fmt: skip
+    if ModuleKey.VISITORS in spec.extra_modules:
+        guests = (
+            ("Ahmet Demir", VisitorKind.GUEST, "34ABC123"),
+            ("Elektrik ustası", VisitorKind.SERVICE, None),
+            ("Zeynep Kurt", VisitorKind.GUEST, None),
+            ("Boya ekibi", VisitorKind.CONTRACTOR, "06XYZ45"),
+        )
+        for index, (name, kind, plate) in enumerate(guests):
+            visitor = await security.record_visitor(
+                session,
+                security.NewVisitor(unit_id=rng.choice(units), full_name=name, kind=kind,
+                                    plate_number=plate),
+                now=morning + timedelta(minutes=40 * index), today=today, recorded_by="Demo verisi",
+            )  # fmt: skip
+            if index % 2 == 0:
+                await security.exit_(session, visitor, morning + timedelta(hours=2 + index))
+        await security.record_visitor(
+            session,
+            security.NewVisitor(unit_id=rng.choice(units), full_name="Mobilya teslimatı",
+                                kind=VisitorKind.CARGO, expected_on=today + timedelta(days=1)),
+            now=morning, today=today, recorded_by="Demo verisi",
+        )  # fmt: skip
 
 
 async def _seed_resident(

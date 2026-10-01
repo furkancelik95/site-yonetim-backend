@@ -14,7 +14,8 @@ Seed komutu idempotent olmalı: veri varsa hiçbir şey yapmaz.
 > durum/öncelikte 6 talep, Banka ve Kasa hesapları (tahsilat paranın girdiği hesaba yazılır),
 > son 6 ayın giderleri (bu ayın ~üçte biri ödenmemiş). Hesapların açılışı "3 ay önce" yerine
 > **demo geçmişinin başında**: tahsilat/gider hareketleri ekstrede açılıştan sonra görünsün.
-> **Henüz yok:** kargo/ziyaretçi. Site
+> Güvenlik modülü açık sitelerde kargo (Aksu: 5, 2'si teslim) ve ziyaretçi (bugün 4, yarın 1
+> beklenen) kayıtları. Site
 > kurulumunda (§3) bugün kurulanlar: site, modüller, gecikme politikası, gider kategorileri,
 > tahakkuk tipleri, dağıtım kuralları, daire tipleri, kasa hesapları
 > (`services/provisioning.py`).
