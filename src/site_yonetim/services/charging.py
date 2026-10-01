@@ -70,7 +70,7 @@ from site_yonetim.models import (
     UnitType,
     UnitWeight,
 )
-from site_yonetim.services import ledger
+from site_yonetim.services import ledger, summary
 from site_yonetim.services.budget import current_plan
 
 BUSINESS_TZ = ZoneInfo("Europe/Istanbul")
@@ -417,6 +417,12 @@ async def post(
             )
         )
     await ledger.refresh_balances(session, [c.ledger_account_id for c in preview.charges])
+    await summary.add(
+        session,
+        year=prepared.period.year,
+        month=prepared.period.month,
+        charged=preview.total_amount,
+    )
     return PostedRun(
         run, prepared.period, len(preview.charges), preview.unit_count, preview.total_amount
     )
@@ -510,4 +516,6 @@ async def reverse(
     locked.status = ChargeRunStatus.REVERSED.value
     await session.flush()
     await ledger.refresh_balances(session, [e.account_id for e in entries])
+    reversed_total = sum((e.debit - e.credit for e in entries), ZERO)
+    await summary.add(session, year=period.year, month=period.month, charged=-reversed_total)
     return reversal

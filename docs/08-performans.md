@@ -47,6 +47,11 @@ commit'ini bekler ve onun hareketlerini görerek hesaplar — kayıp güncelleme
 Hesap listeleri tek dizi parametresiyle gider (10.000 hesaplık koşuda parametre sınırı yok).
 `rebuild_balances(site)` onarım içindir; gece mutabakat işi henüz yok.
 
+`site_finance_summary(site, year, month, charged, collected)` uygulandı: tahakkuk kaydı
+(+), ters kaydı (−) ve tahsilat (tarihinin ayına) aynı transaction'da `INSERT … ON CONFLICT DO
+UPDATE` ile artırılır. Göç 0010 mevcut veriden doldurur. Pano bu tablodan ve `account_balances`,
+`cash_balances`'tan okur. Önbellek (§3.7) henüz yok — gerek görülmedi.
+
 ## 3. Yasaklar ve zorunluluklar
 
 | # | Kural |

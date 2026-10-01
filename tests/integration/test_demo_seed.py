@@ -372,3 +372,23 @@ async def test_demo_kasa_ve_gider(
         assert summary["Kasa"] == Decimal(2500) + cash_paid  # kasadan gider ödenmedi
         assert unpaid
         assert (expense_count or 0) >= 6 * 6
+
+
+async def test_demo_pano_ozeti_defterle_tutar(
+    dev_settings: Settings, session_factory: Factory, admin_engine: object, api: httpx2.AsyncClient
+) -> None:
+    await seed_demo(dev_settings, session_factory, today=date(2026, 9, 30))
+    headers = await login_headers(api, "yonetici@demo.local", DEMO_PASSWORD)
+    finance = (await api.get("/api/v1/sites/aksu-konaklari/dashboard", headers=headers)).json()[
+        "finance"
+    ]
+    async with session_factory() as session:
+        aksu = await session.scalar(select(Site.id).where(Site.slug == "aksu-konaklari"))
+    assert aksu is not None
+    with site_scope(aksu):
+        async with session_factory() as session:
+            charged = await session.scalar(select(func.sum(Charge.amount)))
+            paid = await session.scalar(select(func.sum(Payment.amount)))
+    assert Decimal(finance["total_charged"]) == charged
+    assert Decimal(finance["total_collected"]) == paid
+    assert finance["debtor_count"] > 0
