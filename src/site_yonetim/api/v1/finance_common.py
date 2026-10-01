@@ -3,7 +3,7 @@
 from http import HTTPStatus
 from typing import Annotated, Any
 
-from fastapi import Depends, Header, Request
+from fastapi import Depends, Header, Request, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
@@ -27,6 +27,22 @@ def finance_error(exc: FinanceRuleError) -> ApiError:
     return ApiError(HTTPStatus.UNPROCESSABLE_ENTITY, exc.code, exc.message, fields)
 
 
+async def _request_text(request: Request) -> str:
+    """İsteğin parmak izi metni. Form isteklerinde ham akış FastAPI'nin ayrıştırmasında tükenir;
+    önbelleğe alınmış form alanları (dosyada ad + boyut) kullanılır."""
+    content_type = request.headers.get("content-type", "")
+    if content_type.startswith(("multipart/form-data", "application/x-www-form-urlencoded")):
+        form = await request.form()
+        parts = []
+        for key, value in sorted(form.multi_items(), key=lambda item: item[0]):
+            if isinstance(value, UploadFile):
+                parts.append(f"{key}=file:{value.filename}:{value.size}")
+            else:
+                parts.append(f"{key}={value}")
+        return "&".join(parts)
+    return (await request.body()).decode("utf-8", errors="replace")
+
+
 async def idempotency(
     request: Request,
     current: CurrentUserDep,
@@ -43,7 +59,7 @@ async def idempotency(
         checked = check_key(key) if key is not None else None
     except FinanceRuleError as exc:
         raise finance_error(exc) from exc
-    body = (await request.body()).decode("utf-8", errors="replace")
+    body = await _request_text(request)
     return Idempotency(
         current.user.id, checked, fingerprint(request.method, request.url.path, body)
     )

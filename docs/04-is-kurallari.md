@@ -269,8 +269,9 @@ Bir tahsilat girildiğinde **tek transaction** içinde:
 seçildiyse mevcut ve aktif. `reference` boşsa hesabın `reference_code`'u yazılır.
 Ayrıca (Python backend): tahsilat tarihi ileri olamaz; kapalı hesaba ve kapalı döneme yazılamaz.
 
-> **Uygulama durumu:** adım 4 (kasaya giriş) kasa diliminde gelecek; o zamana kadar
-> `cash_account_id` alınmaz. Hesap tahsilattan önce kilitlenir — aynı hesaba eşzamanlı iki
+> **Uygulama durumu:** `cash_account_id` verilirse adım 4 aynı transaction'da yazılır (açıklama
+> `Tahsilat — {referans kodu}`). Bu hareket kasa ekranından geri alınamaz (§10.4). Hesap
+> tahsilattan önce kilitlenir — aynı hesaba eşzamanlı iki
 > tahsilat aynı borcu iki kez kapatamaz (`08` §2 uygulama notu).
 
 ### 5.1 Hangi borca sayılır — en eski borçtan (FIFO)
