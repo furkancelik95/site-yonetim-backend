@@ -217,18 +217,27 @@ kişisel veriyi görmez (`05`). Sakin kendi hesabında kendi adını görür.
 ### 2.10 Talep
 | Yöntem | Yol | İzin | Durum | Not |
 |---|---|---|---|---|
-| GET | `/sites/{slug}/requests` | `requests.read` | R | sayfalı; filtre durum, kategori, öncelik |
-| GET | `/sites/{slug}/requests/{id}` | `requests.read` | R | + olay geçmişi |
-| POST | `/sites/{slug}/requests` | `requests.create` | R | numara site içinde artan |
-| POST | `/sites/{slug}/requests/{id}/status` | `requests.assign` | R | `{status, resolution?}` — çözüldü/kapandı yapılırken `resolution` zorunlu |
+| GET | `/sites/{slug}/requests?status=&category=&priority=` | `requests.read` veya kendi talepleri | R | sayfalı, yeni üstte. İzni olmayan sakin yalnız kendi açtıklarını görür |
+| GET | `/sites/{slug}/requests/{id}` | `requests.read` veya kendi talebi | R | + olay geçmişi (`events`, eskiden yeniye). Başkasının talebi 404 |
+| POST | `/sites/{slug}/requests` | `requests.create` | R | `{title, description?, category, priority, unit_id?, location?, reported_by_person_id?}` → numara site içinde artan. Sakin kendi adına ve yalnız kendi bölümü (ya da ortak alan) için açar (422 `unit_not_yours`) |
+| POST | `/sites/{slug}/requests/{id}/status` | `requests.assign` | R | `{status, resolution?}` — çözüldü/kapandı yapılırken `resolution` zorunlu (422); aynı durum 409 |
 | POST | `/sites/{slug}/requests/{id}/assign` | `requests.assign` | R | `{assignee}` |
-| POST | `/sites/{slug}/requests/{id}/comments` | `requests.read` | R | |
+| POST | `/sites/{slug}/requests/{id}/comments` | `requests.read` veya kendi talebi | R | `{body}` |
+
+Modül kapalıysa tüm talep uçları 404. `reporter_name` `people.read` izni ya da kendi talebi
+değilse `null`. Durum geçişleri serbest (açık karar `12` K18).
 
 ### 2.11 Duyuru
 | Yöntem | Yol | İzin | Durum | Not |
 |---|---|---|---|---|
-| GET | `/sites/{slug}/announcements` | `announcements.read` | R | sabitlenmiş önce, sonra yayın tarihine göre |
-| POST | `/sites/{slug}/announcements` | `announcements.publish` | R | `{title, body, importance, audience, audience_block_ids?, channels[], expires_on?, is_pinned}` → hedef kişiler için teslim kayıtları. **Gerçek gönderim: arka plan işi** |
+| GET | `/sites/{slug}/announcements` | `announcements.read` | R | sabitlenmiş önce, sonra yayın tarihine göre. Yayınlayan hepsini (süresi geçenler dahil) + `recipient_count`/`read_count`; **sakin yalnız kendisine teslim edilen**, süresi geçmemiş olanları + `read_at`; diğer personel yürürlükteki hepsini |
+| GET | `/sites/{slug}/announcements/{id}` | `announcements.read` | Y | aynı görünürlük; görmediği 404 |
+| POST | `/sites/{slug}/announcements` | `announcements.publish` | R | `{title, body, importance, audience, audience_block_ids?, channels[], expires_on?, is_pinned}` → hedef kişiler için teslim kayıtları. **Gerçek gönderim: arka plan işi** — henüz yok (`12` K5): `in_app` hemen teslim, diğer kanallar bekler |
+| POST | `/sites/{slug}/announcements/{id}/read` | `announcements.read` | Y | sakin okundu işaretler (ilk okuma anı korunur); kendisine teslim edilmemişse 404 |
+
+Hedef kitle bugünkü etkin malik/kiracı/oturanlardan seçilir (vekil hariç): `blocks` seçilen
+blokların bölümleri, `owners_only` malikler, `tenants_only` kiracılar, `debtors_only` bakiyesi
+borçlu bir cari hesabı olanlar. Yayından sonra taraf değişse de teslim listesi değişmez.
 
 ### 2.12 Güvenlik (modül: `visitors`, `packages`)
 | Yöntem | Yol | İzin | Durum | Not |

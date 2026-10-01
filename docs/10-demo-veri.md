@@ -10,8 +10,9 @@ Seed komutu idempotent olmalı: veri varsa hiçbir şey yapmaz.
 > **Uygulama durumu (30.09.2026):** `uv run python -m site_yonetim.cli seed-demo` ya da
 > geliştirmede açılışta otomatik. Yüklenenler: planlar, şirket, 3 site, bloklar, daire tipleri,
 > 84 bölüm, modüller, §2'deki hesaplar (sakin dahil), işletme projesi, son 6 ayın tahakkuku ve
-> tahsilatı (FIFO'dan geçer). **Henüz yok:** kasa/banka hesapları ve tahsilatın kasaya girişi,
-> giderler, duyurular, talepler, kargo/ziyaretçi — ilgili tablolar gelince eklenecek. Site
+> tahsilatı (FIFO'dan geçer), site başına 4 duyuru (biri sabit, biri süresi geçmiş) ve farklı
+> durum/öncelikte 6 talep. **Henüz yok:** kasa/banka hesapları ve tahsilatın kasaya girişi,
+> giderler, kargo/ziyaretçi — ilgili tablolar gelince eklenecek. Site
 > kurulumunda (§3) bugün kurulanlar: site, modüller, gecikme politikası, gider kategorileri,
 > tahakkuk tipleri, dağıtım kuralları, daire tipleri (`services/provisioning.py`); kasa
 > hesapları (adım 8) kasa diliminde.
