@@ -108,7 +108,7 @@ class RequestDetail(RequestOut):
     events: list[EventOut] = Field(description="eskiden yeniye olay geçmişi")
 
 
-async def _out(ctx: SiteContext, requests: list[Request]) -> list[RequestOut]:
+async def out(ctx: SiteContext, requests: list[Request]) -> list[RequestOut]:
     session = ctx.session
     units = await svc.unit_names(session, {r.unit_id for r in requests if r.unit_id})
     people = await svc.person_names(
@@ -145,7 +145,7 @@ async def _out(ctx: SiteContext, requests: list[Request]) -> list[RequestOut]:
 
 
 async def _detail(ctx: SiteContext, request: Request) -> RequestDetail:
-    [base] = await _out(ctx, [request])
+    [base] = await out(ctx, [request])
     events = await svc.events(ctx.session, request.id)
     return RequestDetail(**base.model_dump(), events=[EventOut.of(e) for e in events])
 
@@ -172,7 +172,7 @@ async def list_requests(
     total = await ctx.session.scalar(select(func.count()).select_from(query.subquery())) or 0
     rows = list(await ctx.session.scalars(query.offset(paging.offset).limit(paging.page_size)))
     return Page(
-        items=await _out(ctx, rows), page=paging.page, page_size=paging.page_size, total=total
+        items=await out(ctx, rows), page=paging.page, page_size=paging.page_size, total=total
     )
 
 
@@ -198,11 +198,18 @@ async def create_request(
     ctx: RequestsModule, body: RequestCreate, current: CurrentUserDep, today: TodayDep
 ) -> Written[RequestDetail]:
     _require(ctx, Permission.REQUESTS_CREATE)
+    own = not ctx.access.can(Permission.REQUESTS_READ) and ctx.access.person_id is not None
+    return await create_for(ctx, body, current, today, own=own)
+
+
+async def create_for(
+    ctx: SiteContext, body: RequestCreate, current: CurrentUserDep, today: dt.date, *, own: bool
+) -> Written[RequestDetail]:
+    """`own`: sakin — talep kendi adına, yalnız kendi bölümü ya da ortak alan için."""
     reporter = body.reported_by_person_id
-    if not ctx.access.can(Permission.REQUESTS_READ) and ctx.access.person_id is not None:
-        # Sakin: talep kendi adına, yalnız kendi bölümü ya da ortak alan için.
+    if own:
         reporter = ctx.access.person_id
-        own_units = await svc.person_unit_ids(ctx.session, reporter, today)
+        own_units = await svc.person_unit_ids(ctx.session, reporter, today) if reporter else set()
         if body.unit_id is not None and body.unit_id not in own_units:
             message = "Yalnız kendi bölümünüz için talep açabilirsiniz."
             raise ApiError(

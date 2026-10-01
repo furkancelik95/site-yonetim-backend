@@ -54,7 +54,7 @@ class AnnouncementOut(BaseModel):
     read_count: int | None = Field(description="yalnız yayınlayana: okuyan kişi sayısı")
 
 
-async def _out(ctx: SiteContext, rows: list[Announcement]) -> list[AnnouncementOut]:
+async def out(ctx: SiteContext, rows: list[Announcement]) -> list[AnnouncementOut]:
     ids = [a.id for a in rows]
     stats = await svc.delivery_stats(ctx.session, ids) if _publisher(ctx) else {}
     person = ctx.access.person_id
@@ -92,7 +92,7 @@ async def list_announcements(
     total = await ctx.session.scalar(select(func.count()).select_from(query.subquery())) or 0
     rows = list(await ctx.session.scalars(query.offset(paging.offset).limit(paging.page_size)))
     return Page(
-        items=await _out(ctx, rows), page=paging.page, page_size=paging.page_size, total=total
+        items=await out(ctx, rows), page=paging.page, page_size=paging.page_size, total=total
     )
 
 
@@ -112,8 +112,8 @@ async def _visible(ctx: SiteContext, announcement_id: uuid.UUID, today: dt.date)
 async def get_announcement(
     announcement_id: uuid.UUID, ctx: AnnouncementsModule, today: TodayDep
 ) -> AnnouncementOut:
-    [out] = await _out(ctx, [await _visible(ctx, announcement_id, today)])
-    return out
+    [item] = await out(ctx, [await _visible(ctx, announcement_id, today)])
+    return item
 
 
 class AnnouncementCreate(BaseModel):
@@ -159,11 +159,11 @@ async def publish_announcement(
     except OperationRuleError as exc:
         raise rule_error(exc) from exc
     await ctx.session.commit()
-    [out] = await _out(ctx, [published.announcement])
+    [item] = await out(ctx, [published.announcement])
     message = f"Duyuru yayınlandı: {published.recipient_count} kişi uygulamada görecek."
     if len(published.channels) > 1:
         message += " E-posta/SMS/bildirim gönderimi henüz yok; teslim kayıtları bekliyor."
-    return Written(data=out, message=message)
+    return Written(data=item, message=message)
 
 
 class ReadOut(BaseModel):

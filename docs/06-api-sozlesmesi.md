@@ -264,11 +264,15 @@ borçlu bir cari hesabı olanlar. Yayından sonra taraf değişse de teslim list
 ### 2.14 Sakin (kendi verisi — `person_id` ile süzülür)
 | Yöntem | Yol | İzin | Durum | Not |
 |---|---|---|---|---|
-| GET | `/sites/{slug}/resident/home` | sakin | R | kendi bölüm(ler)i, bakiye, son hareketler, son duyurular, açık talepleri |
-| GET | `/sites/{slug}/resident/statement` | sakin | R | kendi cari ekstresi |
-| GET | `/sites/{slug}/resident/announcements` | sakin | R | kendisine hedeflenmiş duyurular |
-| GET · POST | `/sites/{slug}/resident/requests` | sakin | R | kendi talepleri / yeni talep |
-| GET | `/sites/{slug}/resident/expenses` | sakin | **Y** | sitenin gider dökümü + **fatura görüntüsü**. Şeffaflık vaadinin karşılığı |
+| GET | `/sites/{slug}/resident/home` | sakin | R | `units[]` (bugünkü bölümleri ve rolü), `accounts[]` (bakiyeli), `total_balance`, `recent_entries[5]`, `announcements[3]` ve `open_requests[]` (modül kapalıysa null) |
+| GET | `/sites/{slug}/resident/statement?account_id=` | sakin | R | kendi cari ekstresi; `account_id` boşsa oturan hesabı. Başkasının hesabı 404 |
+| GET | `/sites/{slug}/resident/announcements` | sakin | R | kendisine teslim edilen, süresi geçmemiş duyurular (+ `read_at`). Modül kapalıysa 404 |
+| GET · POST | `/sites/{slug}/resident/requests` | sakin | R | kendi talepleri / yeni talep — her zaman kendi adına, yalnız kendi bölümü ya da ortak alan (422 `unit_not_yours`). Modül kapalıysa 404 |
+| GET | `/sites/{slug}/resident/expenses?year=` | sakin | **Y** | sitenin **gerçekleşen** gider dökümü (geri alınan ve düzeltmeler hariç) + `total_amount`; satırda `document_id`. Şeffaflık vaadinin karşılığı |
+| GET | `/sites/{slug}/resident/files/{id}` | sakin | Y | **fatura görüntüsü** — yalnız gerçekleşen bir giderin belgesi; başka dosya 404 |
+
+"Sakin" = üyeliğinde `person_id` olan kullanıcı; yoksa **403** ("Bu ekran yalnız sakinler
+içindir"). Sakin, `requests.read` izni olmadan da kendi taleplerini görür (`05` §6).
 
 ---
 
