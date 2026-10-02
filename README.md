@@ -57,12 +57,16 @@ Değişkenler yoksa entegrasyon testleri yerelde atlanır; CI'da atlanmaz.
 | `guvenlik@demo.local` · `denetci@demo.local` · `teknik@demo.local` | Aksu — Güvenlik / Denetçi / Teknik Personel | yalnız Aksu |
 
 Siteler: Aksu Konakları (48 bölüm), Yıldız Sitesi (24), Mimoza Apartmanı (12).
-Henüz yok: sakin hesabı, finans/duyuru/talep verisi — ilgili dilimlerle gelecek (docs/10 §1.4).
-
 Docker ile API: `docker compose up --build api` → `http://localhost:8000/api/v1/health`
 (canlılık) ve `/api/v1/health/ready` (veritabanı dahil hazırlık; ulaşılamazsa 503).
 
 OpenAPI şeması: `GET /api/v1/openapi.json` (frontend tiplerini buradan üretir).
+
+## Codespaces demosu
+
+**Code → Codespaces → Create codespace on main**: PostgreSQL, API, demo verisi ve frontend tek
+tıkla açılır, paylaşılabilir bir bağlantı verir (`bash .devcontainer/share.sh public`). Yalnız demo
+içindir. Ayrıntı: [`.devcontainer/README.md`](.devcontainer/README.md).
 
 ## CI
 

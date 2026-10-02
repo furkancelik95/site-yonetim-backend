@@ -1,0 +1,32 @@
+# Codespaces demo ortamı. Üretim yapılandırması DEĞİLDİR.
+# Parolalar init-secrets.sh'in ürettiği .devcontainer/.env'den gelir (repoya girmez).
+services:
+  app:
+    image: mcr.microsoft.com/devcontainers/base:ubuntu-24.04
+    command: sleep infinity
+    env_file: .env
+    environment:
+      UV_LINK_MODE: copy
+    volumes:
+      - ../..:/workspaces:cached
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:16
+    env_file: .env
+    environment:
+      APP_DB_NAME: site_yonetim
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ../docker/postgres/10-roles.sh:/docker-entrypoint-initdb.d/10-roles.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d site_yonetim"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    # Port dışarıya açılmaz: yalnız app konteyneri "db" adıyla erişir.
+
+volumes:
+  pgdata:
