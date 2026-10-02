@@ -1,0 +1,43 @@
+// GitHub Codespaces demo ortamı: PostgreSQL + API + demo verisi + frontend, tek tıkla.
+// Kullanım ve güvenlik notları: .devcontainer/README.md
+{
+  "name": "Site Yönetim (demo)",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "app",
+  "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
+  "shutdownAction": "stopCompose",
+
+  // Rastgele veritabanı parolaları ve JWT sırrı — repoya girmez (.devcontainer/.env).
+  "initializeCommand": "bash .devcontainer/init-secrets.sh",
+
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": { "version": "22" },
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    // `gh codespace ssh/logs` ile terminalden erişim (yalnız GitHub kimliğiyle).
+    "ghcr.io/devcontainers/features/sshd:1": {}
+  },
+
+  // Frontend reposu gizli: codespace'in onu okuyup klonlayabilmesi için izin (oluştururken sorulur).
+  "customizations": {
+    "codespaces": {
+      "repositories": {
+        "furkancelik95/site-yonetim-frontend": { "permissions": { "contents": "read" } }
+      },
+      "openFiles": [".devcontainer/README.md"]
+    },
+    "vscode": {
+      "extensions": ["ms-python.python", "charliermarsh.ruff"]
+    }
+  },
+
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+  "postStartCommand": "bash .devcontainer/start-demo.sh",
+
+  // Dışarıya yalnız frontend açılır; API'ye aynı adresin /api yolundan (Vite vekili) gidilir.
+  "forwardPorts": [5173],
+  "portsAttributes": {
+    "5173": { "label": "Site Yönetim (demo)", "onAutoForward": "notify" },
+    "8000": { "label": "API (iç)", "onAutoForward": "ignore" }
+  },
+  "otherPortsAttributes": { "onAutoForward": "ignore" }
+}
