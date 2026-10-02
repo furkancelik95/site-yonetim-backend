@@ -12,7 +12,9 @@
 
   "features": {
     "ghcr.io/devcontainers/features/node:1": { "version": "22" },
-    "ghcr.io/devcontainers/features/github-cli:1": {}
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    // `gh codespace ssh/logs` ile terminalden erişim (yalnız GitHub kimliğiyle).
+    "ghcr.io/devcontainers/features/sshd:1": {}
   },
 
   // Frontend reposu gizli: codespace'in onu okuyup klonlayabilmesi için izin (oluştururken sorulur).
