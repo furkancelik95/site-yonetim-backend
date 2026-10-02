@@ -3,6 +3,14 @@
 # "public": bağlantıyı bilen herkes giriş ekranını ve demo hesaplarını görür.
 set -euo pipefail
 
+# SSH oturumlarında Codespaces değişkenleri ortamda olmayabilir: paylaşılan dosyadan oku.
+if [ -z "${CODESPACE_NAME:-}" ] && [ -f /workspaces/.codespaces/shared/.env ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . /workspaces/.codespaces/shared/.env
+  set +a
+fi
+
 visibility="${1:-}"
 case "$visibility" in
   public | private) ;;

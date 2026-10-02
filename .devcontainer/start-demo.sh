@@ -9,6 +9,14 @@ LOGS="/tmp/site-yonetim"
 export PATH="$HOME/.local/bin:$PATH"
 mkdir -p "$LOGS"
 
+# SSH oturumlarında Codespaces değişkenleri ortamda olmayabilir: paylaşılan dosyadan oku.
+if [ -z "${CODESPACE_NAME:-}" ] && [ -f /workspaces/.codespaces/shared/.env ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . /workspaces/.codespaces/shared/.env
+  set +a
+fi
+
 # Dışarıdan görünen adres: Codespaces'te https://<codespace>-5173.app.github.dev
 if [ -n "${CODESPACE_NAME:-}" ]; then
   PUBLIC_HOST="${CODESPACE_NAME}-5173.${GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN:-app.github.dev}"
