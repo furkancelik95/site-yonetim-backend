@@ -74,6 +74,20 @@ async def test_sakin_ana_sayfasi(sakin: tuple[World, dict[str, str]]) -> None:
     assert (body["announcements"], body["open_requests"]) == (None, None)
 
 
+async def test_sakin_odeme_bilgisini_gorur(sakin: tuple[World, dict[str, str]]) -> None:
+    w, headers = sakin
+    assert (await get(w, headers, "/home")).json()["payment_info"] is None  # IBAN girilmemiş
+    async with w.factory() as session, session.begin():
+        site = await session.get(Site, w.site_id)
+        assert site is not None
+        site.iban, site.bank_name = "TR330006100519786457841326", "Örnek Bank"
+    assert (await get(w, headers, "/home")).json()["payment_info"] == {
+        "bank_name": "Örnek Bank",
+        "iban": "TR330006100519786457841326",
+        "account_holder": "Aksu Konakları",
+    }
+
+
 async def test_only_people_can_use_resident_screens(sakin: tuple[World, dict[str, str]]) -> None:
     w, _ = sakin
     response = await get(w, w.headers, "/home")  # yönetici: kişiye bağlı değil
