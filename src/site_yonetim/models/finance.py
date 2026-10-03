@@ -416,3 +416,39 @@ class IdempotencyKey(TenantMixin, Base):
     fingerprint: Mapped[str] = mapped_column(Text)  # yöntem + yol + gövde özeti
     status_code: Mapped[int]
     response_body: Mapped[dict[str, object]] = mapped_column(JSONB)
+
+
+# --- Borçsuzluk belgesi (servis isteği 01) ----------------------------------------------
+
+
+class ClearanceCertificate(TenantMixin, Base):
+    """Borçsuzluk belgesi — **değişmez** (tetikleyici). Belge anındaki hesap bilgisi ve
+    defterden hesaplanan bakiye satıra yazılır; sonradan hesap/kişi değişse de belge aynı kalır.
+
+    Numara site ve yıl bazında boşluksuz artar: `BB-{yıl}-{5 hane}`.
+    """
+
+    __tablename__ = "clearance_certificates"
+    __table_args__ = tenant_table_args(
+        tenant_fk("ledger_account_id", "ledger_accounts"),
+        UniqueConstraint("site_id", "year", "sequence"),
+        UniqueConstraint("site_id", "number"),
+        CheckConstraint("sequence > 0", name="sequence_positive"),
+        CheckConstraint("balance <= 0.005", name="no_debt"),
+        CheckConstraint("valid_until >= as_of", name="valid_after_as_of"),
+    )
+
+    ledger_account_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    year: Mapped[int]
+    sequence: Mapped[int]
+    number: Mapped[str] = mapped_column(Text)
+    # belge anındaki görüntü
+    reference_code: Mapped[str] = mapped_column(Text)
+    account_kind: Mapped[str] = mapped_column(Text)
+    unit_name: Mapped[str] = mapped_column(Text)
+    person_name: Mapped[str] = mapped_column(Text)
+    balance: Mapped[Decimal] = mapped_column(MONEY)
+    as_of: Mapped[dt.date] = mapped_column(Date)
+    valid_until: Mapped[dt.date] = mapped_column(Date)
+    issued_by_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
+    issued_by_name: Mapped[str] = mapped_column(Text)

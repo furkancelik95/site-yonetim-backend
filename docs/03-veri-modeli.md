@@ -370,6 +370,17 @@ kalemleri malikin hesabına.
 | ledger_entry_id | UUID → ledger_entries | kapatılan borç hareketi |
 | amount | NUMERIC(18,2) | |
 
+### `clearance_certificates` [K] — borçsuzluk belgesi (**değişmez**, tetikleyici)
+| Sütun | Tip | Not |
+|---|---|---|
+| ledger_account_id | UUID → ledger_accounts | |
+| year, sequence | INT | `(site_id, year, sequence)` benzersiz; site + yıl bazında boşluksuz |
+| number | TEXT | `BB-{yıl}-{5 hane}` |
+| reference_code, account_kind, unit_name, person_name | TEXT | **belge anındaki** görüntü |
+| balance | NUMERIC(18,2) | belge anında defterden; ≤ 0,005 (borçluya belge yok) |
+| as_of, valid_until | DATE | `valid_until` = `as_of` + 30 gün |
+| issued_by_user_id, issued_by_name | UUID NULL, TEXT | |
+
 ### `expenses` [K] — gider
 | Sütun | Tip | Not |
 |---|---|---|
