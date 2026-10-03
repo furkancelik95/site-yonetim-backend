@@ -33,6 +33,7 @@ class CashSource(StrEnum):
     EXPENSE = "expense"
     TRANSFER = "transfer"
     OPENING = "opening"
+    REFUND = "refund"  # cari alacağın sakine iadesi (çıkış)
 
 
 class Direction(StrEnum):

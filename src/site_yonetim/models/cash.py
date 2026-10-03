@@ -155,3 +155,23 @@ class Expense(TenantMixin, Base):
     reversal_of_id: Mapped[uuid.UUID | None]
     is_reversed: Mapped[bool] = mapped_column(default=False)
     created_by_name: Mapped[str | None] = mapped_column(Text)
+
+
+class Refund(TenantMixin, Base):
+    """İade — cari hesabın alacaklı bakiyesinin sakine geri ödenmesi (servis isteği 03).
+    **Değişmez** (tetikleyici). Aynı transaction'da: cari defterde borç (`refund`), kasada çıkış.
+    """
+
+    __tablename__ = "refunds"
+    __table_args__ = tenant_table_args(
+        tenant_fk("ledger_account_id", "ledger_accounts"),
+        tenant_fk("cash_account_id", "cash_accounts"),
+        CheckConstraint("amount > 0", name="amount_positive"),
+    )
+
+    ledger_account_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    cash_account_id: Mapped[uuid.UUID]
+    amount: Mapped[Decimal] = mapped_column(MONEY)
+    date: Mapped[dt.date] = mapped_column(Date)
+    reason: Mapped[str] = mapped_column(Text)
+    created_by_name: Mapped[str | None] = mapped_column(Text)
