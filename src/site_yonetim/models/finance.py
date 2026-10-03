@@ -39,6 +39,7 @@ from site_yonetim.domain.finance import (
     LedgerSource,
     PayerRule,
     PeriodStatus,
+    ScheduleRunStatus,
     ScopeKind,
 )
 
@@ -458,3 +459,44 @@ class ClearanceCertificate(TenantMixin, Base):
     valid_until: Mapped[dt.date] = mapped_column(Date)
     issued_by_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
     issued_by_name: Mapped[str] = mapped_column(Text)
+
+
+# --- Otomatik aylık tahakkuk (servis isteği 04) -----------------------------------------
+
+
+class ChargeSchedule(TenantMixin, Base):
+    """Site başına otomatik tahakkuk ayarı. Gece işi `charge_day` geldiğinde elle kaydetmeyle
+    aynı servisle keser (`services/charge_schedule.py`)."""
+
+    __tablename__ = "charge_schedules"
+    __table_args__ = tenant_table_args(
+        UniqueConstraint("site_id"),
+        CheckConstraint("charge_day BETWEEN 1 AND 28", name="charge_day_range"),
+        CheckConstraint("due_days BETWEEN 0 AND 60", name="due_days_range"),
+    )
+
+    enabled: Mapped[bool] = mapped_column(default=False)
+    charge_day: Mapped[int] = mapped_column(default=1)
+    due_days: Mapped[int] = mapped_column(default=14)
+    notify_on_run: Mapped[bool] = mapped_column(default=True)
+    # Açıldığı gün (İstanbul): o günden önceki kesim günleri geriye dönük kesilmez.
+    enabled_on: Mapped[dt.date | None] = mapped_column(Date)
+
+
+class ChargeScheduleRun(TenantMixin, Base):
+    """Otomatik tahakkukun ay başına sonucu — ay başına bir satır (iş iki kez çalışsa da)."""
+
+    __tablename__ = "charge_schedule_runs"
+    __table_args__ = tenant_table_args(
+        UniqueConstraint("site_id", "year", "month"),
+        CheckConstraint("month BETWEEN 1 AND 12", name="month_range"),
+        CheckConstraint(enum_check("status", ScheduleRunStatus), name="status"),
+        tenant_fk("charge_run_id", "charge_runs"),
+    )
+
+    year: Mapped[int]
+    month: Mapped[int]
+    status: Mapped[str] = mapped_column(Text)
+    message: Mapped[str | None] = mapped_column(Text)
+    charge_run_id: Mapped[uuid.UUID | None]
+    ran_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
