@@ -207,7 +207,7 @@ Kiracı yoksa malike oturan hesabı açılmasının sebebi: aidatın yazılacağ
 | due_date | DATE NULL | borçlarda vade |
 | debit | NUMERIC(18,2) | borç (tahakkuk, gecikme) |
 | credit | NUMERIC(18,2) | alacak (tahsilat, ters kayıt) |
-| source | TEXT | `charge` · `payment` · `late_fee` · `adjustment` · `transfer` · `advance` · `opening` (devir bakiye — hesap başına bir, kısmi benzersiz indeks) |
+| source | TEXT | `charge` · `payment` · `late_fee` · `adjustment` · `transfer` · `advance` · `opening` (devir bakiye — hesap başına bir, kısmi benzersiz indeks) · `refund` (iade — borç tarafında, **açık borç sayılmaz**) |
 | source_id | UUID NULL | kaynak kayıt (charge.id, payment.id …) |
 | description | TEXT | kullanıcıya gösterilen açıklama, tr-TR biçimli |
 | reversal_of_entry_id | UUID NULL | ters kayıtsa orijinal hareket |
@@ -381,6 +381,18 @@ kalemleri malikin hesabına.
 | as_of, valid_until | DATE | `valid_until` = `as_of` + 30 gün |
 | issued_by_user_id, issued_by_name | UUID NULL, TEXT | |
 
+### `refunds` [K] — iade (**değişmez**, tetikleyici)
+| Sütun | Tip | Not |
+|---|---|---|
+| ledger_account_id | UUID → ledger_accounts | alacaklı hesap |
+| cash_account_id | UUID → cash_accounts | paranın çıktığı hesap |
+| amount | NUMERIC(18,2) | > 0, ≤ hesabın alacağı |
+| date | DATE | gelecekte olamaz |
+| reason | TEXT | zorunlu |
+| created_by_name | TEXT NULL | |
+
+Aynı transaction'da cari defterde borç (`source = refund`) ve kasada çıkış (`source = refund`).
+
 ### `expenses` [K] — gider
 | Sütun | Tip | Not |
 |---|---|---|
@@ -426,7 +438,7 @@ Hesaplanan: `is_paid` = `paid_on IS NOT NULL`, `is_reversal` = `reversal_of_id I
 | outflow | NUMERIC(18,2) | çıkan |
 | description | TEXT | |
 | reference | TEXT NULL | |
-| source | TEXT | `manual` · `payment` · `expense` · `transfer` · `opening` |
+| source | TEXT | `manual` · `payment` · `expense` · `transfer` · `opening` · `refund` |
 | source_id | UUID NULL | kaynak kayıt; aktarımda karşı hareket |
 | reversal_of_id | UUID NULL | düzeltme hareketiyse orijinali |
 | created_by_name | TEXT NULL | |

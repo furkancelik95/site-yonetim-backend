@@ -39,6 +39,7 @@ from site_yonetim.models import (
 from site_yonetim.services import cash, ledger, summary
 
 # Açık borç = borç hareketi − yapılmış mahsuplar; ters kaydı alınmış borç açık değildir.
+# İade (`refund`) borç tarafında yazılır ama alacağı geri ödemedir, kapatılacak borç değildir.
 _OPEN_DEBTS = text(
     """
     SELECT e.id, COALESCE(e.due_date, e.date) AS due, e.source = 'late_fee' AS is_late_fee,
@@ -46,6 +47,7 @@ _OPEN_DEBTS = text(
     FROM ledger_entries e
     LEFT JOIN payment_allocations pa ON pa.site_id = e.site_id AND pa.ledger_entry_id = e.id
     WHERE e.site_id = :site_id AND e.account_id = :account_id AND e.debit > 0
+      AND e.source <> 'refund'
       AND NOT EXISTS (
           SELECT 1 FROM ledger_entries r
           WHERE r.site_id = e.site_id AND r.reversal_of_entry_id = e.id
