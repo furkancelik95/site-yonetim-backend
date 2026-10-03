@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from site_yonetim.api.v1 import (
+    account_ops,
     announcements,
     audit,
     auth,
@@ -39,6 +40,7 @@ api_router.include_router(charges.router)
 api_router.include_router(imports.router)
 api_router.include_router(payments.router)
 api_router.include_router(certificates.router)
+api_router.include_router(account_ops.router)
 api_router.include_router(requests.router)
 api_router.include_router(announcements.router)
 api_router.include_router(cash.router)

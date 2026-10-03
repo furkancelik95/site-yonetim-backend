@@ -90,3 +90,4 @@ class LedgerSource(StrEnum):
     ADJUSTMENT = "adjustment"
     TRANSFER = "transfer"
     ADVANCE = "advance"
+    OPENING = "opening"  # devir bakiye: sisteme geçişte önceki yönetimden kalan (hesap başına bir)

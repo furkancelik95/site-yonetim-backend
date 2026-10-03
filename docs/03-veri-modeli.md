@@ -207,7 +207,7 @@ Kiracı yoksa malike oturan hesabı açılmasının sebebi: aidatın yazılacağ
 | due_date | DATE NULL | borçlarda vade |
 | debit | NUMERIC(18,2) | borç (tahakkuk, gecikme) |
 | credit | NUMERIC(18,2) | alacak (tahsilat, ters kayıt) |
-| source | TEXT | `charge` · `payment` · `late_fee` · `adjustment` · `transfer` · `advance` |
+| source | TEXT | `charge` · `payment` · `late_fee` · `adjustment` · `transfer` · `advance` · `opening` (devir bakiye — hesap başına bir, kısmi benzersiz indeks) |
 | source_id | UUID NULL | kaynak kayıt (charge.id, payment.id …) |
 | description | TEXT | kullanıcıya gösterilen açıklama, tr-TR biçimli |
 | reversal_of_entry_id | UUID NULL | ters kayıtsa orijinal hareket |
