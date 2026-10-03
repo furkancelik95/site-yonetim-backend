@@ -221,6 +221,12 @@ class LedgerEntry(TenantMixin, Base):
         CheckConstraint(enum_check("source", LedgerSource), name="source"),
         Index("ix_ledger_entries_site_account_date", "site_id", "account_id", "date"),
         Index("ix_ledger_entries_source", "site_id", "source_id"),
+        Index(  # devir bakiye hesap başına bir kez (düzeltme ters kayıtla)
+            "uq_ledger_entries_opening",
+            "account_id",
+            unique=True,
+            postgresql_where=text("source = 'opening'"),
+        ),
         Index(
             "uq_ledger_entries_reversal_of",
             "reversal_of_entry_id",
