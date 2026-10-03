@@ -112,6 +112,15 @@ class MyRequest(BaseModel):
     status_label: str
 
 
+class PaymentInfo(BaseModel):
+    """Sitenin kendi hesabı (platform parayı tutmaz, 6493). Havale açıklamasına hesabın
+    `reference_code`'u yazılır (`accounts[]`)."""
+
+    bank_name: str | None
+    iban: str = Field(description="boşluksuz, büyük harf; biçimlendirmeyi frontend yapar")
+    account_holder: str = Field(description="hesap sahibi: site adı")
+
+
 class HomeOut(BaseModel):
     units: list[MyUnit] = Field(description="bugün malik/kiracı/oturan olduğu bölümler")
     accounts: list[AccountOut]
@@ -123,6 +132,16 @@ class HomeOut(BaseModel):
     open_requests: list[MyRequest] | None = Field(
         description="açık talepleri (modül kapalıysa null)"
     )
+    payment_info: PaymentInfo | None = Field(
+        description='sitenin IBAN\'ı girilmemişse null ("ödeme bilgisi için yönetimle görüşün")'
+    )
+
+
+def _payment_info(ctx: SiteContext) -> PaymentInfo | None:
+    site = ctx.site
+    if not site.iban:
+        return None
+    return PaymentInfo(bank_name=site.bank_name, iban=site.iban, account_holder=site.name)
 
 
 async def _units(ctx: SiteContext, today: dt.date) -> list[MyUnit]:
@@ -204,6 +223,7 @@ async def home(ctx: Resident, today: TodayDep) -> HomeOut:
         ],
         announcements=announcements,
         open_requests=open_requests,
+        payment_info=_payment_info(ctx),
     )
 
 
