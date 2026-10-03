@@ -4,6 +4,7 @@ uv run python -m site_yonetim.cli seed-demo       # demo verisi (yalnız develop
 uv run python -m site_yonetim.cli purge-imports   # süresi dolan Excel aktarımlarını sil (cron)
 uv run python -m site_yonetim.cli purge-login-throttle  # dolmuş giriş sayaçlarını sil (gece)
 uv run python -m site_yonetim.cli reconcile [--fix]    # özet bakiye ↔ defter mutabakatı (gece)
+uv run python -m site_yonetim.cli run-charge-schedules # otomatik aylık tahakkuk (günde bir)
 """
 
 import argparse
@@ -15,8 +16,10 @@ from datetime import UTC, datetime, timedelta
 from site_yonetim.core.config import get_settings
 from site_yonetim.core.logging import configure_logging
 from site_yonetim.db.session import create_engine_from_settings, create_session_factory
+from site_yonetim.domain.finance import ScheduleRunStatus
 from site_yonetim.seed.demo import DemoSeedRefusedError, ensure_demo_allowed, seed_demo
-from site_yonetim.services import login_throttle, reconciliation
+from site_yonetim.services import charge_schedule, login_throttle, reconciliation
+from site_yonetim.services.charging import BUSINESS_TZ
 from site_yonetim.services.imports import ImportStore
 
 
@@ -93,12 +96,31 @@ async def _reconcile(*, fix: bool) -> int:
     return 0
 
 
+async def _run_charge_schedules() -> int:
+    """Otomatik aylık tahakkuk (servis isteği 04); günde bir, gece. Başarısız site varsa 1."""
+    engine = create_engine_from_settings(get_settings())
+    now = datetime.now(UTC)
+    try:
+        results = await charge_schedule.run_all(
+            create_session_factory(engine), today=now.astimezone(BUSINESS_TZ).date(), now=now
+        )
+    finally:
+        await engine.dispose()
+    for result in results:
+        outcome = result.outcome
+        print(f"{result.site_id}: {outcome.status.value} {outcome.message or ''}".rstrip())
+    print(f"{len(results)} sitede otomatik tahakkuk çalıştı.")
+    failed = any(r.outcome.status is ScheduleRunStatus.FAILED for r in results)
+    return 1 if failed else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="site_yonetim.cli")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("seed-demo", help="Demo verisini yükle (yalnız development)")
     sub.add_parser("purge-imports", help="Süresi dolan Excel aktarım dosyalarını sil")
     sub.add_parser("purge-login-throttle", help="Penceresi dolmuş giriş sayaçlarını sil")
+    sub.add_parser("run-charge-schedules", help="Otomatik aylık tahakkuku çalıştır (günde bir)")
     reconcile = sub.add_parser("reconcile", help="Özet bakiyeleri defterle karşılaştır")
     reconcile.add_argument("--fix", action="store_true", help="Farklı siteleri onar")
     args = parser.parse_args(argv)
@@ -109,6 +131,8 @@ def main(argv: list[str] | None = None) -> int:
         return _purge_imports()
     if args.command == "purge-login-throttle":
         return asyncio.run(_purge_login_throttle())
+    if args.command == "run-charge-schedules":
+        return asyncio.run(_run_charge_schedules())
     if args.command == "reconcile":
         return asyncio.run(_reconcile(fix=args.fix))
     return 1  # pragma: no cover — argparse zorunlu alt komut

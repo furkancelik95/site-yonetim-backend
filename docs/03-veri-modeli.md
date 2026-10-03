@@ -312,6 +312,24 @@ Referans uygulamada `scope_*_ids` virgüllü metin olarak saklanıyordu; Postgre
 
 ## 7. Finans — hareketler
 
+### `charge_schedules` [K] — otomatik aylık tahakkuk ayarı (site başına bir)
+| Sütun | Tip | Not |
+|---|---|---|
+| enabled | BOOL | |
+| charge_day | INT | 1–28 (her ayda bulunsun) |
+| due_days | INT | 0–60; vade = kesim günü + due_days |
+| notify_on_run | BOOL | bildirim sağlayıcısı yok (`12` K5) — şimdilik yalnız kayıt |
+| enabled_on | DATE NULL | açıldığı gün: daha önceki kesim günü geriye dönük kesilmez |
+
+### `charge_schedule_runs` [K] — otomatik tahakkukun ay başına sonucu
+| Sütun | Tip | Not |
+|---|---|---|
+| year, month | INT | `(site_id, year, month)` benzersiz — iş iki kez çalışsa da tek sonuç |
+| status | TEXT | `posted` · `skipped` (dönem kesilmiş, proje yok, önizlemede uyarı) · `failed` (ertesi gün yeniden denenir) |
+| message | TEXT NULL | atlama/hata nedeni |
+| charge_run_id | UUID NULL → charge_runs | kesildiyse |
+| ran_at | TIMESTAMPTZ | |
+
 ### `charge_runs` [K] — bir tahakkuk koşusu (bir dönemin aidat kesimi)
 | Sütun | Tip | Not |
 |---|---|---|

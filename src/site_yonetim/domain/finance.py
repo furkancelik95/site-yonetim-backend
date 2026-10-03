@@ -83,6 +83,12 @@ class ChargeRunStatus(StrEnum):
     REVERSED = "reversed"
 
 
+class ScheduleRunStatus(StrEnum):
+    POSTED = "posted"  # tahakkuk kesildi
+    SKIPPED = "skipped"  # dönem zaten kesilmiş / proje yok / önizlemede uyarı
+    FAILED = "failed"  # beklenmeyen hata — ertesi gün yeniden denenir
+
+
 class LedgerSource(StrEnum):
     CHARGE = "charge"
     PAYMENT = "payment"

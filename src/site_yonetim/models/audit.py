@@ -90,6 +90,7 @@ AUDITED_TABLES = frozenset(
         "periods",
         "clearance_certificates",
         "refunds",
+        "charge_schedules",
         # ayarlar
         "charge_types",
         "allocation_rules",

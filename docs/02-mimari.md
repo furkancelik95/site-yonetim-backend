@@ -127,6 +127,16 @@ Bunların her biri için test var: `07-test-senaryolari.md` §6.
 Her iş: **idempotent** (iki kez çalışırsa zarar vermez), **site bazında** çalışır, sonucu kayıt
 altına alınır, başarısız olursa yeniden denenir.
 
+**Uygulanan zamanlanmış işler** (iş kuyruğu henüz yok; `python -m site_yonetim.cli …`, cron /
+CronJob ile):
+
+| Komut | Sıklık | Ne yapar |
+|---|---|---|
+| `run-charge-schedules` | günde bir (gece) | otomatik aylık tahakkuk: kesim günü gelen siteler, site başına ayrı transaction, ay başına tek sonuç (`charge_schedule_runs`); başarısız site varsa çıkış 1 |
+| `reconcile [--fix]` | günde bir | özet bakiye ↔ defter mutabakatı (`08` §2) |
+| `purge-login-throttle` | günde bir | dolmuş giriş sayaçları |
+| `purge-imports` | saatlik | onaylanmamış Excel aktarımları |
+
 Önizleme (tahakkuk önizlemesi) HTTP içinde kalır: kullanıcı sonucu hemen görmeli ve hiçbir şey
 yazılmaz.
 
