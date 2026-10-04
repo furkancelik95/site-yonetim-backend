@@ -5,11 +5,13 @@ from decimal import Decimal
 
 import httpx2
 import pytest
+from fastapi import FastAPI
 from pydantic import SecretStr
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from site_yonetim import cli
+from site_yonetim.api.deps import get_today
 from site_yonetim.core.config import Settings, get_settings
 from site_yonetim.db.tenancy import all_sites_scope, site_scope
 from site_yonetim.main import create_app
@@ -47,6 +49,17 @@ from tests.conftest import SettingsFactory
 from tests.integration.conftest import DatabaseUrls, login_headers
 
 Factory = async_sessionmaker[AsyncSession]
+
+
+# Demo verisi bu günle kurulur; API'nin "bugün"ü de aynı gün olmalı — yoksa süreli kayıtlar
+# (duyurunun geçerlilik sonu, beklenen ziyaretçi…) testin çalıştığı güne göre değişir.
+SEED_DAY = date(2026, 9, 30)
+
+
+@pytest.fixture
+def seed_day(api_app: FastAPI) -> date:
+    api_app.dependency_overrides[get_today] = lambda: SEED_DAY
+    return SEED_DAY
 
 
 @pytest.fixture
@@ -228,7 +241,7 @@ async def test_demo_finansi_motordan_gecer(
     dev_settings: Settings, session_factory: Factory, admin_engine: object
 ) -> None:
     """docs/10 §1.4: kesinleşmiş proje + son 6 ayın tahakkuku; tutarlar elle yazılmaz."""
-    await seed_demo(dev_settings, session_factory, today=date(2026, 9, 30))
+    await seed_demo(dev_settings, session_factory, today=SEED_DAY)
     async with session_factory() as session:
         sites = {s.slug: s.id for s in await session.scalars(select(Site))}
     for spec in SITES:
@@ -257,10 +270,14 @@ async def test_demo_finansi_motordan_gecer(
 
 
 async def test_demo_tahsilat_ve_sakin(
-    dev_settings: Settings, session_factory: Factory, admin_engine: object, api: httpx2.AsyncClient
+    dev_settings: Settings,
+    session_factory: Factory,
+    admin_engine: object,
+    api: httpx2.AsyncClient,
+    seed_day: date,
 ) -> None:
     """docs/10 §1.4, §2: tahsilatlar FIFO'dan geçer; sakin en borçlu oturan hesabın kişisidir."""
-    await seed_demo(dev_settings, session_factory, today=date(2026, 9, 30))
+    await seed_demo(dev_settings, session_factory, today=SEED_DAY)
     async with session_factory() as session:
         sites = {s.slug: s.id for s in await session.scalars(select(Site))}
     rates = {}
@@ -300,11 +317,15 @@ async def test_demo_tahsilat_ve_sakin(
 
 
 async def test_demo_duyuru_ve_talep(
-    dev_settings: Settings, session_factory: Factory, admin_engine: object, api: httpx2.AsyncClient
+    dev_settings: Settings,
+    session_factory: Factory,
+    admin_engine: object,
+    api: httpx2.AsyncClient,
+    seed_day: date,
 ) -> None:
     """docs/10 §1.4: duyurular ve farklı durum/öncelikte talepler; sakin yalnız yürürlükteki
     duyuruları görür."""
-    await seed_demo(dev_settings, session_factory, today=date(2026, 9, 30))
+    await seed_demo(dev_settings, session_factory, today=SEED_DAY)
     async with session_factory() as session:
         sites = {s.slug: s.id for s in await session.scalars(select(Site))}
     for slug in sites.values():
@@ -333,7 +354,7 @@ async def test_demo_kasa_ve_gider(
     dev_settings: Settings, session_factory: Factory, admin_engine: object
 ) -> None:
     """docs/10 §1.4: Banka + Kasa; tahsilat paranın girdiği hesaba, ödenen gider kasadan düşer."""
-    await seed_demo(dev_settings, session_factory, today=date(2026, 9, 30))
+    await seed_demo(dev_settings, session_factory, today=SEED_DAY)
     async with session_factory() as session:
         sites = {s.slug: s.id for s in await session.scalars(select(Site))}
     for spec in SITES:
@@ -376,9 +397,13 @@ async def test_demo_kasa_ve_gider(
 
 
 async def test_demo_pano_ozeti_defterle_tutar(
-    dev_settings: Settings, session_factory: Factory, admin_engine: object, api: httpx2.AsyncClient
+    dev_settings: Settings,
+    session_factory: Factory,
+    admin_engine: object,
+    api: httpx2.AsyncClient,
+    seed_day: date,
 ) -> None:
-    await seed_demo(dev_settings, session_factory, today=date(2026, 9, 30))
+    await seed_demo(dev_settings, session_factory, today=SEED_DAY)
     headers = await login_headers(api, "yonetici@demo.local", DEMO_PASSWORD)
     finance = (await api.get("/api/v1/sites/aksu-konaklari/dashboard", headers=headers)).json()[
         "finance"
@@ -396,10 +421,14 @@ async def test_demo_pano_ozeti_defterle_tutar(
 
 
 async def test_demo_kapi_kayitlari(
-    dev_settings: Settings, session_factory: Factory, admin_engine: object, api: httpx2.AsyncClient
+    dev_settings: Settings,
+    session_factory: Factory,
+    admin_engine: object,
+    api: httpx2.AsyncClient,
+    seed_day: date,
 ) -> None:
     """docs/10 §1.4: güvenlik modülü açık sitelerde kargo ve ziyaretçi kayıtları."""
-    await seed_demo(dev_settings, session_factory, today=date(2026, 9, 30))
+    await seed_demo(dev_settings, session_factory, today=SEED_DAY)
     guard = await login_headers(api, "guvenlik@demo.local", DEMO_PASSWORD)
     packages = (await api.get("/api/v1/sites/aksu-konaklari/packages", headers=guard)).json()
     assert packages["total"] == 5
