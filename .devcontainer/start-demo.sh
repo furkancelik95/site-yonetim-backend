@@ -88,13 +88,26 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 
+# Açılışta bağlantıyı herkese aç (telefondan başlatınca elle uğraşılmasın). Kapatmak için
+# codespace ortamında DEMO_AUTO_PUBLIC=false (Codespaces → Settings → Secrets) ya da
+# her seferinde: bash .devcontainer/share.sh private
+visibility="yalnız SİZE açık. Paylaşmak için:  bash .devcontainer/share.sh public"
+if [ -n "${CODESPACE_NAME:-}" ] && [ "${DEMO_AUTO_PUBLIC:-true}" = "true" ]; then
+  for _ in 1 2 3 4 5; do  # port yönlendirmesi hazır olana kadar
+    if bash "$ROOT/.devcontainer/share.sh" public >"$LOGS/share.log" 2>&1       && grep -q "artık public" "$LOGS/share.log"; then
+      visibility="HERKESE açık (otomatik). Kapatmak için:  bash .devcontainer/share.sh private"
+      break
+    fi
+    sleep 5
+  done
+fi
+
 cat <<EOF
 
   Site Yönetim demo hazır:  ${PUBLIC_URL}
   Demo hesapları giriş ekranında listelenir (parola: Demo1234!).
 
-  Bağlantı şu an yalnız SİZE açık. Paylaşmak için:  bash .devcontainer/share.sh public
-  Paylaşımı kapatmak için:                          bash .devcontainer/share.sh private
-  Kayıtlar: ${LOGS}/{api,web,migrate}.log
+  Bağlantı ${visibility}
+  Kayıtlar: ${LOGS}/{api,web,migrate,share}.log
 
 EOF
