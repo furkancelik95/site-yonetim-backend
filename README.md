@@ -65,7 +65,7 @@ OpenAPI şeması: `GET /api/v1/openapi.json` (frontend tiplerini buradan üretir
 ## Codespaces demosu
 
 **Code → Codespaces → Create codespace on main**: PostgreSQL, API, demo verisi ve frontend tek
-tıkla açılır, paylaşılabilir bir bağlantı verir (`bash .devcontainer/share.sh public`). Yalnız demo
+tıkla açılır, açılışta herkese açık bir bağlantı verir (kapatmak: `bash .devcontainer/share.sh private`). Yalnız demo
 içindir. Ayrıntı: [`.devcontainer/README.md`](.devcontainer/README.md).
 
 ## CI

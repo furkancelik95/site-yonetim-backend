@@ -19,18 +19,22 @@ paylaşılabilir bir bağlantı verir. **Yalnız demo ve toplantı içindir; ger
 
 ## Paylaşmak
 
-Bağlantı varsayılan olarak **yalnız size** açıktır (GitHub girişi ister).
+Codespace her açıldığında demo bağlantısı **kendiliğinden herkese açılır** — telefondan
+github.com/codespaces → *Open in browser* demek yeterli; link değişmez. Elle değiştirmek için:
 
 ```bash
-bash .devcontainer/share.sh public    # bağlantıyı bilen herkese aç
-bash .devcontainer/share.sh private   # tekrar kapat
+bash .devcontainer/share.sh private   # kapat (codespace yeniden açılınca tekrar herkese açılır)
+bash .devcontainer/share.sh public    # aç
 ```
+
+Otomatik açılmasın istenirse: GitHub → Settings → Codespaces → Secrets'a `DEMO_AUTO_PUBLIC` =
+`false` ekleyin (bu repo için); bağlantı o zaman yalnız size açık başlar.
 
 Komut yetki nedeniyle çalışmazsa: **PORTS** sekmesi → "Site Yönetim (demo)" → sağ tık →
 **Port Visibility → Public**.
 
 > **Dikkat:** herkese açıkken bağlantıyı bilen herkes demo hesaplarıyla giriş yapabilir.
-> Demo bitince `private` yapın ya da codespace'i durdurun.
+> Demo bitince codespace'i durdurun (boşta 30 dakikada kendisi de durur).
 
 ## Nasıl çalışır
 
