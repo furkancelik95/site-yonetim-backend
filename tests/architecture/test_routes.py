@@ -25,6 +25,9 @@ PUBLIC_ROUTES = {
     "/api/v1/auth/login",
     "/api/v1/auth/refresh",  # çerezle doğrular
     "/api/v1/auth/logout",  # her zaman 204; varsa oturumu iptal eder
+    # Sakinin kendini kaydetmesi (servis isteği 13): IP başına istek sınırı, tahmin edilemez kod,
+    # yalnız site adı döner, başvuru yönetici onayı bekler.
+    "/api/v1/public/registration/{code}",
 }
 # Geçici parolalı oturumun erişebildiği uçlar (docs/05 §8.1). Gerisi `password_changed` ister.
 PASSWORD_PENDING_ROUTES = {"/api/v1/me", "/api/v1/auth/change-password"}

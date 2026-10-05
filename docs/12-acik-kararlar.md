@@ -13,7 +13,7 @@ silinir ve ilgili dokümana taşınır.
 | **K5** | Bildirim sağlayıcısı | Duyuru/kargo bildirimi **kayıt tutuluyor, gönderilmiyor** | SMS (paralı, ölçeğe göre maliyet), e-posta, mobil push. Önce sağlayıcıdan bağımsız bir gönderim arayüzü + "yalnız kaydet" adaptörü | Burhan + ortaklar | Gerçek bildirim |
 | **K6** | Mobil uygulama | Yok. Web önce | Tek uygulama + girişte site seçimi (ucuz) mı, müşteri başına uygulama (her müşteri için ayrı mağaza kaydı) mı | Burhan + ortaklar | Mobil |
 | **K7** | Muhasebe/ERP aktarımı | Yok | PRD ilk aday olarak "Kivi" diyor (netleşmedi). Önce sağlayıcıdan bağımsız bir muhasebe fişi dışa aktarımı; adaptörler sonra. Fiş formatı ve hesap planı mali müşavirle | Mali müşavir + ürün | ERP |
-| **K8** | KVKK saklama süreleri ve metinler | Yok | Hukukçu belirler: finansal kayıt, kişi, ziyaretçi, plaka, log için ayrı süreler | Hukuk | Canlı pilot |
+| **K8** | KVKK saklama süreleri ve metinler | Yok | Hukukçu belirler: finansal kayıt, kişi, ziyaretçi, plaka, log, sakin kayıt başvurusu (bekleyen/reddedilen), banka ekstresi önizlemesi (6 saat) için ayrı süreler | Hukuk | Canlı pilot |
 | **K9** | Kıst hesap (ay ortası taşınma) | Yok: tahakkuk tarihinde kim aktifse ayın tamamı ona | Gün bazlı paylaştırma seçeneği | Ürün + mali müşavir | Tahakkuk |
 | **K10** | Satışta devir öncesi borç | Tanımsız | Malik değişince eski malikin borcu kimde kalır | Hukuk | Daire devri |
 | **K11** | Borçlu bölüme hizmet kısıtlaması | Yok | Rezervasyon vb. engellenebilir mi, hukuki sınırı | Hukuk | Rezervasyon |

@@ -71,6 +71,10 @@ dosyaları sınırsız diske yazdığından, sınır ayrıştırmadan önce olma
 
 ## 4. Web güvenliği
 
+- **Herkese açık uçlar** yalnız giriş (`/auth/*`) ve sakin kayıt formu
+  (`/public/registration/{code}`); hepsi `tests/architecture/test_routes.py` beyaz listesinde.
+  Kayıt formu: kod tahmin edilemez (11 karakter rastgele), yalnız site adı döner, IP başına istek
+  sınırı (GET dakikada 30, POST 5 — `rate_limits`, PostgreSQL), başvuru yönetici onayı bekler.
 - **HTTPS zorunlu**, HSTS açık.
 - **CORS:** yalnız frontend'in alan adı; `*` yok.
 - Yenileme jetonu **httpOnly + Secure + SameSite** çerezde; çerezle korunan yazma işlemlerinde
