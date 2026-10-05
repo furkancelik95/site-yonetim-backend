@@ -40,6 +40,7 @@ class Request(TenantMixin, Base):
     __table_args__ = tenant_table_args(
         tenant_fk("unit_id", "units"),
         tenant_fk("reported_by_person_id", "persons"),
+        tenant_fk("department_id", "request_departments"),
         UniqueConstraint("site_id", "number"),
         CheckConstraint("number > 0", name="number_positive"),
         CheckConstraint(
@@ -64,6 +65,7 @@ class Request(TenantMixin, Base):
     status: Mapped[str] = mapped_column(Text, default=RequestStatus.OPEN.value)
     reported_by_person_id: Mapped[uuid.UUID | None]
     unit_id: Mapped[uuid.UUID | None]  # ortak alan talebinde boş
+    department_id: Mapped[uuid.UUID | None]  # servis isteği 11
     location: Mapped[str | None] = mapped_column(Text)
     assigned_to: Mapped[str | None] = mapped_column(Text)
     due_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
@@ -132,3 +134,15 @@ class AnnouncementDelivery(TenantMixin, Base):
     sent_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     read_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     failure_reason: Mapped[str | None] = mapped_column(Text)
+
+
+class RequestDepartment(TenantMixin, Base):
+    """Talep departmanı (servis isteği 11). Ad site içinde benzersiz (Türkçe harf ve büyük/küçük
+    duyarsız `name_key`). Silinmez; pasifleştirilir — pasife yeni talep atanmaz."""
+
+    __tablename__ = "request_departments"
+    __table_args__ = tenant_table_args(UniqueConstraint("site_id", "name_key"))
+
+    name: Mapped[str] = mapped_column(Text)
+    name_key: Mapped[str] = mapped_column(Text)
+    is_active: Mapped[bool] = mapped_column(default=True)
