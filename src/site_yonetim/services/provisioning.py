@@ -17,6 +17,7 @@ from site_yonetim.db.tenancy import site_scope
 from site_yonetim.domain.text import slugify
 from site_yonetim.models import PropertyKind, Site, UnitType
 from site_yonetim.models.platform import site_name_key
+from site_yonetim.services import departments
 from site_yonetim.services.cash import ensure_default_accounts
 from site_yonetim.services.finance_setup import ensure_finance_setup
 from site_yonetim.services.sites import provision_site_modules
@@ -100,5 +101,6 @@ async def provision_site(
             for order, (type_name, weight) in enumerate(DEFAULT_UNIT_TYPES)
         )
         await ensure_finance_setup(session)
+        await departments.ensure_defaults(session)
         await ensure_default_accounts(session, iban=site.iban)
     return site

@@ -30,6 +30,7 @@ from site_yonetim.domain.operations import (
     RequestStatus,
 )
 from site_yonetim.models import Request, RequestEvent
+from site_yonetim.services import departments as departments_svc
 from site_yonetim.services import requests as svc
 
 router = APIRouter(prefix="/sites/{slug}/requests", tags=["talep"])
@@ -77,6 +78,8 @@ class RequestOut(BaseModel):
     reported_by_person_id: uuid.UUID | None
     reporter_name: str | None = Field(description="people.read ya da kendi talebi; yoksa null")
     assigned_to: str | None
+    department_id: uuid.UUID | None
+    department_name: str | None
     due_at: dt.datetime | None
     resolved_at: dt.datetime | None
     resolution: str | None
@@ -116,6 +119,9 @@ async def out(ctx: SiteContext, requests: list[Request]) -> list[RequestOut]:
     )
     names = ctx.access.can(Permission.PEOPLE_READ)
     me = ctx.access.person_id
+    teams = await departments_svc.names(
+        session, {r.department_id for r in requests if r.department_id}
+    )
     return [
         RequestOut(
             id=r.id,
@@ -134,6 +140,8 @@ async def out(ctx: SiteContext, requests: list[Request]) -> list[RequestOut]:
             if r.reported_by_person_id and (names or r.reported_by_person_id == me)
             else None,
             assigned_to=r.assigned_to,
+            department_id=r.department_id,
+            department_name=teams.get(r.department_id) if r.department_id else None,
             due_at=r.due_at,
             resolved_at=r.resolved_at,
             resolution=r.resolution,
@@ -165,9 +173,14 @@ async def list_requests(
     status_filter: Annotated[RequestStatus | None, Query(alias="status")] = None,
     category: RequestCategory | None = None,
     priority: RequestPriority | None = None,
+    department_id: uuid.UUID | None = None,
 ) -> Page[RequestOut]:
     query = svc.list_query(
-        status=status_filter, category=category, priority=priority, reporter=_own_only(ctx)
+        status=status_filter,
+        category=category,
+        priority=priority,
+        reporter=_own_only(ctx),
+        department_id=department_id,
     )
     total = await ctx.session.scalar(select(func.count()).select_from(query.subquery())) or 0
     rows = list(await ctx.session.scalars(query.offset(paging.offset).limit(paging.page_size)))
@@ -304,3 +317,29 @@ async def add_comment(
         raise rule_error(exc) from exc
     await ctx.session.commit()
     return Written(data=await _detail(ctx, request), message="Yorum eklendi.")
+
+
+class DepartmentAssignIn(BaseModel):
+    department_id: uuid.UUID | None = Field(description="null: departmanı kaldır")
+
+
+@router.post("/{request_id}/department", summary="Talebi departmana yönlendir")
+async def set_department(
+    request_id: uuid.UUID, body: DepartmentAssignIn, ctx: RequestsModule, current: CurrentUserDep
+) -> Written[RequestDetail]:
+    _require(ctx, Permission.REQUESTS_ASSIGN)
+    request = await _visible(ctx, request_id, for_update=True)
+    try:
+        department = await departments_svc.assign(
+            ctx.session, request, body.department_id, actor=current.user.full_name
+        )
+    except OperationRuleError as exc:
+        raise rule_error(exc) from exc
+    detail = await _detail(ctx, request)
+    await ctx.session.commit()
+    message = (
+        f'Talep "{department.name}" departmanına yönlendirildi.'
+        if department
+        else "Talebin departmanı kaldırıldı."
+    )
+    return Written(data=detail, message=message)

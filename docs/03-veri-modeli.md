@@ -445,6 +445,15 @@ Aynı telefonla tek bekleyen başvuru (kısmi benzersiz indeks). Kayıt bağlant
 `registration_links(code benzersiz, is_enabled)`, site başına bir. `rate_limits` [G]: herkese
 açık uçların IP + uç anahtarlı sayaçları.
 
+### `incidents`, `lost_items` [K] — güvenlik olay kaydı ve kayıp eşya
+Site içinde artan `number`; silinmez, içerik değişmez. Olay: `kind`, `location`, `description`,
+`occurred_at`, `unit_id?`, `status` (`open` · `closed`) + kapanış notu. Kayıp eşya: `description`,
+`location`, `found_by`, `found_at`, `status` (`waiting` · `returned` · `disposed`), `returned_to`.
+
+### `request_departments` [K] — talep departmanı
+`name`, `name_key` (Türkçe harf duyarsız, site içinde benzersiz), `is_active`. `requests.department_id`
+(bileşik FK). Silinmez; pasif departmana yeni talep atanmaz.
+
 ### `expenses` [K] — gider
 | Sütun | Tip | Not |
 |---|---|---|
