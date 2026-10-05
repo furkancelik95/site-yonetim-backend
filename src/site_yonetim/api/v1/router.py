@@ -16,10 +16,12 @@ from site_yonetim.api.v1 import (
     health,
     imports,
     me,
+    members,
     payments,
     platform,
     portfolio,
     recurring_expenses,
+    registrations,
     reports,
     requests,
     resident,
@@ -56,3 +58,6 @@ api_router.include_router(dashboard.router)
 api_router.include_router(resident.router)
 api_router.include_router(portfolio.router)
 api_router.include_router(audit.router)
+api_router.include_router(members.router)
+api_router.include_router(registrations.router)
+api_router.include_router(registrations.public_router)
