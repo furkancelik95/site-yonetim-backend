@@ -411,6 +411,32 @@ kalemleri malikin hesabına.
 
 Aynı transaction'da cari defterde borç (`source = refund`) ve kasada çıkış (`source = refund`).
 
+### `bank_imports` [K] — banka ekstresi önizlemesi
+| Sütun | Tip | Not |
+|---|---|---|
+| cash_account_id | UUID → cash_accounts | banka türü |
+| file_name, uploaded_by_user_id | TEXT, UUID | yalnız yükleyen onaylar |
+| status | TEXT | `pending` · `confirmed` |
+| rows | JSONB | okunan satırlar + eşleşme; **onayda silinir** (kişisel veri). Dosya diske yazılmaz |
+| expires_at | TIMESTAMPTZ | 6 saat; dolunca `purge-imports` siler |
+
+### `bank_import_lines` [K] — aktarılmış banka hareketi (**değişmez**)
+| Sütun | Tip | Not |
+|---|---|---|
+| cash_account_id, fingerprint | UUID, TEXT | `(site, hesap, parmak izi)` benzersiz — aynı hareket iki kez aktarılmaz |
+| payment_id, bank_import_id | UUID | |
+
+### `recurring_expenses` [K] — tekrarlanan gider tanımı
+| Sütun | Tip | Not |
+|---|---|---|
+| description, expense_category_id, amount, vendor | | gider alanları |
+| day_of_month | INT | 1–28 |
+| auto_pay, cash_account_id | BOOL, UUID NULL | otomatik ödeme hesap ister |
+| is_active, active_since | BOOL, DATE | etkin olduğu günden önce geriye dönük yazılmaz |
+| removed_at | TIMESTAMPTZ NULL | "kaldır" arşive alır; silinmez |
+
+`recurring_expense_runs`: `(recurring_expense_id, year, month)` benzersiz, `status` `created` · `skipped` · `failed`, `expense_id`.
+
 ### `expenses` [K] — gider
 | Sütun | Tip | Not |
 |---|---|---|

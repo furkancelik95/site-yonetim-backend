@@ -133,9 +133,10 @@ CronJob ile):
 | Komut | Sıklık | Ne yapar |
 |---|---|---|
 | `run-charge-schedules` | günde bir (gece) | otomatik aylık tahakkuk: kesim günü gelen siteler, site başına ayrı transaction, ay başına tek sonuç (`charge_schedule_runs`); başarısız site varsa çıkış 1 |
+| `run-recurring-expenses` | günde bir (gece) | tekrarlanan giderler: günü gelen etkin tanımlar için gider kaydı, ay başına bir (`recurring_expense_runs`); başarısız varsa çıkış 1 |
 | `reconcile [--fix]` | günde bir | özet bakiye ↔ defter mutabakatı (`08` §2) |
 | `purge-login-throttle` | günde bir | dolmuş giriş sayaçları |
-| `purge-imports` | saatlik | onaylanmamış Excel aktarımları |
+| `purge-imports` | saatlik | onaylanmamış Excel aktarım dosyaları ve süresi dolan banka ekstresi önizlemeleri |
 
 Önizleme (tahakkuk önizlemesi) HTTP içinde kalır: kullanıcı sonucu hemen görmeli ve hiçbir şey
 yazılmaz.
