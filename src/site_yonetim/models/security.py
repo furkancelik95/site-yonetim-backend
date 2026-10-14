@@ -7,11 +7,18 @@ yazılmaz. Saklama süresi açık karar (docs/12 K8).
 import datetime as dt
 import uuid
 
-from sqlalchemy import CheckConstraint, Date, DateTime, Index, Text
+from sqlalchemy import CheckConstraint, Date, DateTime, Index, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from site_yonetim.db.base import Base, TenantMixin, enum_check, tenant_fk, tenant_table_args
-from site_yonetim.domain.security import PackageStatus, VisitorKind, VisitorStatus
+from site_yonetim.domain.security import (
+    IncidentKind,
+    IncidentStatus,
+    LostItemStatus,
+    PackageStatus,
+    VisitorKind,
+    VisitorStatus,
+)
 
 
 class Package(TenantMixin, Base):
@@ -66,3 +73,51 @@ class Visitor(TenantMixin, Base):
     exited_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     recorded_by: Mapped[str | None] = mapped_column(Text)
     note: Mapped[str | None] = mapped_column(Text)
+
+
+class Incident(TenantMixin, Base):
+    """Güvenlik olay kaydı (servis isteği 09). Silinmez, içerik değişmez; yalnız kapatılır
+    (kapanış notu zorunlu). Açıklamada kişisel veri olabilir — saklama K8."""
+
+    __tablename__ = "incidents"
+    __table_args__ = tenant_table_args(
+        tenant_fk("unit_id", "units"),
+        UniqueConstraint("site_id", "number"),
+        CheckConstraint(enum_check("kind", IncidentKind), name="kind"),
+        CheckConstraint(enum_check("status", IncidentStatus), name="status"),
+        Index("ix_incidents_site_status", "site_id", "status", "occurred_at"),
+    )
+
+    number: Mapped[int]
+    kind: Mapped[str] = mapped_column(Text)
+    location: Mapped[str] = mapped_column(Text)
+    description: Mapped[str] = mapped_column(Text)
+    occurred_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
+    unit_id: Mapped[uuid.UUID | None]
+    status: Mapped[str] = mapped_column(Text, default=IncidentStatus.OPEN.value)
+    closed_note: Mapped[str | None] = mapped_column(Text)
+    closed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    closed_by: Mapped[str | None] = mapped_column(Text)
+    recorded_by: Mapped[str | None] = mapped_column(Text)
+
+
+class LostItem(TenantMixin, Base):
+    """Kayıp eşya (servis isteği 10). Silinmez; bekleyen eşya teslim edilir ya da elden
+    çıkarılır."""
+
+    __tablename__ = "lost_items"
+    __table_args__ = tenant_table_args(
+        UniqueConstraint("site_id", "number"),
+        CheckConstraint(enum_check("status", LostItemStatus), name="status"),
+        Index("ix_lost_items_site_status", "site_id", "status", "found_at"),
+    )
+
+    number: Mapped[int]
+    description: Mapped[str] = mapped_column(Text)
+    location: Mapped[str] = mapped_column(Text)
+    found_by: Mapped[str | None] = mapped_column(Text)
+    found_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(Text, default=LostItemStatus.WAITING.value)
+    returned_to: Mapped[str | None] = mapped_column(Text)
+    returned_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    recorded_by: Mapped[str | None] = mapped_column(Text)

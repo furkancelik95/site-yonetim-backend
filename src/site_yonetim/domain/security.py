@@ -25,6 +25,28 @@ class VisitorKind(StrEnum):
     CONTRACTOR = "contractor"
 
 
+class IncidentKind(StrEnum):
+    THEFT = "theft"
+    DAMAGE = "damage"
+    NOISE = "noise"
+    FIRE = "fire"
+    WATER_LEAK = "water_leak"
+    SUSPICIOUS = "suspicious"
+    ACCIDENT = "accident"
+    OTHER = "other"
+
+
+class IncidentStatus(StrEnum):
+    OPEN = "open"
+    CLOSED = "closed"
+
+
+class LostItemStatus(StrEnum):
+    WAITING = "waiting"
+    RETURNED = "returned"  # sahibine teslim
+    DISPOSED = "disposed"  # bağış / imha (bekleme süresi ürün kararı; şimdilik elle)
+
+
 class VisitorStatus(StrEnum):
     EXPECTED = "expected"
     ENTERED = "entered"

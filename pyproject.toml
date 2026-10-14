@@ -17,6 +17,7 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.1.1",
     "tzdata>=2026.4",
     "uvicorn[standard]>=0.54.0",
+    "xlrd>=2.0.2",
 ]
 
 [build-system]
