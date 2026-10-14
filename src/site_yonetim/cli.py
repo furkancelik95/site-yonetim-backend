@@ -23,6 +23,7 @@ from site_yonetim.services import (
     bank_imports,
     charge_schedule,
     login_throttle,
+    rate_limit,
     reconciliation,
     recurring_expenses,
 )
@@ -69,18 +70,21 @@ async def _purge_bank_imports(now: datetime) -> int:
 
 
 async def _purge_login_throttle() -> int:
-    """Penceresi dolmuş IP sayaçları (docs/05 §8.1); günde bir kez yeter."""
+    """Penceresi dolmuş IP sayaçları (docs/05 §8.1) ve herkese açık uçların istek sınırı
+    kayıtları; günde bir kez yeter."""
     settings = get_settings()
     engine = create_engine_from_settings(settings)
+    now = datetime.now(UTC)
     try:
+        factory = create_session_factory(engine)
         removed = await login_throttle.purge(
-            create_session_factory(engine),
-            now=datetime.now(UTC),
-            window=timedelta(minutes=settings.login_ip_window_minutes),
+            factory, now=now, window=timedelta(minutes=settings.login_ip_window_minutes)
         )
+        limits = await rate_limit.purge(factory, now=now, older_than=timedelta(hours=1))
     finally:
         await engine.dispose()
     print(f"{removed} dolmuş giriş sayacı silindi.")
+    print(f"{limits} dolmuş istek sınırı kaydı silindi.")
     return 0
 
 

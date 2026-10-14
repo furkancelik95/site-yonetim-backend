@@ -26,9 +26,27 @@ def test_gecersiz_iban(iban: str, message: str) -> None:
 
 def test_eposta_kucuk_harf_ve_bicim() -> None:
     assert normalize_email_address(" Ayse@Ornek.COM ") == "ayse@ornek.com"
-    for bad in ("ayse", "ayse@ornek", "a b@ornek.com", "x" * 250 + "@a.co"):
+    assert normalize_email_address("a.b+c@mail.ornek.com.tr") == "a.b+c@mail.ornek.com.tr"
+    for bad in (
+        "ayse",
+        "ayse@ornek",
+        "a b@ornek.com",
+        "x" * 250 + "@a.co",
+        "ayse@.ornek.com",
+        "ayse@ornek..com",
+        "ayse@ornek.com.",
+    ):
         with pytest.raises(ValueError, match="e-posta"):
             normalize_email_address(bad)
+
+
+def test_eposta_deseni_geri_izlemede_patlamaz() -> None:
+    """CodeQL py/polynomial-redos: `!@!.` + çok sayıda `!.` eşleşmeyen girdi. Uzunluk sınırını
+    aşmadan, sınırsız desende saniyeler sürecek girdi anında reddedilir."""
+    from site_yonetim.domain import validation
+
+    hostile = "!@!." + "!." * 5000 + "@"
+    assert validation._EMAIL.match(hostile) is None
 
 
 def test_vkn_10_hane() -> None:

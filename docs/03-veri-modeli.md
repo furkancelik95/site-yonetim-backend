@@ -437,6 +437,14 @@ Aynı transaction'da cari defterde borç (`source = refund`) ve kasada çıkış
 
 `recurring_expense_runs`: `(recurring_expense_id, year, month)` benzersiz, `status` `created` · `skipped` · `failed`, `expense_id`.
 
+### `registrations` [K] — sakin kayıt başvurusu (kişisel veri, saklama K8)
+`number` (site içinde artan, `KB-0001`), ad (`Ayşe`), soyad (`YILMAZ`), `phone` (E.164), `email?`,
+`unit_text`, `relation` (`owner` · `tenant`), `kvkk_ack_at`, `explicit_consent_at?`, `ip`,
+`status` (`pending` · `approved` · `rejected`), karar alanları, onayda `unit_id`, `person_id`.
+Aynı telefonla tek bekleyen başvuru (kısmi benzersiz indeks). Kayıt bağlantısı
+`registration_links(code benzersiz, is_enabled)`, site başına bir. `rate_limits` [G]: herkese
+açık uçların IP + uç anahtarlı sayaçları.
+
 ### `expenses` [K] — gider
 | Sütun | Tip | Not |
 |---|---|---|

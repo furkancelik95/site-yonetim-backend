@@ -2,7 +2,9 @@
 
 import re
 
-_EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")  # docs/11 §3
+# docs/11 §3. Alan adı noktayla ayrılmış, boş olmayan parçalar: desen belirsiz değil, uzun
+# girdide geri izleme patlaması (ReDoS) yok — herkese açık kayıt formu bunu kullanıcıdan alır.
+_EMAIL = re.compile(r"^[^@\s]+@[^@\s.]+(?:\.[^@\s.]+)+$")
 EMAIL_MAX = 254
 _TR_IBAN = re.compile(r"^TR\d{24}$")
 

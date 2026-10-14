@@ -41,7 +41,10 @@ def test_erisim_jetonu_gidis_donus(make_settings: SettingsFactory) -> None:
     settings = make_settings()
     user_id, session_id = uuid.uuid4(), uuid.uuid4()
 
-    token = create_access_token(settings, user_id=user_id, session_id=session_id, now=NOW)
+    # "şimdi" test anında alınır: modül yüklenirken alınan NOW, uzun bir takımda 15 dakikalık
+    # jeton ömrünü aşabilir (decode gerçek saati kullanır).
+    now = datetime.now(UTC)
+    token = create_access_token(settings, user_id=user_id, session_id=session_id, now=now)
     claims = decode_access_token(settings, token)
 
     assert (claims.user_id, claims.session_id) == (user_id, session_id)
