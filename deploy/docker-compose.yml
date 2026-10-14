@@ -1,0 +1,97 @@
+# Sunucu demosu (Turhost VPS; Müdavim ile aynı sunucu). Ayrıntı: deploy/README.md
+#
+#   bash kurulum.sh <ALAN_ADI>        # ilk kurulum ve her güncelleme
+#
+# Dışarıya hiçbir port açılmaz. HTTPS'i sunucudaki ortak Caddy (Müdavim'in `web` servisi)
+# verir ve bu yığının `web` servisine `edge` ağı üzerinden `site-yonetim-web:8080` adıyla
+# geçer. `web`: frontend derlemesi + /api vekili. API ve veritabanı yalnız iç ağda.
+# Sırlar: `.env` (compose: veritabanı parolaları, alan adı) ve `api.env` (yalnız API: JWT sırrı,
+# ortam). İkisi de kurulum.sh'in sunucuda ürettiği dosyalar; repoya girmez.
+name: site-yonetim
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD .env içinde tanımlı olmalı}
+      DB_OWNER_PASSWORD: ${DB_OWNER_PASSWORD:?DB_OWNER_PASSWORD .env içinde tanımlı olmalı}
+      DB_APP_PASSWORD: ${DB_APP_PASSWORD:?DB_APP_PASSWORD .env içinde tanımlı olmalı}
+      APP_DB_NAME: site_yonetim
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ../docker/postgres/10-roles.sh:/docker-entrypoint-initdb.d/10-roles.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d site_yonetim"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    build: ..
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_ADMIN_URL: postgresql+asyncpg://site_yonetim_owner:${DB_OWNER_PASSWORD}@db:5432/site_yonetim
+    depends_on:
+      db:
+        condition: service_healthy
+    profiles: [tools]
+
+  api:
+    build: ..
+    restart: unless-stopped
+    env_file: api.env
+    environment:
+      # Yalnız RLS'e tabi uygulama rolü; tablo sahibi parolası API'ye verilmez.
+      DATABASE_URL: postgresql+asyncpg://site_yonetim_app:${DB_APP_PASSWORD}@db:5432/site_yonetim
+      ALLOWED_HOSTS: ${DOMAIN:?DOMAIN .env içinde tanımlı olmalı},127.0.0.1
+      CORS_ORIGINS: https://${DOMAIN}
+      REFRESH_COOKIE_SECURE: "true"
+      API_DOCS_ENABLED: "false"
+      FILE_STORAGE_ROOT: /data/files
+      # İstemci IP'si vekillerin X-Forwarded-For başlığından (giriş hız sınırı, denetim
+      # kaydı). API dışarı açık değil; yalnız iç vekil bu başlığı gönderebilir.
+      FORWARDED_ALLOW_IPS: "*"
+    volumes:
+      - files-data:/data/files # salt okunur kökte yazılabilir tek yer: belgeler
+    depends_on:
+      db:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  web:
+    # Frontend (Vite derlemesi) + iç Caddy (yalnız HTTP; TLS ortak Caddy'de)
+    build:
+      context: ../../frontend
+      dockerfile: ../backend/deploy/web.Dockerfile
+    restart: unless-stopped
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    networks:
+      default:
+      edge:
+        aliases: [site-yonetim-web]
+    depends_on:
+      - api
+    read_only: true
+    tmpfs:
+      - /data
+      - /config
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+networks:
+  edge:
+    external: true
+
+volumes:
+  db-data:
+  files-data:

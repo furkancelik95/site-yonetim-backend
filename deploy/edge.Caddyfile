@@ -1,0 +1,19 @@
+# Ortak Caddy (Müdavim'in `web` servisi) için birleşik yapılandırma. Müdavim'in kendi
+# Caddyfile'ını olduğu gibi içeri alır, site yönetimi alan adını ekler. Kurulum:
+# deploy/README.md §Ortak Caddy. {$SITE_YONETIM_DOMAIN}: mudavim-override.yml verir.
+import /etc/caddy/Caddyfile
+
+{$SITE_YONETIM_DOMAIN} {
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+	request_body {
+		max_size 6MB
+	}
+	reverse_proxy site-yonetim-web:8080
+}
