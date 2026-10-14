@@ -54,7 +54,8 @@ docker network inspect edge >/dev/null 2>&1 || docker network create edge >/dev/
 
 # 4) Derle, veritabanı, göçler, uygulama (API açılışta demo verisini kurar; önce göç).
 cd "$DIR/backend/deploy"
-docker compose build
+# `migrate` profilli (tools): düz `build` onu derlemez, göç eski kodla çalışır.
+docker compose --profile tools build
 docker compose up -d db
 docker compose run --rm migrate
 docker compose up -d api
