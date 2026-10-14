@@ -6,10 +6,14 @@ Her model burada içe aktarılır ki `Base.metadata` eksiksiz olsun (alembic ve 
 from site_yonetim.domain.structure import UnitUsage
 from site_yonetim.models.audit import AuditLog
 from site_yonetim.models.cash import (
+    BankImport,
+    BankImportLine,
     CashAccount,
     CashBalance,
     CashMovement,
     Expense,
+    RecurringExpense,
+    RecurringExpenseRun,
     Refund,
     StoredFile,
 )
@@ -63,6 +67,8 @@ __all__ = [
     "AnnouncementDelivery",
     "AuditLog",
     "AuthSession",
+    "BankImport",
+    "BankImportLine",
     "Block",
     "BudgetItem",
     "BudgetPlan",
@@ -92,6 +98,8 @@ __all__ = [
     "Person",
     "Plan",
     "PropertyKind",
+    "RecurringExpense",
+    "RecurringExpenseRun",
     "Refund",
     "Request",
     "RequestEvent",

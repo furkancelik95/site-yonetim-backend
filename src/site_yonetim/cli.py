@@ -5,6 +5,7 @@ uv run python -m site_yonetim.cli purge-imports   # süresi dolan Excel aktarım
 uv run python -m site_yonetim.cli purge-login-throttle  # dolmuş giriş sayaçlarını sil (gece)
 uv run python -m site_yonetim.cli reconcile [--fix]    # özet bakiye ↔ defter mutabakatı (gece)
 uv run python -m site_yonetim.cli run-charge-schedules # otomatik aylık tahakkuk (günde bir)
+uv run python -m site_yonetim.cli run-recurring-expenses # tekrarlanan giderler (günde bir)
 """
 
 import argparse
@@ -18,7 +19,13 @@ from site_yonetim.core.logging import configure_logging
 from site_yonetim.db.session import create_engine_from_settings, create_session_factory
 from site_yonetim.domain.finance import ScheduleRunStatus
 from site_yonetim.seed.demo import DemoSeedRefusedError, ensure_demo_allowed, seed_demo
-from site_yonetim.services import charge_schedule, login_throttle, reconciliation
+from site_yonetim.services import (
+    bank_imports,
+    charge_schedule,
+    login_throttle,
+    reconciliation,
+    recurring_expenses,
+)
 from site_yonetim.services.charging import BUSINESS_TZ
 from site_yonetim.services.imports import ImportStore
 
@@ -40,11 +47,25 @@ async def _seed_demo() -> int:
 
 
 def _purge_imports() -> int:
-    """Onaylanmamış aktarımlar 6 saat sonra silinir (docs/11 §1). Yükleme sırasında da çalışır;
-    trafik yokken diski temiz tutmak için saatlik zamanlanmış iş olarak da çalıştırın."""
-    removed = ImportStore(get_settings().import_dir).purge_expired(datetime.now(UTC))
+    """Onaylanmamış aktarımlar 6 saat sonra silinir (docs/11 §1): Excel daire aktarım dosyaları
+    ve banka ekstresi önizlemeleri. Yükleme sırasında da çalışır; trafik yokken temiz tutmak için
+    saatlik zamanlanmış iş olarak da çalıştırın."""
+    settings = get_settings()
+    now = datetime.now(UTC)
+    removed = ImportStore(settings.import_dir).purge_expired(now)
     print(f"{removed} süresi dolmuş aktarım dosyası silindi.")
+    if settings.database_url is not None:
+        removed_bank = asyncio.run(_purge_bank_imports(now))
+        print(f"{removed_bank} süresi dolmuş banka ekstresi önizlemesi silindi.")
     return 0
+
+
+async def _purge_bank_imports(now: datetime) -> int:
+    engine = create_engine_from_settings(get_settings())
+    try:
+        return await bank_imports.purge_expired(create_session_factory(engine), now=now)
+    finally:
+        await engine.dispose()
 
 
 async def _purge_login_throttle() -> int:
@@ -114,6 +135,22 @@ async def _run_charge_schedules() -> int:
     return 1 if failed else 0
 
 
+async def _run_recurring_expenses() -> int:
+    """Tekrarlanan giderler (servis isteği 07); günde bir, gece. Başarısız tanım varsa 1."""
+    engine = create_engine_from_settings(get_settings())
+    now = datetime.now(UTC)
+    try:
+        results = await recurring_expenses.run_all(
+            create_session_factory(engine), today=now.astimezone(BUSINESS_TZ).date(), now=now
+        )
+    finally:
+        await engine.dispose()
+    for site_id, outcome in results:
+        print(f"{site_id} {outcome.item_id}: {outcome.status} {outcome.message or ''}".rstrip())
+    print(f"{len(results)} tekrarlanan gider işlendi.")
+    return 1 if any(o.status == "failed" for _, o in results) else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="site_yonetim.cli")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -121,6 +158,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("purge-imports", help="Süresi dolan Excel aktarım dosyalarını sil")
     sub.add_parser("purge-login-throttle", help="Penceresi dolmuş giriş sayaçlarını sil")
     sub.add_parser("run-charge-schedules", help="Otomatik aylık tahakkuku çalıştır (günde bir)")
+    sub.add_parser("run-recurring-expenses", help="Tekrarlanan giderleri yaz (günde bir)")
     reconcile = sub.add_parser("reconcile", help="Özet bakiyeleri defterle karşılaştır")
     reconcile.add_argument("--fix", action="store_true", help="Farklı siteleri onar")
     args = parser.parse_args(argv)
@@ -131,6 +169,8 @@ def main(argv: list[str] | None = None) -> int:
         return _purge_imports()
     if args.command == "purge-login-throttle":
         return asyncio.run(_purge_login_throttle())
+    if args.command == "run-recurring-expenses":
+        return asyncio.run(_run_recurring_expenses())
     if args.command == "run-charge-schedules":
         return asyncio.run(_run_charge_schedules())
     if args.command == "reconcile":

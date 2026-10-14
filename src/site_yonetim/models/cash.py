@@ -14,11 +14,14 @@ from sqlalchemy import (
     BigInteger,
     CheckConstraint,
     Date,
+    DateTime,
+    ForeignKey,
     ForeignKeyConstraint,
     Index,
     Text,
     UniqueConstraint,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from site_yonetim.db.base import Base, TenantMixin, enum_check, tenant_fk, tenant_table_args
@@ -175,3 +178,94 @@ class Refund(TenantMixin, Base):
     date: Mapped[dt.date] = mapped_column(Date)
     reason: Mapped[str] = mapped_column(Text)
     created_by_name: Mapped[str | None] = mapped_column(Text)
+
+
+# --- Banka hareketi aktarımı (servis isteği 06) ----------------------------------------
+
+
+class BankImport(TenantMixin, Base):
+    """Banka ekstresinin önizlemesi: dosya **diske yazılmaz**, okunan satırlar 6 saat burada
+    durur (`rows`). Onaylanınca satırlar silinir (kişisel veri: gönderen adları), özet kalır."""
+
+    __tablename__ = "bank_imports"
+    __table_args__ = tenant_table_args(
+        tenant_fk("cash_account_id", "cash_accounts"),
+        CheckConstraint("status IN ('pending', 'confirmed')", name="status"),
+    )
+
+    cash_account_id: Mapped[uuid.UUID]
+    file_name: Mapped[str] = mapped_column(Text)
+    uploaded_by_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
+    expires_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(Text, default="pending")
+    rows: Mapped[list[dict[str, object]]] = mapped_column(JSONB, default=list)
+    row_count: Mapped[int] = mapped_column(default=0)
+    confirmed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class BankImportLine(TenantMixin, Base):
+    """Aktarılmış banka hareketi — aynı hesaba aynı hareket ikinci kez aktarılamaz
+    (`(site, hesap, parmak izi)` benzersiz; eşzamanlı iki onayda da)."""
+
+    __tablename__ = "bank_import_lines"
+    __table_args__ = tenant_table_args(
+        tenant_fk("cash_account_id", "cash_accounts"),
+        tenant_fk("payment_id", "payments"),
+        tenant_fk("bank_import_id", "bank_imports"),
+        UniqueConstraint("site_id", "cash_account_id", "fingerprint"),
+    )
+
+    cash_account_id: Mapped[uuid.UUID]
+    fingerprint: Mapped[str] = mapped_column(Text)
+    payment_id: Mapped[uuid.UUID]
+    bank_import_id: Mapped[uuid.UUID]
+
+
+# --- Tekrarlanan gider (servis isteği 07) ----------------------------------------------
+
+
+class RecurringExpense(TenantMixin, Base):
+    """Her ay aynı gelen gider tanımı. Gece işi `day_of_month` gelince normal gider kaydı yazar.
+    Silinmez: "kaldır" arşive alır (`removed_at`), oluşmuş giderler yerinde kalır."""
+
+    __tablename__ = "recurring_expenses"
+    __table_args__ = tenant_table_args(
+        tenant_fk("expense_category_id", "expense_categories"),
+        tenant_fk("cash_account_id", "cash_accounts"),
+        CheckConstraint("amount > 0", name="amount_positive"),
+        CheckConstraint("day_of_month BETWEEN 1 AND 28", name="day_range"),
+        CheckConstraint("NOT auto_pay OR cash_account_id IS NOT NULL", name="auto_pay_account"),
+    )
+
+    description: Mapped[str] = mapped_column(Text)
+    expense_category_id: Mapped[uuid.UUID]
+    amount: Mapped[Decimal] = mapped_column(MONEY)
+    vendor: Mapped[str | None] = mapped_column(Text)
+    day_of_month: Mapped[int]
+    auto_pay: Mapped[bool] = mapped_column(default=False)
+    cash_account_id: Mapped[uuid.UUID | None]
+    is_active: Mapped[bool] = mapped_column(default=True)
+    # Etkin olduğu gün (İstanbul): daha önceki gün geriye dönük oluşturulmaz.
+    active_since: Mapped[dt.date] = mapped_column(Date)
+    removed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class RecurringExpenseRun(TenantMixin, Base):
+    """Tanımın ay başına sonucu — aynı ay ikinci gider oluşmaz (iş iki kez çalışsa da)."""
+
+    __tablename__ = "recurring_expense_runs"
+    __table_args__ = tenant_table_args(
+        tenant_fk("recurring_expense_id", "recurring_expenses"),
+        tenant_fk("expense_id", "expenses"),
+        UniqueConstraint("recurring_expense_id", "year", "month"),
+        CheckConstraint("status IN ('created', 'skipped', 'failed')", name="status"),
+        CheckConstraint("month BETWEEN 1 AND 12", name="month_range"),
+    )
+
+    recurring_expense_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    year: Mapped[int]
+    month: Mapped[int]
+    status: Mapped[str] = mapped_column(Text)
+    message: Mapped[str | None] = mapped_column(Text)
+    expense_id: Mapped[uuid.UUID | None]
+    ran_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))

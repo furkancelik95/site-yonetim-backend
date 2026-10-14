@@ -5,6 +5,7 @@ from site_yonetim.api.v1 import (
     announcements,
     audit,
     auth,
+    bank_imports,
     budget,
     cash,
     certificates,
@@ -18,6 +19,7 @@ from site_yonetim.api.v1 import (
     payments,
     platform,
     portfolio,
+    recurring_expenses,
     reports,
     requests,
     resident,
@@ -41,11 +43,13 @@ api_router.include_router(charges.router)
 api_router.include_router(charge_schedule.router)
 api_router.include_router(imports.router)
 api_router.include_router(payments.router)
+api_router.include_router(bank_imports.router)
 api_router.include_router(certificates.router)
 api_router.include_router(account_ops.router)
 api_router.include_router(requests.router)
 api_router.include_router(announcements.router)
 api_router.include_router(cash.router)
+api_router.include_router(recurring_expenses.router)
 api_router.include_router(expenses.router)
 api_router.include_router(reports.router)
 api_router.include_router(dashboard.router)
