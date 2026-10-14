@@ -64,6 +64,7 @@ class RequestEventKind(StrEnum):
     ASSIGNED = "assigned"
     COMMENT = "comment"
     RESOLVED = "resolved"
+    DEPARTMENT_CHANGED = "department_changed"
 
 
 STATUS_LABELS = {

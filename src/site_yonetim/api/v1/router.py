@@ -12,9 +12,11 @@ from site_yonetim.api.v1 import (
     charge_schedule,
     charges,
     dashboard,
+    departments,
     expenses,
     health,
     imports,
+    incidents,
     me,
     members,
     payments,
@@ -39,6 +41,7 @@ api_router.include_router(me.router)
 api_router.include_router(sites.router)
 api_router.include_router(platform.router)
 api_router.include_router(security.router)  # /units/lookup, /units/{id}'den önce
+api_router.include_router(incidents.router)
 api_router.include_router(structure.router)
 api_router.include_router(budget.router)
 api_router.include_router(charges.router)
@@ -49,6 +52,7 @@ api_router.include_router(bank_imports.router)
 api_router.include_router(certificates.router)
 api_router.include_router(account_ops.router)
 api_router.include_router(requests.router)
+api_router.include_router(departments.router)
 api_router.include_router(announcements.router)
 api_router.include_router(cash.router)
 api_router.include_router(recurring_expenses.router)

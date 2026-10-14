@@ -55,11 +55,12 @@ from site_yonetim.models.operations import (
     Announcement,
     AnnouncementDelivery,
     Request,
+    RequestDepartment,
     RequestEvent,
 )
 from site_yonetim.models.people import LedgerAccount, Person, UnitParty
 from site_yonetim.models.platform import Organization, Plan, PropertyKind, Site
-from site_yonetim.models.security import Package, Visitor
+from site_yonetim.models.security import Incident, LostItem, Package, Visitor
 from site_yonetim.models.structure import Block, Unit, UnitType
 
 __all__ = [
@@ -88,10 +89,12 @@ __all__ = [
     "Expense",
     "ExpenseCategory",
     "IdempotencyKey",
+    "Incident",
     "LateFeePolicy",
     "LedgerAccount",
     "LedgerEntry",
     "LoginThrottle",
+    "LostItem",
     "Organization",
     "OrganizationMembership",
     "Package",
@@ -108,6 +111,7 @@ __all__ = [
     "Registration",
     "RegistrationLink",
     "Request",
+    "RequestDepartment",
     "RequestEvent",
     "Site",
     "SiteFinanceSummary",

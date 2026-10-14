@@ -182,3 +182,19 @@ def test_taninmayan_sirket_rolu_erisim_vermez() -> None:
     access = _resolve(orgs=[OrganizationMembership(ORG, "Kral", True, (KENT_A,))])
 
     assert access.sites == ()  # type: ignore[attr-defined]
+
+
+def test_servis_istekleri_09_18_izinleri() -> None:
+    """Karar: Furkan, 05.10.2026 (docs/05 §2–3)."""
+    roles = ROLE_PERMISSIONS
+    assert P.SECURITY_INCIDENTS in roles[SiteRole.SECURITY]
+    assert P.SECURITY_INCIDENTS not in roles[SiteRole.AUDITOR]  # olayda kişisel veri olabilir
+    assert {P.INVENTORY_READ, P.INVENTORY_MANAGE} <= roles[SiteRole.TECHNICIAN]  # stok çıkışı
+    assert P.CONTRACTS_MANAGE in roles[SiteRole.ACCOUNTING]
+    assert P.INVENTORY_MANAGE not in roles[SiteRole.ACCOUNTING]
+    assert P.MEETINGS_READ in roles[SiteRole.AUDITOR]
+    assert P.MEETINGS_MANAGE not in roles[SiteRole.BOARD_MEMBER]
+    only_manager = {P.MEETINGS_MANAGE, P.POLLS_MANAGE, P.STAFF_MANAGE}
+    for role, perms in roles.items():
+        if role is not SiteRole.MANAGER:
+            assert not (perms & only_manager), role
