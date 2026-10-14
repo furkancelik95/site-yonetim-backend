@@ -1,0 +1,29 @@
+# İç Caddy: yalnız HTTP, dışarı açık değil; 8080 (yetkisiz süreç 80'i açamaz). TLS ve
+# güvenlik başlıkları ortak Caddy'de (deploy/edge.Caddyfile). Gerçek istemci IP'si ortak
+# Caddy'nin X-Forwarded-For başlığından.
+{
+	auto_https off
+	admin off
+	servers {
+		trusted_proxies static private_ranges
+	}
+}
+
+:8080 {
+	encode zstd gzip
+
+	# API. Gövde sınırı: Excel aktarımı ve fatura görüntüsü 5 MB (API ayrıca denetler).
+	handle /api/* {
+		request_body {
+			max_size 6MB
+		}
+		reverse_proxy api:8000
+	}
+
+	# Tek sayfa uygulaması: bilinmeyen yol index.html'e düşer.
+	handle {
+		root * /srv/web
+		try_files {path} /index.html
+		file_server
+	}
+}

@@ -1,0 +1,17 @@
+# Müdavim'in ortak Caddy'sine site yönetimi alan adını ekler. Sunucuda
+# /opt/mudavim/deploy/docker-compose.override.yml olarak durur (Docker Compose kendiliğinden
+# birleştirir; Müdavim'in kod paketi bu dosyayı ezmez). Kurulum: deploy/README.md.
+services:
+  web:
+    command: ["caddy", "run", "--config", "/etc/caddy/Combined.Caddyfile", "--adapter", "caddyfile"]
+    environment:
+      SITE_YONETIM_DOMAIN: __SITE_YONETIM_DOMAIN__ # kurulum.sh yazar
+    volumes:
+      - /opt/site-yonetim/edge/Combined.Caddyfile:/etc/caddy/Combined.Caddyfile:ro
+    networks:
+      - default
+      - edge
+
+networks:
+  edge:
+    external: true
