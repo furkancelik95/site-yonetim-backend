@@ -8,6 +8,9 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY . .
+# Demo sunucusu: giriş ekranında gösterim hesapları (Demo1234!). Gerçek kurulumda false.
+ARG VITE_SHOW_DEMO_ACCOUNTS=true
+ENV VITE_SHOW_DEMO_ACCOUNTS=$VITE_SHOW_DEMO_ACCOUNTS
 RUN npm run build
 
 FROM caddy:2
