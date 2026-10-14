@@ -437,6 +437,43 @@ Aynı transaction'da cari defterde borç (`source = refund`) ve kasada çıkış
 
 `recurring_expense_runs`: `(recurring_expense_id, year, month)` benzersiz, `status` `created` · `skipped` · `failed`, `expense_id`.
 
+### `registrations` [K] — sakin kayıt başvurusu (kişisel veri, saklama K8)
+`number` (site içinde artan, `KB-0001`), ad (`Ayşe`), soyad (`YILMAZ`), `phone` (E.164), `email?`,
+`unit_text`, `relation` (`owner` · `tenant`), `kvkk_ack_at`, `explicit_consent_at?`, `ip`,
+`status` (`pending` · `approved` · `rejected`), karar alanları, onayda `unit_id`, `person_id`.
+Aynı telefonla tek bekleyen başvuru (kısmi benzersiz indeks). Kayıt bağlantısı
+`registration_links(code benzersiz, is_enabled)`, site başına bir. `rate_limits` [G]: herkese
+açık uçların IP + uç anahtarlı sayaçları.
+
+### `incidents`, `lost_items` [K] — güvenlik olay kaydı ve kayıp eşya
+Site içinde artan `number`; silinmez, içerik değişmez. Olay: `kind`, `location`, `description`,
+`occurred_at`, `unit_id?`, `status` (`open` · `closed`) + kapanış notu. Kayıp eşya: `description`,
+`location`, `found_by`, `found_at`, `status` (`waiting` · `returned` · `disposed`), `returned_to`.
+
+### `request_departments` [K] — talep departmanı
+`name`, `name_key` (Türkçe harf duyarsız, site içinde benzersiz), `is_active`. `requests.department_id`
+(bileşik FK). Silinmez; pasif departmana yeni talep atanmaz.
+
+### Yönetim paketi [K] — toplantı, anket, sözleşme, demirbaş/stok, personel (istekler 14–18)
+- `meetings` (site içinde artan `number`, `kind`, `title`, `scheduled_at`, `location`, `status`
+  `planned` · `held` · `cancelled`, `attendance_note`, `held_at`, `cancel_reason`) ve
+  `meeting_agenda_items` (`order` toplantı içinde tekil, `result`, `decision`, `votes_*` ≥ 0).
+  Kararlar tek seferde girilir, sonra değişmez.
+- `polls` (`question`, `audience`, `ends_on`, erken kapanışta `closed_at`), `poll_options`,
+  `poll_votes(poll_id, unit_id)` **benzersiz** — bölüm başına bir oy. Oyu kimin verdiği tutulmaz;
+  oy tablosu denetim kaydına yazılmaz (gizli oy).
+- `contracts` (`end_date ≥ start_date`, `amount?` NUMERIC(18,2), `notice_days` 0–365,
+  `is_archived`). `days_left`/`state` saklanmaz, okurken hesaplanır.
+- `assets` (`sequence` site içinde tekil → `code` `DB-0001`, `status` `in_use` · `broken` ·
+  `retired`, `value?`). `stock_items` (`name_key` tekil, `quantity` NUMERIC(14,3) ≥ 0 — hareketle
+  aynı işlemde satır kilidiyle güncellenir, `min_quantity`). `stock_moves` (`direction`,
+  `quantity > 0`) **değişmez** (`forbid_history_change` tetikleyicisi).
+- `staff_members` (`full_name`, `position`, `employer` `site` · `contractor` — taşeronda
+  `contractor_name` zorunlu, `phone?`, `start_date`, `end_date?`, `shift?`). Veri minimizasyonu:
+  T.C. kimlik, maaş, adres, sağlık yok; saklama süresi K8.
+
+Hiçbiri silinmez. Hepsi (oy tablosu hariç) denetim kaydında.
+
 ### `expenses` [K] — gider
 | Sütun | Tip | Not |
 |---|---|---|

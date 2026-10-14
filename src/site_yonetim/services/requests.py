@@ -195,9 +195,12 @@ def list_query(
     category: RequestCategory | None,
     priority: RequestPriority | None,
     reporter: uuid.UUID | None,
+    department_id: uuid.UUID | None = None,
 ) -> Select[Request]:
     """Yeni talep üstte. `reporter` verilirse yalnız o kişinin talepleri (sakin)."""
     query = select(Request)
+    if department_id is not None:
+        query = query.where(Request.department_id == department_id)
     if status is not None:
         query = query.where(Request.status == status.value)
     if category is not None:

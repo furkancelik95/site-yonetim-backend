@@ -35,6 +35,15 @@ class Permission(StrEnum):
     MEMBERS_MANAGE = "members.manage"
     PORTFOLIO_READ = "portfolio.read"
     AUDIT_READ = "audit.read"
+    # Servis istekleri 09–18 (karar: Furkan, 05.10.2026)
+    SECURITY_INCIDENTS = "security.incidents"  # olay kaydı ve kayıp eşya
+    MEETINGS_READ = "meetings.read"
+    MEETINGS_MANAGE = "meetings.manage"
+    POLLS_MANAGE = "polls.manage"  # okuma: announcements.read
+    CONTRACTS_MANAGE = "contracts.manage"  # okuma: expenses.read
+    INVENTORY_READ = "inventory.read"
+    INVENTORY_MANAGE = "inventory.manage"
+    STAFF_MANAGE = "staff.manage"  # okuma: people.read
 
 
 class SiteRole(StrEnum):
@@ -71,32 +80,45 @@ ROLE_PERMISSIONS: dict[SiteRole, frozenset[Permission]] = {
             P.PEOPLE_MANAGE, P.REQUESTS_READ, P.REQUESTS_CREATE, P.REQUESTS_ASSIGN,
             P.ANNOUNCEMENTS_READ, P.ANNOUNCEMENTS_PUBLISH, P.EXPENSES_READ, P.EXPENSES_MANAGE,
             P.SECURITY_VISITORS, P.SECURITY_PACKAGES, P.MODULES_MANAGE, P.MEMBERS_MANAGE,
-            P.AUDIT_READ,
+            P.AUDIT_READ, P.SECURITY_INCIDENTS, P.MEETINGS_READ, P.MEETINGS_MANAGE,
+            P.POLLS_MANAGE, P.CONTRACTS_MANAGE, P.INVENTORY_READ, P.INVENTORY_MANAGE,
+            P.STAFF_MANAGE,
         }
     ),
     SiteRole.BOARD_MEMBER: frozenset(
         {
             P.FINANCE_READ, P.UNITS_READ, P.PEOPLE_READ, P.REQUESTS_READ, P.ANNOUNCEMENTS_READ,
-            P.EXPENSES_READ, P.FINANCE_CASH_READ, P.FINANCE_REPORTS_READ,
+            P.EXPENSES_READ, P.FINANCE_CASH_READ, P.FINANCE_REPORTS_READ, P.MEETINGS_READ,
+            P.INVENTORY_READ,
         }
     ),
     # KMK m.41 — salt okunur finans, kişisel veri görmez
     SiteRole.AUDITOR: frozenset(
-        {P.FINANCE_READ, P.EXPENSES_READ, P.AUDIT_READ, P.FINANCE_CASH_READ, P.FINANCE_REPORTS_READ}
+        {
+            P.FINANCE_READ, P.EXPENSES_READ, P.AUDIT_READ, P.FINANCE_CASH_READ,
+            P.FINANCE_REPORTS_READ, P.MEETINGS_READ,
+        }
     ),
     SiteRole.ACCOUNTING: frozenset(
         {
             P.FINANCE_READ, P.FINANCE_CHARGE_POST, P.FINANCE_PAYMENT_RECORD,
             P.FINANCE_BUDGET_MANAGE, P.EXPENSES_READ, P.EXPENSES_MANAGE, P.FINANCE_CASH_READ,
             P.FINANCE_CASH_MANAGE, P.FINANCE_REPORTS_READ, P.UNITS_READ, P.PEOPLE_READ,
+            P.CONTRACTS_MANAGE, P.INVENTORY_READ,
         }
     ),
     # Yalnızca kapıdaki iş: borç, kişi listesi, muhasebe yok
     SiteRole.SECURITY: frozenset(
-        {P.SECURITY_VISITORS, P.SECURITY_PACKAGES, P.REQUESTS_CREATE, P.ANNOUNCEMENTS_READ}
+        {
+            P.SECURITY_VISITORS, P.SECURITY_PACKAGES, P.SECURITY_INCIDENTS, P.REQUESTS_CREATE,
+            P.ANNOUNCEMENTS_READ,
+        }
     ),
     SiteRole.TECHNICIAN: frozenset(
-        {P.REQUESTS_READ, P.REQUESTS_ASSIGN, P.REQUESTS_CREATE, P.ANNOUNCEMENTS_READ}
+        {
+            P.REQUESTS_READ, P.REQUESTS_ASSIGN, P.REQUESTS_CREATE, P.ANNOUNCEMENTS_READ,
+            P.INVENTORY_READ, P.INVENTORY_MANAGE,
+        }
     ),
     # + kendi dairesine ait okuma, person_id üzerinden (docs/05 §6)
     SiteRole.RESIDENT: frozenset({P.ANNOUNCEMENTS_READ, P.REQUESTS_CREATE}),

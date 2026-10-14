@@ -92,6 +92,19 @@ AUDITED_TABLES = frozenset(
         "refunds",
         "charge_schedules",
         "recurring_expenses",
+        # operasyon
+        "incidents",
+        "lost_items",
+        "request_departments",
+        # yönetim (anket oyları gizli: poll_votes yazılmaz)
+        "meetings",
+        "meeting_agenda_items",
+        "polls",
+        "contracts",
+        "assets",
+        "stock_items",
+        "stock_moves",
+        "staff_members",
         # ayarlar
         "charge_types",
         "allocation_rules",
