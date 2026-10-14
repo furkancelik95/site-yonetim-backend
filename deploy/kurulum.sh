@@ -85,6 +85,9 @@ for _ in $(seq 1 30); do
   curl -fsS "https://$DOMAIN/api/v1/health/ready" >/dev/null 2>&1 && break
   sleep 3
 done
-curl -fsS "https://$DOMAIN/api/v1/health/ready" && echo
 docker compose ps
+if ! curl -fsS "https://$DOMAIN/api/v1/health/ready"; then
+  echo; echo "Demo açılmadı:"; docker compose logs --tail 30 web api; exit 1
+fi
+echo
 echo "Hazır: https://$DOMAIN  (demo hesapları giriş ekranında; parola Demo1234!)"

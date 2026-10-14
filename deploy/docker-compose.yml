@@ -87,6 +87,10 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    # Caddy ikili dosyası bu yetkiyle işaretli; sınırda olmazsa çekirdek çalıştırmayı reddeder.
+    # Port yine 8080 (yetkisiz); başka yetki yok.
+    cap_add:
+      - NET_BIND_SERVICE
 
 networks:
   edge:
