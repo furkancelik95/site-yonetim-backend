@@ -11,16 +11,20 @@ from site_yonetim.api.v1 import (
     certificates,
     charge_schedule,
     charges,
+    contracts,
     dashboard,
     departments,
     expenses,
     health,
     imports,
     incidents,
+    inventory,
     me,
+    meetings,
     members,
     payments,
     platform,
+    polls,
     portfolio,
     recurring_expenses,
     registrations,
@@ -29,6 +33,7 @@ from site_yonetim.api.v1 import (
     resident,
     security,
     sites,
+    staff,
     structure,
 )
 
@@ -60,8 +65,14 @@ api_router.include_router(expenses.router)
 api_router.include_router(reports.router)
 api_router.include_router(dashboard.router)
 api_router.include_router(resident.router)
+api_router.include_router(polls.resident_router)
 api_router.include_router(portfolio.router)
 api_router.include_router(audit.router)
 api_router.include_router(members.router)
 api_router.include_router(registrations.router)
 api_router.include_router(registrations.public_router)
+api_router.include_router(meetings.router)
+api_router.include_router(polls.router)
+api_router.include_router(contracts.router)
+api_router.include_router(inventory.router)
+api_router.include_router(staff.router)
