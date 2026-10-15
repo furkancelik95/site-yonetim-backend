@@ -17,3 +17,8 @@ import /etc/caddy/Caddyfile
 	}
 	reverse_proxy site-yonetim-web:8080
 }
+
+# Aynı sunucudaki diğer uygulamalar (ör. Sırdaş) kendi alan adı bloklarını
+# /opt/edge/sites/<ad>.caddy olarak bırakır. Bu dosya her kurulumda baştan yazıldığı için
+# o bloklar burada değil orada durur. Eşleşen dosya yoksa Caddy yalnız uyarı verir.
+import /etc/caddy/sites/*.caddy
