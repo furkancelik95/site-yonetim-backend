@@ -8,6 +8,8 @@ services:
       SITE_YONETIM_DOMAIN: __SITE_YONETIM_DOMAIN__ # kurulum.sh yazar
     volumes:
       - /opt/site-yonetim/edge/Combined.Caddyfile:/etc/caddy/Combined.Caddyfile:ro
+      # Diğer uygulamaların site blokları (edge.Caddyfile sonundaki import).
+      - /opt/edge/sites:/etc/caddy/sites:ro
     networks:
       - default
       - edge
