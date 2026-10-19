@@ -36,7 +36,7 @@ from site_yonetim.domain.imports.unit_validator import (
     Severity,
     UnitRow,
 )
-from site_yonetim.models.audit import AuditAction, record
+from site_yonetim.models.audit import AuditAction, bulk_operation, record
 from site_yonetim.services import imports as svc
 
 router = APIRouter(prefix="/sites/{slug}/imports/units", tags=["excel aktarımı"])
@@ -249,9 +249,11 @@ async def confirm_units(
         except ImportFileError as exc:  # pragma: no cover - yüklemede zaten doğrulandı
             raise _file_error(exc) from exc
         try:
-            outcome = await svc.apply_import(
-                ctx.session, result.rows, start_date=svc.import_start_date(today)
-            )
+            with bulk_operation():  # binlerce satır: tek "import" olayı yazılır
+                outcome = await svc.apply_import(
+                    ctx.session, result.rows, start_date=svc.import_start_date(today)
+                )
+                await ctx.session.flush()
             record(
                 ctx.session, AuditAction.IMPORT, "units", import_id,
                 {

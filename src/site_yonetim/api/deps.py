@@ -65,6 +65,8 @@ async def get_session(
         yield session
 
 
+USER_AGENT_MAX = 300
+
 SettingsDep = Annotated[Settings, Depends(get_settings_dep)]
 NowDep = Annotated[datetime, Depends(get_now)]
 
@@ -108,8 +110,18 @@ async def current_user(
     )
     user_id_var.set(str(user.id))
     # Denetim kaydında "kim": istek görevi boyunca geçerli (docs/09 §6).
-    set_actor(Actor(user.id, user.full_name, request.client.host if request.client else None))
+    set_actor(Actor(user.id, user.full_name, client_ip(request), user_agent(request)))
     return CurrentUser(user=user, session_id=claims.session_id)
+
+
+def client_ip(request: Request) -> str | None:
+    return request.client.host if request.client else None
+
+
+def user_agent(request: Request) -> str | None:
+    """Tarayıcı/cihaz bilgisi — denetim ve oturum listesi için; aşırı uzunsa kesilir."""
+    value = request.headers.get("user-agent")
+    return value[:USER_AGENT_MAX] if value else None
 
 
 # Geçici parolayla açılmış oturum: yalnız `/me` ve parola değişikliği (docs/05 §8.1).

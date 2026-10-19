@@ -19,6 +19,7 @@ from site_yonetim.domain.access import Permission
 from site_yonetim.domain.money import ZERO
 from site_yonetim.domain.reports import percent
 from site_yonetim.domain.text import format_period_tr
+from site_yonetim.models.audit import AuditAction, record
 from site_yonetim.services import exports
 from site_yonetim.services import reports as svc
 
@@ -137,6 +138,14 @@ async def income_expense_export(ctx: ReportsRead, today: TodayDep, year: Year = 
         [(c.name, c.amount, c.count, c.share) for c in report.categories],
         [(b.name, b.budgeted, b.actual, b.difference, b.usage, b.is_over) for b in report.budget],
     )
+    record(
+        ctx.session,
+        AuditAction.EXPORT,
+        "reports",
+        None,
+        {"report": "income_expense", "year": report.year},
+    )
+    await ctx.session.commit()
     return Response(
         data,
         media_type=exports.XLSX_MEDIA_TYPE,

@@ -1,6 +1,7 @@
 """Denetim kaydı — docs/09 §6. `audit.read` (Yönetici, Denetçi) görür; kayıtlar değiştirilemez.
 
 Kayıtlar otomatik yazılır (`models/audit.py`); bu uç yalnız okur. Sayfalı, yeni üstte.
+Telefon, e-posta, IBAN ve vergi no kayıtta maskelidir; açan bir yol yoktur (PLT-06).
 """
 
 import datetime as dt
@@ -15,7 +16,7 @@ from site_yonetim.api.deps import BUSINESS_TZ, SiteContext, require_permission
 from site_yonetim.api.schemas import Page, PageParams
 from site_yonetim.domain.access import Permission
 from site_yonetim.models import AuditLog
-from site_yonetim.models.audit import AuditAction
+from site_yonetim.models.audit import ActorType, AuditAction
 
 router = APIRouter(prefix="/sites/{slug}", tags=["denetim"])
 AuditRead = Annotated[SiteContext, Depends(require_permission(Permission.AUDIT_READ))]
@@ -33,6 +34,10 @@ class AuditOut(BaseModel):
     before: dict[str, Any] | None = Field(description="değişiklikte eski değerler")
     after: dict[str, Any] | None = Field(description="yeni değerler / olay ayrıntısı")
     ip: str | None
+    actor_type: ActorType = Field(description="user (kişi) · system (gece işi, demo) · delegate")
+    request_id: str | None = Field(description="isteğin kimliği (yanıttaki X-Request-ID)")
+    user_agent: str | None
+    reason: str | None = Field(description="hassas işlemlerde gerekçe")
 
 
 @router.get("/audit", summary="Denetim kaydı (yeni üstte)")
@@ -43,6 +48,7 @@ async def list_audit(
     entity_id: uuid.UUID | None = None,
     action: AuditAction | None = None,
     user_id: uuid.UUID | None = None,
+    actor_type: ActorType | None = None,
     date_from: Annotated[dt.date | None, Query(alias="from")] = None,
     date_to: Annotated[dt.date | None, Query(alias="to")] = None,
 ) -> Page[AuditOut]:
@@ -55,6 +61,8 @@ async def list_audit(
         query = query.where(AuditLog.action == action.value)
     if user_id:
         query = query.where(AuditLog.user_id == user_id)
+    if actor_type:
+        query = query.where(AuditLog.actor_type == actor_type.value)
     if date_from:
         start = dt.datetime.combine(date_from, dt.time.min, BUSINESS_TZ)
         query = query.where(AuditLog.created_at >= start)
@@ -80,6 +88,10 @@ async def list_audit(
                 before=r.before,
                 after=r.after,
                 ip=r.ip,
+                actor_type=ActorType(r.actor_type),
+                request_id=r.request_id,
+                user_agent=r.user_agent,
+                reason=r.reason,
             )
             for r in rows
         ],

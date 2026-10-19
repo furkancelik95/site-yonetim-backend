@@ -100,6 +100,13 @@ Tablo ve sütun adları `snake_case`, İngilizce. Kullanıcıya görünen etiket
 | expires_at | TIMESTAMPTZ | kayan pencere: her yenilemede `now + SESSION_HOURS` |
 | last_used_at | TIMESTAMPTZ | |
 | revoked_at | TIMESTAMPTZ NULL | çıkış / iptal |
+| ip, user_agent | TEXT NULL | oturum listesi (cihaz adı); yenilemede son adres yazılır |
+
+### `auth_events` [G] — kimlik olayı, **değişmez**
+`user_id` (bilinmeyen e-postada boş — e-posta yazılmaz), `kind` (`login_succeeded` ·
+`login_failed` · `account_locked` · `logout` · `password_changed` · `session_revoked` ·
+`token_reused`), `session_id`, `ip`, `user_agent`, `request_id`, `created_at`. Tetikleyici
+(`forbid_history_change`) güncellemeyi ve silmeyi engeller; saklama süresi K8.
 
 ---
 

@@ -4,7 +4,15 @@
 değişiklik ve silmeyi önce/sonra farkıyla kaydeder — uç noktalara elle eklenmez. Toplu içe
 aktarma ve belge indirme gibi model değişikliği olmayan olaylar `record()` ile yazılır.
 
-Kim yaptı: istek başında `set_actor` (kullanıcı, ad, IP). İstek dışı (demo, CLI) aktörsüzdür.
+Kim yaptı: istek başında `set_actor` (kullanıcı, ad, IP, tarayıcı). İstek dışı işler (gece işi)
+`ActorType.SYSTEM` ile, aktörsüz yazımlar (demo) sistem sayılır. Her satır istek kimliğini
+(`request_id` — yanıttaki `X-Request-ID`, hata gövdesindeki `error.request_id`) taşır; hassas
+işlemlerde gerekçe `audit_reason()` ya da `record(reason=…)` ile yazılır (Yazılım Dokümanı M-24).
+
+Kişisel veri: telefon, e-posta, IBAN, vergi no **maskeli** yazılır (`domain/masking.py`).
+
+Toplu işler (Excel aktarımı, demo) tek bir olay kaydı yazar; ürettikleri satırlar
+`bulk_operation()` içinde ayrıca kaydedilmez.
 
 Kayıt iş olayı düzeyindedir: tahakkuk koşusu, tahsilat, gider, kasa hareketi tek satır; koşunun
 ürettiği borç/hareket satırları (türetilmiş, değişmez) ayrıca yazılmaz.
@@ -12,6 +20,8 @@ Kayıt iş olayı düzeyindedir: tahakkuk koşusu, tahsilat, gider, kasa hareket
 
 import datetime as dt
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from decimal import Decimal
@@ -23,8 +33,10 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
+from site_yonetim.core.logging import request_id_var
 from site_yonetim.db.base import Base, TenantMixin, enum_check, tenant_table_args
 from site_yonetim.db.tenancy import TenantSession
+from site_yonetim.domain.masking import mask_value
 
 
 class AuditAction(StrEnum):
@@ -33,12 +45,20 @@ class AuditAction(StrEnum):
     DELETE = "delete"
     IMPORT = "import"
     DOWNLOAD = "download"
+    EXPORT = "export"  # dışa aktarma (Excel) — Yazılım Dokümanı M-24, PLT-07
+
+
+class ActorType(StrEnum):
+    USER = "user"  # oturum açmış kişi (herkese açık formda başvuran da: kullanıcı kimliği yok)
+    SYSTEM = "system"  # gece işi, demo kurulumu
+    DELEGATE = "delegate"  # yetki devriyle (vekâleten) — onay mekanizması
 
 
 class AuditLog(TenantMixin, Base):
     __tablename__ = "audit_log"
     __table_args__ = tenant_table_args(
         CheckConstraint(enum_check("action", AuditAction), name="action"),
+        CheckConstraint(enum_check("actor_type", ActorType), name="actor_type"),
         Index("ix_audit_log_site_created", "site_id", "created_at"),
         Index("ix_audit_log_entity", "site_id", "entity", "entity_id"),
     )
@@ -51,6 +71,10 @@ class AuditLog(TenantMixin, Base):
     before: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     after: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     ip: Mapped[str | None] = mapped_column(Text)
+    actor_type: Mapped[str] = mapped_column(Text, default=ActorType.USER.value)
+    request_id: Mapped[str | None] = mapped_column(Text)
+    user_agent: Mapped[str | None] = mapped_column(Text)
+    reason: Mapped[str | None] = mapped_column(Text)  # hassas işlemlerde gerekçe
 
 
 # --- Aktör (kim) ------------------------------------------------------------------------
@@ -61,9 +85,19 @@ class Actor:
     user_id: uuid.UUID | None
     name: str | None
     ip: str | None
+    user_agent: str | None = None
+    kind: ActorType | None = None  # boşsa: kullanıcı kimliği varsa USER, yoksa SYSTEM
+
+    @property
+    def actor_type(self) -> ActorType:
+        if self.kind is not None:
+            return self.kind
+        return ActorType.USER if self.user_id is not None else ActorType.SYSTEM
 
 
 _actor: ContextVar[Actor | None] = ContextVar("audit_actor", default=None)
+_reason: ContextVar[str | None] = ContextVar("audit_reason", default=None)
+_bulk: ContextVar[bool] = ContextVar("audit_bulk", default=False)
 
 
 def set_actor(actor: Actor | None) -> None:
@@ -72,6 +106,26 @@ def set_actor(actor: Actor | None) -> None:
 
 def current_actor() -> Actor | None:
     return _actor.get()
+
+
+@contextmanager
+def audit_reason(reason: str | None) -> Iterator[None]:
+    """Bu blokta yazılan denetim satırlarına gerekçe ekler (ör. ret, kilit açma)."""
+    token = _reason.set(reason)
+    try:
+        yield
+    finally:
+        _reason.reset(token)
+
+
+@contextmanager
+def bulk_operation() -> Iterator[None]:
+    """Toplu iş: satır bazlı otomatik kayıt yazılmaz; iş kendi özet olayını `record()` ile yazar."""
+    token = _bulk.set(True)
+    try:
+        yield
+    finally:
+        _bulk.reset(token)
 
 
 # --- Denetlenen modeller --------------------------------------------------------------
@@ -111,6 +165,13 @@ AUDITED_TABLES = frozenset(
         "allocation_components",
         "late_fee_policies",
         "site_modules",
+        # yapı ve kişiler (Yazılım Dokümanı M-24: yapı, kişi ve ilişki değişiklikleri)
+        "blocks",
+        "unit_types",
+        "units",
+        "persons",
+        "unit_parties",
+        "registration_links",
         # yetki / üyelik
         "site_memberships",
     }
@@ -131,10 +192,14 @@ def _json(value: Any) -> Any:
     return value
 
 
+def _value(column: str, value: Any) -> Any:
+    return mask_value(column, _json(value))
+
+
 def _values(obj: Any) -> dict[str, Any]:
     state = inspect(obj)
     return {
-        column.key: _json(getattr(obj, column.key))
+        column.key: _value(column.key, getattr(obj, column.key))
         for column in state.mapper.column_attrs
         if column.key not in _SKIPPED_COLUMNS
     }
@@ -149,8 +214,8 @@ def _changes(obj: Any) -> tuple[dict[str, Any], dict[str, Any]]:
             continue
         history = state.attrs[attr.key].history
         if history.has_changes():
-            before[attr.key] = _json(history.deleted[0]) if history.deleted else None
-            after[attr.key] = _json(history.added[0]) if history.added else None
+            before[attr.key] = _value(attr.key, history.deleted[0]) if history.deleted else None
+            after[attr.key] = _value(attr.key, history.added[0]) if history.added else None
     return before, after
 
 
@@ -159,6 +224,8 @@ def _audited(obj: Any) -> bool:
 
 
 def _on_after_flush(session: Session, _context: Any) -> None:
+    if _bulk.get():
+        return
     pending: list[tuple[AuditAction, Any, dict[str, Any] | None, dict[str, Any] | None]] = (
         session.info.setdefault(_PENDING, [])
     )
@@ -181,17 +248,22 @@ def _row(
     entity_id: uuid.UUID | None,
     before: dict[str, Any] | None,
     after: dict[str, Any] | None,
+    reason: str | None = None,
 ) -> dict[str, Any]:
     actor = current_actor()
     return {
         "user_id": actor.user_id if actor else None,
         "actor_name": actor.name if actor else None,
+        "actor_type": (actor.actor_type if actor else ActorType.SYSTEM).value,
         "action": action.value,
         "entity": entity,
         "entity_id": entity_id,
         "before": before,
         "after": after,
         "ip": actor.ip if actor else None,
+        "user_agent": actor.user_agent if actor else None,
+        "request_id": request_id_var.get(),
+        "reason": reason if reason is not None else _reason.get(),
     }
 
 
@@ -218,10 +290,13 @@ def record(
     entity: str,
     entity_id: uuid.UUID | None = None,
     detail: dict[str, Any] | None = None,
+    *,
+    reason: str | None = None,
 ) -> None:
-    """Model değişikliği olmayan olay (toplu aktarım, belge indirme); aynı transaction'da."""
-    after = {k: _json(v) for k, v in (detail or {}).items()}
-    session.add(AuditLog(**_row(action, entity, entity_id, None, after)))
+    """Model değişikliği olmayan olay (toplu aktarım, belge indirme, dışa aktarma); aynı
+    transaction'da. Ayrıntıdaki kişisel veri sütunları da maskelenir."""
+    after = {k: _value(k, v) for k, v in (detail or {}).items()}
+    session.add(AuditLog(**_row(action, entity, entity_id, None, after, reason)))
 
 
 event.listen(TenantSession, "after_flush", _on_after_flush)

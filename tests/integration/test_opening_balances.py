@@ -5,6 +5,7 @@ Kurgu `finance_world`: A-1 oturan hesabı (A1-O), henüz hareketi yok; bugün 20
 
 import uuid
 from decimal import Decimal
+from unittest.mock import ANY
 
 from tests.integration.finance_world import World
 from tests.integration.helpers import add_site_membership, create_user, login_headers
@@ -67,6 +68,7 @@ async def test_hesap_basina_bir_kez(world: World) -> None:
         "code": "already_exists",
         "message": "Bu hesaba devir bakiye daha önce girildi. Düzeltmek için ters kayıt kullanın.",
         "fields": None,
+        "request_id": ANY,
     }
 
 

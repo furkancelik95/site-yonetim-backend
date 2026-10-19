@@ -16,6 +16,8 @@ from site_yonetim.api.deps import (
     NowDep,
     SessionDep,
     SettingsDep,
+    client_ip,
+    user_agent,
 )
 from site_yonetim.core.config import Settings
 from site_yonetim.core.errors import ForbiddenError, UnauthorizedError
@@ -84,6 +86,10 @@ def _clear_cookie(settings: Settings, response: Response) -> None:
     )
 
 
+def _client(request: Request) -> auth_service.Client:
+    return auth_service.Client(ip=client_ip(request), user_agent=user_agent(request))
+
+
 def _check_origin(request: Request, settings: Settings) -> None:
     """Çerezle kimlik doğrulayan uçlarda CSRF savunması: tarayıcıdan gelen istek
     yalnız izinli frontend kaynağından olabilir (SameSite=Lax'a ek katman)."""
@@ -118,6 +124,7 @@ async def login(
             password=body.password,
             now=now,
             session_hours=settings.session_hours,
+            client=_client(request),
         )
     return _issue(settings, response, issued)
 
@@ -126,7 +133,11 @@ async def login(
     "/change-password", status_code=status.HTTP_204_NO_CONTENT, summary="Parolayı değiştir"
 )
 async def change_password(
-    body: ChangePasswordRequest, current: AuthenticatedUserDep, session: SessionDep, now: NowDep
+    body: ChangePasswordRequest,
+    request: Request,
+    current: AuthenticatedUserDep,
+    session: SessionDep,
+    now: NowDep,
 ) -> Response:
     """Geçici parolada zorunlu; her zaman kullanılabilir. Diğer oturumlar iptal edilir, bu
     oturum sürer. Hatalı mevcut parola hesap kilidi sayacını artırır."""
@@ -137,6 +148,7 @@ async def change_password(
         new_password=body.new_password,
         keep_session_id=current.session_id,
         now=now,
+        client=_client(request),
     )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -156,7 +168,11 @@ async def refresh(
         raise UnauthorizedError
     try:
         issued = await auth_service.refresh(
-            session, refresh_token=refresh_token, now=now, session_hours=settings.session_hours
+            session,
+            refresh_token=refresh_token,
+            now=now,
+            session_hours=settings.session_hours,
+            client=_client(request),
         )
     except UnauthorizedError:
         _clear_cookie(settings, response)
@@ -181,7 +197,13 @@ async def logout(
             session_id = decode_access_token(settings, header[7:]).session_id
         except InvalidTokenError:
             session_id = None
-    await auth_service.logout(session, now=now, session_id=session_id, refresh_token=refresh_token)
+    await auth_service.logout(
+        session,
+        now=now,
+        session_id=session_id,
+        refresh_token=refresh_token,
+        client=_client(request),
+    )
     response = Response(status_code=status.HTTP_204_NO_CONTENT)
     _clear_cookie(settings, response)
     return response

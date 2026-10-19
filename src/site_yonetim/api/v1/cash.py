@@ -29,6 +29,7 @@ from site_yonetim.domain.finance import FinanceRuleError
 from site_yonetim.domain.money import ZERO
 from site_yonetim.domain.text import format_money_tr
 from site_yonetim.models import CashAccount, CashMovement
+from site_yonetim.models.audit import AuditAction, record
 from site_yonetim.services import cash as svc
 from site_yonetim.services import exports
 
@@ -266,6 +267,9 @@ async def export_statement(
         for line in reversed(statement.lines)
     ]
     data = exports.statement_xlsx(account.name, statement.opening, statement.closing, rows)
+    detail = {"from": date_from, "to": date_to, "rows": len(rows)}
+    record(ctx.session, AuditAction.EXPORT, "cash_accounts", account.id, detail)
+    await ctx.session.commit()
     return Response(
         data,
         media_type=exports.XLSX_MEDIA_TYPE,
