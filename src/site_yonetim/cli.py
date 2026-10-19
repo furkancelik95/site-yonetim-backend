@@ -6,6 +6,7 @@ uv run python -m site_yonetim.cli purge-login-throttle  # dolmuş giriş sayaçl
 uv run python -m site_yonetim.cli reconcile [--fix]    # özet bakiye ↔ defter mutabakatı (gece)
 uv run python -m site_yonetim.cli run-charge-schedules # otomatik aylık tahakkuk (günde bir)
 uv run python -m site_yonetim.cli run-recurring-expenses # tekrarlanan giderler (günde bir)
+uv run python -m site_yonetim.cli run-approval-jobs      # onay hatırlatma/eskalasyon (saatlik)
 """
 
 import argparse
@@ -20,6 +21,7 @@ from site_yonetim.db.session import create_engine_from_settings, create_session_
 from site_yonetim.domain.finance import ScheduleRunStatus
 from site_yonetim.seed.demo import DemoSeedRefusedError, ensure_demo_allowed, seed_demo
 from site_yonetim.services import (
+    approvals,
     bank_imports,
     charge_schedule,
     login_throttle,
@@ -155,6 +157,23 @@ async def _run_recurring_expenses() -> int:
     return 1 if any(o.status == "failed" for _, o in results) else 0
 
 
+async def _run_approval_jobs() -> int:
+    """Onay hatırlatma, eskalasyon ve yetki devri başlangıç bildirimi (saatlik)."""
+    engine = create_engine_from_settings(get_settings())
+    now = datetime.now(UTC)
+    try:
+        results = await approvals.run_all_timers(
+            create_session_factory(engine), now=now, today=now.astimezone(BUSINESS_TZ).date()
+        )
+    finally:
+        await engine.dispose()
+    for site_id, r in results:
+        print(f"{site_id}: hatırlatma {r.reminded}, eskalasyon {r.escalated}, "
+              f"devir {r.delegations_started}")  # fmt: skip
+    print(f"{len(results)} sitede onay zamanlayıcısı çalıştı.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="site_yonetim.cli")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -163,6 +182,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("purge-login-throttle", help="Penceresi dolmuş giriş sayaçlarını sil")
     sub.add_parser("run-charge-schedules", help="Otomatik aylık tahakkuku çalıştır (günde bir)")
     sub.add_parser("run-recurring-expenses", help="Tekrarlanan giderleri yaz (günde bir)")
+    sub.add_parser("run-approval-jobs", help="Onay hatırlatma ve eskalasyonu (saatlik)")
     reconcile = sub.add_parser("reconcile", help="Özet bakiyeleri defterle karşılaştır")
     reconcile.add_argument("--fix", action="store_true", help="Farklı siteleri onar")
     args = parser.parse_args(argv)
@@ -173,6 +193,8 @@ def main(argv: list[str] | None = None) -> int:
         return _purge_imports()
     if args.command == "purge-login-throttle":
         return asyncio.run(_purge_login_throttle())
+    if args.command == "run-approval-jobs":
+        return asyncio.run(_run_approval_jobs())
     if args.command == "run-recurring-expenses":
         return asyncio.run(_run_recurring_expenses())
     if args.command == "run-charge-schedules":
