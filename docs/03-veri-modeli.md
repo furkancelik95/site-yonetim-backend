@@ -481,6 +481,13 @@ Site içinde artan `number`; silinmez, içerik değişmez. Olay: `kind`, `locati
 
 Hiçbiri silinmez. Hepsi (oy tablosu hariç) denetim kaydında.
 
+### Bildirim [K/G] — bildirim merkezi (Yazılım Dokümanı PLT-05)
+- `notifications` [K]: `user_id`, `category`, `kind`, `title`, `body`, `link_entity`, `link_id`,
+  `dedupe_key`, `read_at`. `(site_id, user_id, dedupe_key)` benzersiz — aynı olay aynı kişiye bir kez.
+- `notification_preferences` [G]: `user_id × category × channel → enabled`; yalnız varsayılandan
+  farklı hücre saklanır (`domain/notifications.py`).
+- `push_tokens` [G]: `token` benzersiz, `platform` (`ios` · `android` · `web`), `last_seen_at`.
+
 ### `expenses` [K] — gider
 | Sütun | Tip | Not |
 |---|---|---|
