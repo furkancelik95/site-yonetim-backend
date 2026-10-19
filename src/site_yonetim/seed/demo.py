@@ -62,6 +62,7 @@ from site_yonetim.models import (
     UnitType,
     User,
 )
+from site_yonetim.models.audit import bulk_operation
 from site_yonetim.seed.demo_data import (
     ACCOUNTS,
     ANNOUNCEMENTS,
@@ -123,7 +124,15 @@ async def seed_demo(
     """Demo verisini yükler. Yüklediyse True, zaten varsa False döner.
 
     Tahakkuklar `today`'e göre son 6 ay için kesilir (varsayılan: Türkiye saatiyle bugün).
+    Toplu iş: binlerce satır denetim kaydına tek tek yazılmaz (`bulk_operation`).
     """
+    with bulk_operation():
+        return await _seed_demo(settings, factory, today=today)
+
+
+async def _seed_demo(
+    settings: Settings, factory: async_sessionmaker[AsyncSession], *, today: date | None
+) -> bool:
     ensure_demo_allowed(settings)
     today = today or datetime.now(BUSINESS_TZ).date()
 

@@ -131,8 +131,10 @@ async def test_aktarim_ve_belge_indirme_kaydedilir(world: World, tmp_path: Path)
     assert (imported["entity"], imported["entity_id"]) == ("units", import_id)
     assert isinstance(imported["after"], dict)
     assert imported["after"]["created_units"] == 2
-    # aktarımın açtığı bölümler tek tek değil, tek olay olarak yazılır
-    assert await items(world, entity="units", action="create") == []
+    # aktarımın açtığı bölümler tek tek değil, tek olay olarak yazılır (kalan tek satır kurgunun
+    # API'den açtığı A-1; bölümler de artık denetlenir)
+    [only] = await items(world, entity="units", action="create")
+    assert only["entity_id"] == world.unit_id
 
     category = world.lookups["category"]
     expense = await world.api.post(
@@ -214,3 +216,56 @@ async def test_filtreler_ve_sayfalama(world: World) -> None:
     assert (await audit(world, user_id=str(uuid.uuid4())))["total"] == 0
     bad = await world.api.get(world.url("/audit"), headers=world.headers, params={"action": "x"})
     assert bad.status_code == 422
+
+
+async def test_yapi_ve_kisi_degisikligi_maskeli_yazilir(world: World) -> None:
+    """Yazılım Dokümanı M-24 ve PLT-06: yapı, kişi ve ilişki değişiklikleri denetlenir;
+    telefon ve e-posta maskelidir. İstek kimliği yanıttaki `X-Request-ID` ile aynıdır."""
+    added = await world.post(
+        f"/units/{world.unit_id}/parties",
+        {
+            "role": "tenant",
+            "start_date": "2026-01-01",
+            "person": {
+                "first_name": "Mehmet",
+                "last_name": "Kaya",
+                "phone": "0532 123 45 67",
+                "email": "Mehmet.Kaya@ornek.com",
+            },
+        },
+    )
+    assert added.status_code == 201, added.text
+    [person] = [
+        p for p in await items(world, entity="persons") if p["after"]["first_name"] == "Mehmet"
+    ]
+    assert (person["after"]["phone"], person["after"]["email"]) == (
+        "+90******4567",
+        "m***@ornek.com",
+    )
+    assert person["actor_type"] == "user"
+    assert person["request_id"] == added.headers["X-Request-ID"]
+    assert person["user_agent"]
+    parties = await items(world, entity="unit_parties", action="create")
+    assert len(parties) == 2  # fixture'daki malik + bu kiracı
+    assert {r["entity"] for r in await items(world, action="create")} >= {"blocks", "units"}
+
+
+async def test_disa_aktarma_kaydedilir(world: World) -> None:
+    exported = await world.get("/expenses/export.xlsx", params={"year": 2026})
+    assert exported.status_code == 200
+    [row] = await items(world, action="export")
+    assert row["entity"] == "expenses"
+    assert row["after"] == {"year": 2026, "category_id": None, "paid": "all", "rows": 0}
+    report = await world.get("/reports/income-expense/export.xlsx", params={"year": 2026})
+    assert report.status_code == 200
+    assert len(await items(world, action="export")) == 2
+
+
+async def test_aktor_tipi_suzgeci(world: World) -> None:
+    system = await items(world, actor_type="system")
+    assert system  # site açılışının kurduğu varsayılanlar (ör. gider türleri) sistemdir
+    assert {r["actor_type"] for r in system} == {"system"}
+    assert all(r["user_id"] is None for r in system)
+    people = await items(world, actor_type="user")
+    assert people
+    assert {r["actor_name"] for r in people} == {"Kerem YILDIRIM"}

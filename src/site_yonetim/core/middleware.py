@@ -108,9 +108,11 @@ class _BodyTooLargeError(HTTPException):
         super().__init__(status_code=413)
 
 
-_TOO_LARGE_BODY = json.dumps(
-    error_body("payload_too_large", "Gönderilen veri çok büyük."), ensure_ascii=False
-).encode()
+def _too_large_body() -> bytes:
+    # Her istekte üretilir: gövde o isteğin `request_id`'sini taşır.
+    return json.dumps(
+        error_body("payload_too_large", "Gönderilen veri çok büyük."), ensure_ascii=False
+    ).encode()
 
 
 class BodySizeLimitMiddleware:
@@ -175,18 +177,19 @@ class BodySizeLimitMiddleware:
 
 
 async def _send_too_large(send: Send) -> None:
+    body = _too_large_body()
     await send(
         {
             "type": "http.response.start",
             "status": 413,
             "headers": [
                 (b"content-type", b"application/json"),
-                (b"content-length", str(len(_TOO_LARGE_BODY)).encode()),
+                (b"content-length", str(len(body)).encode()),
                 (b"connection", b"close"),
             ],
         }
     )
-    await send({"type": "http.response.body", "body": _TOO_LARGE_BODY})
+    await send({"type": "http.response.body", "body": body})
 
 
 def _header(scope: Scope, name: str) -> str | None:

@@ -111,25 +111,38 @@ ziyaretçi bilgisi, borç bilgisi.
 Referans uygulamada ayrı bir denetim tablosu yok (değişmez defter ve ters kayıt zinciri var).
 Yeni backend'de baştan olmalı:
 
-`audit_log(id, site_id, user_id, action, entity, entity_id, before JSONB, after JSONB, ip, at)`
+`audit_log(id, site_id, user_id, actor_name, actor_type, action, entity, entity_id, before JSONB,
+after JSONB, ip, user_agent, request_id, reason, at)`
 
 - Kaydedilecekler: her finansal işlem, yetki/üyelik değişikliği, modül aç/kapa, ayar değişikliği,
   toplu içe aktarma, dosya indirme (kişisel veri içeriyorsa).
 - Tek bir yerden yazılsın (SQLAlchemy olayı / servis katmanı ortak fonksiyonu) — her uç noktaya
   elle eklenmesin.
 - `audit.read` izni olan görür (Yönetici, Denetçi). Kayıt değiştirilemez ve silinemez.
+- Kişisel veri: telefon, e-posta, IBAN ve vergi no **maskeli** yazılır (`+90******4567`,
+  `a***@ornek.com`; `domain/masking.py`). Maskeyi açan bir yol yoktur — denetim ekranı kişisel
+  veri ifşası için kullanılamaz (Yazılım Dokümanı PLT-06). İşlemi yapanın IP'si açıktır.
 
 **Uygulama** (`models/audit.py`, göç 0012, uç `GET /sites/{slug}/audit` — `06` §2.15):
 - Oturum olayı (`after_flush`): denetlenen tablolardaki (`AUDITED_TABLES`: tahakkuk koşusu,
   tahsilat, gider, kasa hesabı/hareketi, bütçe planı/kalemi, dönem, borç türü, dağıtım kuralı,
-  gecikme politikası, modül, site üyeliği) her ekleme/değişiklik/silme **aynı flush ve aynı
+  gecikme politikası, modül, site üyeliği; **19.10.2026'dan beri** blok, bölüm tipi, bölüm,
+  kişi, bölüm–kişi ilişkisi ve kayıt bağlantısı) her ekleme/değişiklik/silme **aynı flush ve aynı
   transaction'da** yazılır — işlem geri alınırsa kaydı da geri alınır. Güncellemede yalnız
   değişen alanlar (`before`/`after`).
 - İş olayı düzeyinde: koşunun ürettiği borç/defter satırları (türetilmiş, zaten değişmez)
-  ayrıca yazılmaz. Toplu aktarım (`import`) ve belge indirme (`download`) model değişikliği
-  olmadığı için `record()` ile tek satır.
-- Kim: istekte `current_user` aktörü (kullanıcı, ad, IP) bağlama koyar; istek dışı (demo, CLI)
-  `user_id` boş.
+  ayrıca yazılmaz. Toplu aktarım (`import`), belge indirme (`download`) ve Excel dışa
+  aktarma (`export`) model değişikliği olmadığı için `record()` ile tek satır. Toplu işler
+  (Excel aktarımı, demo kurulumu) `bulk_operation()` içinde çalışır: ürettikleri yüzlerce
+  satır ayrıca yazılmaz, yalnız özet olay.
+- Kim: istekte `current_user` aktörü (kullanıcı, ad, IP, tarayıcı) bağlama koyar.
+  `actor_type`: `user` · `system` (gece işi, demo; `user_id` boş) · `delegate` (yetki devriyle,
+  onay mekanizması). Her satır isteğin `request_id`'sini taşır (hata gövdesindeki ve
+  `X-Request-ID` başlığındaki kimlik). Hassas işlemde gerekçe: `audit_reason()` / `record(reason=)`.
+- **Kimlik olayları** siteye değil kullanıcıya ait olduğu için ayrı, değişmez `auth_events`
+  tablosunda (göç 0022): giriş, başarısız giriş (bilinmeyen e-postada e-posta yazılmaz, yalnız
+  IP), hesap kilidi, çıkış, parola değişikliği, oturum kapatma, yenileme jetonu tekrarı.
+  Kullanıcı kendi geçmişini `GET /me/security-events` ile görür. Saklama süresi K8.
 - Değişmezlik: `audit_log_immutable` tetikleyicisi (`forbid_history_change`), RLS ile site
   izolasyonu.
 - IP, uygulamaya gelen bağlantının adresidir; ters vekil arkasında doğru istemci adresi için

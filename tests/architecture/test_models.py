@@ -19,6 +19,7 @@ GLOBAL_TABLES = {
     "users",
     "organization_memberships",
     "auth_sessions",  # oturum kullanıcıya aittir, siteye değil
+    "auth_events",  # giriş/çıkış olayı: kullanıcıya aittir, site bağlamından önce
     "login_throttle",  # IP bazlı giriş hız sınırı; giriş site bağlamından önce
     "rate_limits",  # herkese açık uçların istek sınırı; site bağlamından önce
 }

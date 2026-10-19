@@ -1,7 +1,8 @@
 """Tek hata biçimi (docs/06-api-sozlesmesi.md §1.4).
 
 Her hata şu gövdeyi döner:
-    {"error": {"code": "...", "message": "Türkçe mesaj", "fields": {...} | null}}
+    {"error": {"code": "...", "message": "Türkçe mesaj", "fields": {...} | null,
+               "request_id": "…"}}
 
 Yığın izi (stack trace) yanıta asla girmez; ayrıntı yalnız sunucu logunda.
 """
@@ -14,6 +15,8 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from site_yonetim.core.logging import request_id_var
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +120,16 @@ _VALIDATION_FALLBACK = "Geçersiz değer."
 
 
 def error_body(code: str, message: str, fields: dict[str, str] | None = None) -> dict[str, Any]:
-    return {"error": {"code": code, "message": message, "fields": fields}}
+    """`request_id`: yanıttaki `X-Request-ID` ile aynı; kullanıcı hatayı bildirirken gösterir,
+    destek bu kimlikle log ve denetim kaydını bulur (Yazılım Dokümanı §4.3 korelasyon kimliği)."""
+    return {
+        "error": {
+            "code": code,
+            "message": message,
+            "fields": fields,
+            "request_id": request_id_var.get(),
+        }
+    }
 
 
 def _validation_message(error: dict[str, Any]) -> str:

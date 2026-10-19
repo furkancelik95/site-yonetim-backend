@@ -41,6 +41,8 @@ from site_yonetim.models.finance import (
     UnitWeight,
 )
 from site_yonetim.models.identity import (
+    AuthEvent,
+    AuthEventKind,
     AuthSession,
     LoginThrottle,
     OrganizationMembership,
@@ -83,6 +85,8 @@ __all__ = [
     "AnnouncementDelivery",
     "Asset",
     "AuditLog",
+    "AuthEvent",
+    "AuthEventKind",
     "AuthSession",
     "BankImport",
     "BankImportLine",

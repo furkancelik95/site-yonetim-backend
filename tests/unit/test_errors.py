@@ -47,7 +47,7 @@ def error_client(app: FastAPI) -> TestClient:
 def _error(body: Any) -> dict[str, Any]:
     assert set(body) == {"error"}
     error: dict[str, Any] = body["error"]
-    assert set(error) == {"code", "message", "fields"}
+    assert set(error) == {"code", "message", "fields", "request_id"}
     return error
 
 

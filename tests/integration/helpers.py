@@ -1,6 +1,7 @@
 """Entegrasyon testlerinin kimlik yardımcıları (conftest de dışa aktarır)."""
 
 import uuid
+from typing import Any
 
 import httpx2
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -46,3 +47,9 @@ async def login_headers(
     response = await client.post("/api/v1/auth/login", json={"email": email, "password": password})
     assert response.status_code == 200, response.text
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+
+def without_request_id(body: dict[str, Any]) -> dict[str, Any]:
+    """Hata gövdesi her istekte farklı `request_id` taşır; karşılaştırmada atılır."""
+    error = {k: v for k, v in body["error"].items() if k != "request_id"}
+    return {**body, "error": error}

@@ -197,6 +197,9 @@ async def export_expenses(
         ]
     )
     name = f"giderler-{year}.xlsx" if year else "giderler.xlsx"
+    filters = {"year": year, "category_id": category_id, "paid": paid, "rows": len(rows)}
+    record(session, AuditAction.EXPORT, "expenses", None, filters)  # M-24: dışa aktarma
+    await session.commit()
     return Response(
         data,
         media_type=exports.XLSX_MEDIA_TYPE,

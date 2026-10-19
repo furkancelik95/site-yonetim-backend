@@ -12,6 +12,7 @@ from site_yonetim.api.deps import get_now
 from site_yonetim.core.security import create_access_token
 from site_yonetim.models import AuthSession, User
 from tests.integration.conftest import DEFAULT_PASSWORD, create_user, login_headers
+from tests.integration.helpers import without_request_id
 
 Factory = async_sessionmaker[AsyncSession]
 LOGIN = "/api/v1/auth/login"
@@ -65,7 +66,7 @@ async def test_yanlis_parola_ve_bilinmeyen_eposta_ayni_yanit(
     unknown_email = await _login(api, DEFAULT_PASSWORD, email="kimse@test.local")
 
     assert wrong_password.status_code == unknown_email.status_code == 401
-    assert wrong_password.json() == unknown_email.json()
+    assert without_request_id(wrong_password.json()) == without_request_id(unknown_email.json())
     assert wrong_password.json()["error"]["message"] == "E-posta veya parola hatalı."
     assert "set-cookie" not in wrong_password.headers
 

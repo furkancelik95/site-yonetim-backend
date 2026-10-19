@@ -22,6 +22,7 @@ from tests.integration.conftest import (
     create_user,
     login_headers,
 )
+from tests.integration.helpers import without_request_id
 
 Factory = async_sessionmaker[AsyncSession]
 
@@ -100,7 +101,7 @@ async def test_8_5_erisimi_olmayan_site_404_403_degil(
     missing = await api.get("/api/v1/sites/olmayan-site/_finance", headers=ayse)
 
     assert no_access.status_code == 404
-    assert no_access.json() == missing.json()  # varlık sızmaz
+    assert without_request_id(no_access.json()) == without_request_id(missing.json())  # sızmaz
 
 
 async def test_kimliksiz_site_ucu_401(api: httpx2.AsyncClient, probes: FastAPI) -> None:
