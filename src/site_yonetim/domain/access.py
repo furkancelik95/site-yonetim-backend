@@ -44,6 +44,9 @@ class Permission(StrEnum):
     INVENTORY_READ = "inventory.read"
     INVENTORY_MANAGE = "inventory.manage"
     STAFF_MANAGE = "staff.manage"  # okuma: people.read
+    # Onay mekanizması (Yazılım Dokümanı ONY-01; karar vermek atamaya bağlı, izin istemez)
+    APPROVAL_RULES_READ = "approvals.rules.read"
+    APPROVAL_RULES_MANAGE = "approvals.rules.manage"  # + tüm talepleri görür (gözetim)
 
 
 class SiteRole(StrEnum):
@@ -82,14 +85,14 @@ ROLE_PERMISSIONS: dict[SiteRole, frozenset[Permission]] = {
             P.SECURITY_VISITORS, P.SECURITY_PACKAGES, P.MODULES_MANAGE, P.MEMBERS_MANAGE,
             P.AUDIT_READ, P.SECURITY_INCIDENTS, P.MEETINGS_READ, P.MEETINGS_MANAGE,
             P.POLLS_MANAGE, P.CONTRACTS_MANAGE, P.INVENTORY_READ, P.INVENTORY_MANAGE,
-            P.STAFF_MANAGE,
+            P.STAFF_MANAGE, P.APPROVAL_RULES_READ, P.APPROVAL_RULES_MANAGE,
         }
     ),
     SiteRole.BOARD_MEMBER: frozenset(
         {
             P.FINANCE_READ, P.UNITS_READ, P.PEOPLE_READ, P.REQUESTS_READ, P.ANNOUNCEMENTS_READ,
             P.EXPENSES_READ, P.FINANCE_CASH_READ, P.FINANCE_REPORTS_READ, P.MEETINGS_READ,
-            P.INVENTORY_READ,
+            P.INVENTORY_READ, P.APPROVAL_RULES_READ,
         }
     ),
     # KMK m.41 — salt okunur finans, kişisel veri görmez

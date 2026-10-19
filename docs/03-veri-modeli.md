@@ -488,6 +488,20 @@ Hiçbiri silinmez. Hepsi (oy tablosu hariç) denetim kaydında.
   farklı hücre saklanır (`domain/notifications.py`).
 - `push_tokens` [G]: `token` benzersiz, `platform` (`ios` · `android` · `web`), `last_seen_at`.
 
+### Onay mekanizması [K] (Yazılım Dokümanı Bölüm 6)
+- `approval_rules`: `action_type`, `is_active`, `is_template`, `current_version`.
+- `approval_rule_versions` **değişmez**: `amount_min` (hariç) / `amount_max` (dahil), `source`,
+  `mode`, `reject_behavior`, `remind_after_days`, `escalate_after_days`, `day_basis`,
+  `escalation_role`, `effective_from`, `steps` JSONB, `basis_note`.
+- `approval_requests`: `number` (site içinde artan), `action_type`, `subject_type/id`, `title`,
+  `summary`/`payload` JSONB, `amount`, `requested_by`, `rule_version_id` (boş = varsayılan),
+  `snapshot` (kuralın donmuş kopyası + adım başına M/N), `status`, `revision`, `current_step`,
+  `step_started_at`, `reminded_at`, `escalated_at`, `decided_at`, `failure_reason`.
+- `approval_assignments`: adım açılırken çözülen onaycılar (`source`: rule · escalation).
+- `approval_decisions` **değişmez**: kararı veren, `slot_user_id` (kimin hakkı), vekâleten asıl
+  onaycı adı, `decision`, `comment`; `(talep, sürüm, karar veren)` ve `(talep, sürüm, hak)` tekil.
+- `approval_delegations`: devreden/devralan, `roles[]`, `starts_at`–`ends_at`, `ended_at`.
+
 ### `expenses` [K] — gider
 | Sütun | Tip | Not |
 |---|---|---|

@@ -4,6 +4,14 @@ Her model burada içe aktarılır ki `Base.metadata` eksiksiz olsun (alembic ve 
 """
 
 from site_yonetim.domain.structure import UnitUsage
+from site_yonetim.models.approvals import (
+    ApprovalAssignment,
+    ApprovalDecision,
+    ApprovalDelegation,
+    ApprovalRequest,
+    ApprovalRule,
+    ApprovalRuleVersion,
+)
 from site_yonetim.models.audit import AuditLog
 from site_yonetim.models.cash import (
     BankImport,
@@ -84,6 +92,12 @@ __all__ = [
     "AllocationRule",
     "Announcement",
     "AnnouncementDelivery",
+    "ApprovalAssignment",
+    "ApprovalDecision",
+    "ApprovalDelegation",
+    "ApprovalRequest",
+    "ApprovalRule",
+    "ApprovalRuleVersion",
     "Asset",
     "AuditLog",
     "AuthEvent",

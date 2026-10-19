@@ -172,6 +172,12 @@ AUDITED_TABLES = frozenset(
         "persons",
         "unit_parties",
         "registration_links",
+        # onay mekanizması (kararlar değişmez; vekâleten karar `delegate` aktörüyle)
+        "approval_rules",
+        "approval_rule_versions",
+        "approval_requests",
+        "approval_decisions",
+        "approval_delegations",
         # yetki / üyelik
         "site_memberships",
     }
