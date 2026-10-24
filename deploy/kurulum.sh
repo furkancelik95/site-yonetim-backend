@@ -63,11 +63,13 @@ docker compose up -d --force-recreate web  # Caddyfile yeni kod klasöründen
 
 # 5) Ortak Caddy'ye alan adını ekle — yalnız birleşik yapılandırma geçerliyse. Yapılandırma
 #    kod klasörünün dışında, sabit yerde ve yerinde güncellenir (bağlı dosya kopmasın).
+mkdir -p /opt/edge/sites  # diğer uygulamaların blokları; doğrulamaya onlar da girer
 MUDAVIM_DOMAIN=$(grep -E '^DOMAIN=' "$MUDAVIM/.env" | cut -d= -f2-)
 MUDAVIM_EMAIL=$(grep -E '^ACME_EMAIL=' "$MUDAVIM/.env" | cut -d= -f2-)
 docker run --rm --network none \
   -e DOMAIN="$MUDAVIM_DOMAIN" -e ACME_EMAIL="$MUDAVIM_EMAIL" -e SITE_YONETIM_DOMAIN="$DOMAIN" \
   -v "$DIR/backend/deploy/edge.Caddyfile:/etc/caddy/Combined.Caddyfile:ro" \
+  -v /opt/edge/sites:/etc/caddy/sites:ro \
   restoran-panel-web caddy validate --config /etc/caddy/Combined.Caddyfile --adapter caddyfile
 mkdir -p "$DIR/edge"
 cat "$DIR/backend/deploy/edge.Caddyfile" >"$DIR/edge/Combined.Caddyfile"

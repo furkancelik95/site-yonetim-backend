@@ -6,6 +6,8 @@ Güvenlik notları:
 - Yenileme jetonu her kullanımda döner; eski jetonun tekrar gelmesi çalınma belirtisidir →
   oturum iptal edilir.
 - Çıkış anında etkilidir: her istekte oturumun iptal edilmediği kontrol edilir.
+- Her giriş, başarısız giriş, kilit, çıkış, parola değişikliği ve jeton tekrarı `auth_events`'e
+  yazılır (değişmez; bilinmeyen e-postada e-posta yazılmaz).
 """
 
 import logging
@@ -18,6 +20,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from site_yonetim.core.errors import ApiError, UnauthorizedError
+from site_yonetim.core.logging import request_id_var
 from site_yonetim.core.security import (
     hash_password,
     hash_refresh_token,
@@ -26,7 +29,7 @@ from site_yonetim.core.security import (
     verify_password,
 )
 from site_yonetim.domain.login import LoginState, normalize_email, password_problem
-from site_yonetim.models import AuthSession, User
+from site_yonetim.models import AuthEvent, AuthEventKind, AuthSession, User
 
 logger = logging.getLogger(__name__)
 
@@ -70,40 +73,91 @@ class SessionExpiredError(UnauthorizedError):
 
 
 @dataclass(frozen=True, slots=True)
+class Client:
+    """İsteğin geldiği yer: oturum listesi ve kimlik olayı için (Yazılım Dokümanı PLT-10, M-24)."""
+
+    ip: str | None = None
+    user_agent: str | None = None
+
+
+NO_CLIENT = Client()
+
+
+def _event(
+    session: AsyncSession,
+    kind: AuthEventKind,
+    client: Client,
+    *,
+    user_id: uuid.UUID | None = None,
+    session_id: uuid.UUID | None = None,
+) -> None:
+    """Kimlik olayını aynı transaction'a ekler; çağıran commit eder."""
+    session.add(
+        AuthEvent(
+            user_id=user_id,
+            kind=kind.value,
+            session_id=session_id,
+            ip=client.ip,
+            user_agent=client.user_agent,
+            request_id=request_id_var.get(),
+        )
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class IssuedSession:
     user: User
     auth_session: AuthSession
     refresh_token: str  # yalnız çereze yazılır; saklanmaz, loglanmaz
 
 
-def _new_auth_session(user: User, token: str, now: datetime, hours: int) -> AuthSession:
+def _new_auth_session(
+    user: User, token: str, now: datetime, hours: int, client: Client
+) -> AuthSession:
     return AuthSession(
+        id=uuid.uuid7(),
         user_id=user.id,
         token_hash=hash_refresh_token(token),
         expires_at=now + timedelta(hours=hours),
         last_used_at=now,
+        ip=client.ip,
+        user_agent=client.user_agent,
     )
 
 
 async def login(
-    session: AsyncSession, *, email: str, password: str, now: datetime, session_hours: int
+    session: AsyncSession,
+    *,
+    email: str,
+    password: str,
+    now: datetime,
+    session_hours: int,
+    client: Client = NO_CLIENT,
 ) -> IssuedSession:
     user = await session.scalar(
         select(User).where(User.email == normalize_email(email)).with_for_update()
     )
     password_ok = verify_password(user.password_hash if user else None, password)
     if user is None:
+        _event(session, AuthEventKind.LOGIN_FAILED, client)  # e-posta yazılmaz
+        await session.commit()
         raise InvalidCredentialsError
 
+    user_id = user.id  # rollback sonrası nesne süresi dolar; kimlik önceden alınır
     state = LoginState(user.failed_login_count, user.locked_until)
     if state.is_locked(now):
         await session.rollback()
+        _event(session, AuthEventKind.LOGIN_FAILED, client, user_id=user_id)
+        await session.commit()
         raise AccountLockedError
 
     if not password_ok:
         new_state = state.after_failure(now)
         user.failed_login_count = new_state.failed_count
         user.locked_until = new_state.locked_until
+        _event(session, AuthEventKind.LOGIN_FAILED, client, user_id=user.id)
+        if new_state.is_locked(now):
+            _event(session, AuthEventKind.ACCOUNT_LOCKED, client, user_id=user.id)
         await session.commit()
         if new_state.is_locked(now):
             logger.warning("Hesap kilitlendi: user_id=%s", user.id)
@@ -113,6 +167,8 @@ async def login(
     if not user.is_active:
         # Pasif hesap: parola doğru olsa da aynı genel yanıt (hesap durumu sızmasın).
         await session.rollback()
+        _event(session, AuthEventKind.LOGIN_FAILED, client, user_id=user_id)
+        await session.commit()
         raise InvalidCredentialsError
 
     success = LoginState.after_success()
@@ -123,14 +179,26 @@ async def login(
         user.password_hash = hash_password(password)
 
     token = new_refresh_token()
-    auth_session = _new_auth_session(user, token, now, session_hours)
+    auth_session = _new_auth_session(user, token, now, session_hours, client)
     session.add(auth_session)
+    _event(
+        session,
+        AuthEventKind.LOGIN_SUCCEEDED,
+        client,
+        user_id=user.id,
+        session_id=auth_session.id,
+    )
     await session.commit()
     return IssuedSession(user, auth_session, token)
 
 
 async def refresh(
-    session: AsyncSession, *, refresh_token: str, now: datetime, session_hours: int
+    session: AsyncSession,
+    *,
+    refresh_token: str,
+    now: datetime,
+    session_hours: int,
+    client: Client = NO_CLIENT,
 ) -> IssuedSession:
     token_hash = hash_refresh_token(refresh_token)
     auth_session = await session.scalar(
@@ -144,6 +212,13 @@ async def refresh(
         )
         if reused is not None and reused.revoked_at is None:
             reused.revoked_at = now
+            _event(
+                session,
+                AuthEventKind.TOKEN_REUSED,
+                client,
+                user_id=reused.user_id,
+                session_id=reused.id,
+            )
             await session.commit()
             logger.warning("Eski yenileme jetonu tekrar kullanıldı; oturum iptal: %s", reused.id)
         raise SessionExpiredError
@@ -159,6 +234,10 @@ async def refresh(
     auth_session.token_hash = hash_refresh_token(token)
     auth_session.last_used_at = now
     auth_session.expires_at = now + timedelta(hours=session_hours)  # kayan pencere
+    if client.ip is not None:
+        auth_session.ip = client.ip  # cihaz ağ değiştirmiş olabilir: listede son adres
+    if client.user_agent is not None:
+        auth_session.user_agent = client.user_agent
     await session.commit()
     return IssuedSession(user, auth_session, token)
 
@@ -169,6 +248,7 @@ async def logout(
     now: datetime,
     session_id: uuid.UUID | None = None,
     refresh_token: str | None = None,
+    client: Client = NO_CLIENT,
 ) -> None:
     """Oturumu iptal eder. Oturum bulunamazsa sessizce geçer (çıkış her zaman başarılıdır)."""
     query = select(AuthSession).with_for_update()
@@ -181,6 +261,13 @@ async def logout(
     auth_session = await session.scalar(query)
     if auth_session is not None and auth_session.revoked_at is None:
         auth_session.revoked_at = now
+        _event(
+            session,
+            AuthEventKind.LOGOUT,
+            client,
+            user_id=auth_session.user_id,
+            session_id=auth_session.id,
+        )
         await session.commit()
 
 
@@ -210,6 +297,7 @@ async def change_password(
     new_password: str,
     keep_session_id: uuid.UUID,
     now: datetime,
+    client: Client = NO_CLIENT,
 ) -> None:
     """Parola değişikliği: mevcut parola doğrulanır (hesap kilidi kuralı burada da işler).
 
@@ -257,5 +345,95 @@ async def change_password(
         )
         .values(revoked_at=now)
     )
+    _event(
+        session,
+        AuthEventKind.PASSWORD_CHANGED,
+        client,
+        user_id=locked.id,
+        session_id=keep_session_id,
+    )
     await session.commit()
     logger.info("Parola değiştirildi: user_id=%s", locked.id)
+
+
+# --- Oturumlar ve cihazlar (Yazılım Dokümanı PLT-10) -----------------------------------
+
+EVENTS_LIMIT = 50
+
+
+async def active_sessions(
+    session: AsyncSession, *, user_id: uuid.UUID, now: datetime
+) -> list[AuthSession]:
+    """Kullanıcının açık oturumları, son kullanılan üstte."""
+    rows = await session.scalars(
+        select(AuthSession)
+        .where(
+            AuthSession.user_id == user_id,
+            AuthSession.revoked_at.is_(None),
+            AuthSession.expires_at > now,
+        )
+        .order_by(AuthSession.last_used_at.desc(), AuthSession.id.desc())
+    )
+    return list(rows)
+
+
+async def revoke_session(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    session_id: uuid.UUID,
+    now: datetime,
+    client: Client = NO_CLIENT,
+) -> bool:
+    """Kullanıcının kendi oturumunu kapatır; başkasının ya da kapalı oturum → False."""
+    target = await session.scalar(
+        select(AuthSession)
+        .where(
+            AuthSession.id == session_id,
+            AuthSession.user_id == user_id,
+            AuthSession.revoked_at.is_(None),
+        )
+        .with_for_update()
+    )
+    if target is None:
+        return False
+    target.revoked_at = now
+    _event(session, AuthEventKind.SESSION_REVOKED, client, user_id=user_id, session_id=target.id)
+    await session.commit()
+    return True
+
+
+async def revoke_all_sessions(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    keep_session_id: uuid.UUID | None,
+    now: datetime,
+    client: Client = NO_CLIENT,
+) -> int:
+    """ "Tüm cihazlardan çık": açık oturumların hepsi (ya da bu oturum hariç hepsi) kapanır."""
+    conditions = [AuthSession.user_id == user_id, AuthSession.revoked_at.is_(None)]
+    if keep_session_id is not None:
+        conditions.append(AuthSession.id != keep_session_id)
+    revoked = list(
+        await session.scalars(
+            update(AuthSession).where(*conditions).values(revoked_at=now).returning(AuthSession.id)
+        )
+    )
+    for revoked_id in revoked:
+        _event(
+            session, AuthEventKind.SESSION_REVOKED, client, user_id=user_id, session_id=revoked_id
+        )
+    await session.commit()
+    return len(revoked)
+
+
+async def recent_events(session: AsyncSession, *, user_id: uuid.UUID) -> list[AuthEvent]:
+    """Kullanıcının son kimlik olayları (giriş geçmişi), yeni üstte."""
+    rows = await session.scalars(
+        select(AuthEvent)
+        .where(AuthEvent.user_id == user_id)
+        .order_by(AuthEvent.created_at.desc(), AuthEvent.id.desc())
+        .limit(EVENTS_LIMIT)
+    )
+    return list(rows)

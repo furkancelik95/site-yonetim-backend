@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import datetime
+from enum import StrEnum
 
 from sqlalchemy import (
     CheckConstraint,
@@ -89,6 +90,39 @@ class AuthSession(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     last_used_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Oturum listesi (Yazılım Dokümanı PLT-10): kullanıcı kendi cihazlarını görür, kapatır.
+    ip: Mapped[str | None] = mapped_column(Text)
+    user_agent: Mapped[str | None] = mapped_column(Text)
+
+
+class AuthEventKind(StrEnum):
+    LOGIN_SUCCEEDED = "login_succeeded"
+    LOGIN_FAILED = "login_failed"  # yanlış parola, bilinmeyen e-posta ya da pasif hesap
+    ACCOUNT_LOCKED = "account_locked"
+    LOGOUT = "logout"
+    PASSWORD_CHANGED = "password_changed"  # noqa: S105  # nosec B105 — olay adı, sır değil
+    SESSION_REVOKED = "session_revoked"  # kullanıcı bir cihazı kapattı
+    TOKEN_REUSED = "token_reused"  # noqa: S105  # nosec B105 — jeton tekrarı olayı
+
+
+class AuthEvent(Base):
+    """[G] Kimlik olayı: giriş, başarısız giriş, kilit, çıkış, parola, oturum kapatma
+    (Yazılım Dokümanı M-24). **Değişmez** (tetikleyici). Siteye değil kullanıcıya aittir —
+    giriş site bağlamından önce olur. Bilinmeyen e-postayla denemede `user_id` boştur ve
+    e-posta yazılmaz (yalnız IP); saklama süresi açık karar K8."""
+
+    __tablename__ = "auth_events"
+    __table_args__ = (
+        CheckConstraint(enum_check("kind", AuthEventKind), name="kind"),
+        Index("ix_auth_events_user_created", "user_id", "created_at"),
+    )
+
+    user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
+    kind: Mapped[str] = mapped_column(Text)
+    session_id: Mapped[uuid.UUID | None]
+    ip: Mapped[str | None] = mapped_column(Text)
+    user_agent: Mapped[str | None] = mapped_column(Text)
+    request_id: Mapped[str | None] = mapped_column(Text)
 
 
 class LoginThrottle(Base):

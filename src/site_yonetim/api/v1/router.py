@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from site_yonetim.api.v1 import (
     account_ops,
     announcements,
+    approvals,
     audit,
     auth,
     bank_imports,
@@ -22,6 +23,7 @@ from site_yonetim.api.v1 import (
     me,
     meetings,
     members,
+    notifications,
     payments,
     platform,
     polls,
@@ -32,6 +34,7 @@ from site_yonetim.api.v1 import (
     requests,
     resident,
     security,
+    sessions,
     sites,
     staff,
     structure,
@@ -43,6 +46,8 @@ api_router = APIRouter(prefix=API_V1_PREFIX)
 api_router.include_router(health.router)
 api_router.include_router(auth.router)
 api_router.include_router(me.router)
+api_router.include_router(sessions.router)
+api_router.include_router(notifications.me_router)
 api_router.include_router(sites.router)
 api_router.include_router(platform.router)
 api_router.include_router(security.router)  # /units/lookup, /units/{id}'den önce
@@ -76,3 +81,5 @@ api_router.include_router(polls.router)
 api_router.include_router(contracts.router)
 api_router.include_router(inventory.router)
 api_router.include_router(staff.router)
+api_router.include_router(notifications.router)
+api_router.include_router(approvals.router)

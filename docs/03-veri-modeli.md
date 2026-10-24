@@ -100,6 +100,13 @@ Tablo ve sütun adları `snake_case`, İngilizce. Kullanıcıya görünen etiket
 | expires_at | TIMESTAMPTZ | kayan pencere: her yenilemede `now + SESSION_HOURS` |
 | last_used_at | TIMESTAMPTZ | |
 | revoked_at | TIMESTAMPTZ NULL | çıkış / iptal |
+| ip, user_agent | TEXT NULL | oturum listesi (cihaz adı); yenilemede son adres yazılır |
+
+### `auth_events` [G] — kimlik olayı, **değişmez**
+`user_id` (bilinmeyen e-postada boş — e-posta yazılmaz), `kind` (`login_succeeded` ·
+`login_failed` · `account_locked` · `logout` · `password_changed` · `session_revoked` ·
+`token_reused`), `session_id`, `ip`, `user_agent`, `request_id`, `created_at`. Tetikleyici
+(`forbid_history_change`) güncellemeyi ve silmeyi engeller; saklama süresi K8.
 
 ---
 
@@ -473,6 +480,27 @@ Site içinde artan `number`; silinmez, içerik değişmez. Olay: `kind`, `locati
   T.C. kimlik, maaş, adres, sağlık yok; saklama süresi K8.
 
 Hiçbiri silinmez. Hepsi (oy tablosu hariç) denetim kaydında.
+
+### Bildirim [K/G] — bildirim merkezi (Yazılım Dokümanı PLT-05)
+- `notifications` [K]: `user_id`, `category`, `kind`, `title`, `body`, `link_entity`, `link_id`,
+  `dedupe_key`, `read_at`. `(site_id, user_id, dedupe_key)` benzersiz — aynı olay aynı kişiye bir kez.
+- `notification_preferences` [G]: `user_id × category × channel → enabled`; yalnız varsayılandan
+  farklı hücre saklanır (`domain/notifications.py`).
+- `push_tokens` [G]: `token` benzersiz, `platform` (`ios` · `android` · `web`), `last_seen_at`.
+
+### Onay mekanizması [K] (Yazılım Dokümanı Bölüm 6)
+- `approval_rules`: `action_type`, `is_active`, `is_template`, `current_version`.
+- `approval_rule_versions` **değişmez**: `amount_min` (hariç) / `amount_max` (dahil), `source`,
+  `mode`, `reject_behavior`, `remind_after_days`, `escalate_after_days`, `day_basis`,
+  `escalation_role`, `effective_from`, `steps` JSONB, `basis_note`.
+- `approval_requests`: `number` (site içinde artan), `action_type`, `subject_type/id`, `title`,
+  `summary`/`payload` JSONB, `amount`, `requested_by`, `rule_version_id` (boş = varsayılan),
+  `snapshot` (kuralın donmuş kopyası + adım başına M/N), `status`, `revision`, `current_step`,
+  `step_started_at`, `reminded_at`, `escalated_at`, `decided_at`, `failure_reason`.
+- `approval_assignments`: adım açılırken çözülen onaycılar (`source`: rule · escalation).
+- `approval_decisions` **değişmez**: kararı veren, `slot_user_id` (kimin hakkı), vekâleten asıl
+  onaycı adı, `decision`, `comment`; `(talep, sürüm, karar veren)` ve `(talep, sürüm, hak)` tekil.
+- `approval_delegations`: devreden/devralan, `roles[]`, `starts_at`–`ends_at`, `ended_at`.
 
 ### `expenses` [K] — gider
 | Sütun | Tip | Not |

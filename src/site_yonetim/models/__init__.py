@@ -4,6 +4,14 @@ Her model burada içe aktarılır ki `Base.metadata` eksiksiz olsun (alembic ve 
 """
 
 from site_yonetim.domain.structure import UnitUsage
+from site_yonetim.models.approvals import (
+    ApprovalAssignment,
+    ApprovalDecision,
+    ApprovalDelegation,
+    ApprovalRequest,
+    ApprovalRule,
+    ApprovalRuleVersion,
+)
 from site_yonetim.models.audit import AuditLog
 from site_yonetim.models.cash import (
     BankImport,
@@ -41,6 +49,8 @@ from site_yonetim.models.finance import (
     UnitWeight,
 )
 from site_yonetim.models.identity import (
+    AuthEvent,
+    AuthEventKind,
     AuthSession,
     LoginThrottle,
     OrganizationMembership,
@@ -63,6 +73,7 @@ from site_yonetim.models.management import (
     StockMove,
 )
 from site_yonetim.models.modules import SiteModule
+from site_yonetim.models.notifications import Notification, NotificationPreference, PushToken
 from site_yonetim.models.operations import (
     Announcement,
     AnnouncementDelivery,
@@ -81,8 +92,16 @@ __all__ = [
     "AllocationRule",
     "Announcement",
     "AnnouncementDelivery",
+    "ApprovalAssignment",
+    "ApprovalDecision",
+    "ApprovalDelegation",
+    "ApprovalRequest",
+    "ApprovalRule",
+    "ApprovalRuleVersion",
     "Asset",
     "AuditLog",
+    "AuthEvent",
+    "AuthEventKind",
     "AuthSession",
     "BankImport",
     "BankImportLine",
@@ -111,6 +130,8 @@ __all__ = [
     "LostItem",
     "Meeting",
     "MeetingAgendaItem",
+    "Notification",
+    "NotificationPreference",
     "Organization",
     "OrganizationMembership",
     "Package",
@@ -123,6 +144,7 @@ __all__ = [
     "PollOption",
     "PollVote",
     "PropertyKind",
+    "PushToken",
     "RateLimit",
     "RecurringExpense",
     "RecurringExpenseRun",

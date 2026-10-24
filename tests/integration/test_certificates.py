@@ -7,6 +7,7 @@ Kurgu `finance_world`: A-1 oturan hesabı (A1-O), Haziran 2026'da 1.000 TL tahak
 import uuid
 from datetime import date
 from decimal import Decimal
+from unittest.mock import ANY
 
 import pytest
 from sqlalchemy import text, update
@@ -49,6 +50,7 @@ async def test_borclu_hesaba_belge_verilmez(charged: World) -> None:
         "code": "has_debt",
         "message": "Bu hesabın 1.000,00 TL borcu var; borçsuzluk belgesi verilemez.",
         "fields": None,
+        "request_id": ANY,
     }
 
 

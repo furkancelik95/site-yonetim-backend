@@ -43,6 +43,10 @@ Betik tekrar çalıştırılabilir: kodu temiz açar, sırları (`/opt/site-yone
   `edge` ağına bağlar ve birleşik yapılandırmayla başlatır.
 - `/opt/site-yonetim/edge/Combined.Caddyfile` (`edge.Caddyfile`): Müdavim'in Caddyfile'ını
   içeri alır, site yönetimi alan adını ekler. Önce `caddy validate` ile denetlenir.
+- `/opt/edge/sites/*.caddy`: aynı sunucudaki diğer uygulamaların (ör. Sırdaş) alan adı blokları.
+  Birleşik dosya her kurulumda baştan yazıldığı için onların blokları bu klasörde durur;
+  `edge.Caddyfile` sonundaki `import` alır, override klasörü salt okunur bağlar. Bir uygulama
+  kendi dosyasını yazıp `docker exec restoran-panel-web-1 caddy reload …` çalıştırır.
 
 Müdavim yeniden kurulduğunda override kendiliğinden geçerli kalır. Site yönetimi kaldırılırsa
 önce override silinip `docker compose up -d web` (Müdavim klasöründe) çalıştırılmalı.
