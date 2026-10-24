@@ -70,7 +70,8 @@ SITES: tuple[SiteSpec, ...] = (
     SiteSpec(
         "Aksu Konakları", "aksu-konaklari", "İstanbul", "Beykoz", PropertyKind.MIXED, "Pro",
         (BlockSpec("A", True, 8, 16), BlockSpec("B", True, 8, 16), BlockSpec("C", False, 4, 16)),
-        (ModuleKey.RESERVATIONS, ModuleKey.VISITORS, ModuleKey.PACKAGES, ModuleKey.VALET),
+        (ModuleKey.RESERVATIONS, ModuleKey.VISITORS, ModuleKey.PACKAGES, ModuleKey.VALET,
+         ModuleKey.GENERAL_ASSEMBLY, ModuleKey.SURVEYS, ModuleKey.STAFF),
         "TR330006100519786457841326",
         Decimal(486_000),
         Decimal("0.94"),

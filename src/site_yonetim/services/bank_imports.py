@@ -200,6 +200,7 @@ async def preview(
     seen: set[str] = set()
     stored: list[dict[str, object]] = []
     for row, mark in zip(rows, prints, strict=True):
+        reason = None
         if row.direction is Direction.OUT:
             match_status, suggestion = MatchStatus.IGNORED, None
         elif mark in already or mark in seen:
@@ -216,6 +217,8 @@ async def preview(
                 if match.account_id
                 else None
             )
+            if match.status is MatchStatus.UNMATCHED:
+                reason = match.reason
         seen.add(mark)
         stored.append(
             {
@@ -228,6 +231,7 @@ async def preview(
                 "fingerprint": mark,
                 "status": match_status.value,
                 "suggestion": suggestion,
+                "reason": reason,
             }
         )
     bank_import = BankImport(

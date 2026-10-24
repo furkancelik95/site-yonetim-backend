@@ -8,6 +8,7 @@ dakikada 30, POST dakikada 5), kod tahmin edilemez ve yalnız site adı döner.
 import datetime as dt
 import uuid
 from datetime import timedelta
+from decimal import Decimal
 from http import HTTPStatus
 from typing import Annotated, Literal
 
@@ -51,6 +52,10 @@ def _rule(exc: svc.RegistrationRuleError) -> ApiError:
     if exc.code == "reason_required":
         return ApiError(
             HTTPStatus.UNPROCESSABLE_ENTITY, exc.code, exc.message, {"reason": exc.message}
+        )
+    if exc.code == "share_only_for_owner":
+        return ApiError(
+            HTTPStatus.UNPROCESSABLE_ENTITY, exc.code, exc.message, {"share_percent": exc.message}
         )
     return ApiError(HTTPStatus.CONFLICT, exc.code, exc.message)
 
@@ -167,6 +172,14 @@ async def _registration(ctx: SiteContext, registration_id: uuid.UUID) -> Registr
 class ApproveIn(BaseModel):
     unit_id: uuid.UUID
     start_date: dt.date
+    share_percent: Decimal | None = Field(
+        default=None,
+        gt=0,
+        le=100,
+        decimal_places=2,
+        description="yalnız malik başvurusunda: yeni malikin hissesi (boşsa %100). Mevcut "
+        "maliklerle toplam %100'ü aşarsa 409 owner_shares_exceed",
+    )
 
 
 class ApprovedOut(RegistrationOut):
@@ -193,6 +206,7 @@ async def approve(
             start_date=body.start_date,
             decided_by=current.user.full_name,
             now=now,
+            share_percent=body.share_percent,
         )
     except svc.RegistrationRuleError as exc:
         raise _rule(exc) from exc

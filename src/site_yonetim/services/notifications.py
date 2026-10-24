@@ -21,9 +21,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from site_yonetim.db.tenancy import all_sites_scope, current_scope
 from site_yonetim.domain.notifications import (
-    Channel,
     Matrix,
     NotificationCategory,
+    NotificationChannel,
     Overrides,
     PushPlatform,
     apply_changes,
@@ -128,7 +128,7 @@ async def preferences(session: AsyncSession, user_id: uuid.UUID) -> Matrix:
         select(NotificationPreference).where(NotificationPreference.user_id == user_id)
     )
     overrides: Overrides = {
-        (NotificationCategory(r.category), Channel(r.channel)): r.enabled for r in rows
+        (NotificationCategory(r.category), NotificationChannel(r.channel)): r.enabled for r in rows
     }
     return preference_matrix(overrides)
 

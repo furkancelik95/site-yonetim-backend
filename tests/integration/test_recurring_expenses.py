@@ -13,6 +13,7 @@ import pytest
 
 from site_yonetim import cli
 from site_yonetim.core.config import get_settings
+from site_yonetim.domain.access import ROLE_PERMISSIONS, Permission, SiteRole
 from site_yonetim.services import expenses
 from site_yonetim.services import recurring_expenses as svc
 from tests.integration.conftest import DatabaseUrls
@@ -207,6 +208,30 @@ async def test_yetki_ve_site_izolasyonu(world: World) -> None:
     # Yıldız'da Aksu'nun gider kategorisi yok
     wrong = await world.api.post(other, json=body(world), headers=world.headers)
     assert wrong.json()["error"]["fields"] == {"expense_category_id": "Kategori seçin."}
+
+
+async def test_otomatik_odemenin_kasasi_kasa_yetkisiyle_degisir(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    account = await bank(world)
+    item = (await create(world, auto_pay=True, cash_account_id=account)).json()["data"]
+    cash = (await world.post("/cash-accounts", {"name": "İkinci Kasa", "kind": "cash"})).json()
+    other = cash["data"]["id"]
+    monkeypatch.setitem(
+        ROLE_PERMISSIONS,
+        SiteRole.ACCOUNTING,
+        ROLE_PERMISSIONS[SiteRole.ACCOUNTING] - {Permission.FINANCE_CASH_MANAGE},
+    )
+    user = await create_user(world.factory, "muhasebe@test.local")
+    await add_site_membership(world.factory, world.site_id, user.id, "Muhasebe")
+    headers = await login_headers(world.api, "muhasebe@test.local")
+    url = world.url(f"/recurring-expenses/{item['id']}")
+
+    moved = await world.api.patch(url, json={"cash_account_id": other}, headers=headers)
+    assert moved.status_code == 403
+    renamed = await world.api.patch(url, json={"vendor": "Yeni Servis"}, headers=headers)
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["data"]["cash_account_id"] == account
 
 
 async def test_komut_satiri(

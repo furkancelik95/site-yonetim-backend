@@ -80,6 +80,9 @@ class RowOut(BaseModel):
         description="matched (işaretli gelir) · suggested · unmatched · ignored (çıkış) · duplicate"
     )
     suggestion: SuggestionOut | None
+    reason: str | None = Field(
+        description="yalnız unmatched satırda: neden eşleşmediği (ör. birden çok referans kodu)"
+    )
 
 
 class PreviewOut(BaseModel):
@@ -145,6 +148,7 @@ async def _preview_out(ctx: SiteContext, bank_import: BankImport) -> PreviewOut:
                 bank_reference=str(r["bank_reference"]) if r["bank_reference"] else None,
                 status=status_,
                 suggestion=suggestion,
+                reason=r.get("reason"),  # type: ignore[arg-type]  # eski önizlemelerde yok
             )
         )
     return PreviewOut(

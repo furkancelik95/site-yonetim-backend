@@ -136,7 +136,10 @@ async def update_recurring(
 ) -> Written[RecurringOut]:
     item = await _item(ctx, item_id)
     data = replace(svc.current(item), **{k: getattr(body, k) for k in body.model_fields_set})
-    _needs_cash(ctx, data.auto_pay and not item.auto_pay)
+    # Otomatik ödemeyi açmak ya da parayı çıkacağı kasayı değiştirmek kasa yetkisi ister.
+    _needs_cash(
+        ctx, data.auto_pay and (not item.auto_pay or data.cash_account_id != item.cash_account_id)
+    )
     was_active = item.is_active
     try:
         await svc.update(ctx.session, item, data, today=today)

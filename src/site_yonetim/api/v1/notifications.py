@@ -27,9 +27,9 @@ from site_yonetim.api.schemas import Page, PageParams, Written
 from site_yonetim.core.errors import ApiError, NotFoundError
 from site_yonetim.domain.notifications import (
     CATEGORIES,
-    Channel,
     Matrix,
     NotificationCategory,
+    NotificationChannel,
     PreferenceError,
     PushPlatform,
     is_locked,
@@ -78,7 +78,7 @@ class ReadIn(BaseModel):
     )
 
 
-class ReadOut(BaseModel):
+class NotificationReadOut(BaseModel):
     marked: int
     unread_count: int
 
@@ -112,7 +112,7 @@ async def unread_count(ctx: SiteContextDep, current: CurrentUserDep, now: NowDep
 @router.post("/read", summary="Okundu işaretle (seçilenler ya da tümü)")
 async def mark_read(
     body: ReadIn, ctx: SiteContextDep, current: CurrentUserDep, now: NowDep
-) -> Written[ReadOut]:
+) -> Written[NotificationReadOut]:
     marked = await svc.mark_read(ctx.session, current.user.id, now=now, ids=body.ids)
     await ctx.session.commit()
     remaining = await svc.unread_count(ctx.session, current.user.id, now=now)
@@ -121,7 +121,7 @@ async def mark_read(
         if body.ids is None
         else f"{marked} bildirim okundu olarak işaretlendi."
     )
-    return Written(data=ReadOut(marked=marked, unread_count=remaining), message=message)
+    return Written(data=NotificationReadOut(marked=marked, unread_count=remaining), message=message)
 
 
 # --- Kişiye ait: siteler arası özet, tercihler, push jetonları ----------------------------
@@ -146,7 +146,7 @@ async def unread_summary(
 
 
 class PreferenceCell(BaseModel):
-    channel: Channel
+    channel: NotificationChannel
     enabled: bool
     locked: bool = Field(description="true → kapatılamaz (kilit ikonu)")
 
@@ -169,7 +169,7 @@ class PreferencesOut(BaseModel):
 
 class PreferenceChange(BaseModel):
     category: NotificationCategory
-    channel: Channel
+    channel: NotificationChannel
     enabled: bool
 
 

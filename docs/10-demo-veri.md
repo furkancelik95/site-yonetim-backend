@@ -39,7 +39,7 @@ Seed komutu idempotent olmalı: veri varsa hiçbir şey yapmaz.
 | Plan | Pro | Standart | Başlangıç |
 | Bloklar (asansör, kat) | A (var, 8) · B (var, 8) · C (yok, 4) | A (var, 6) · B (yok, 5) | tek blok, adsız (yok, 4) |
 | Blok başına daire | 16 → **48** | 12 → **24** | 12 → **12** |
-| Ek modüller | reservations, visitors, packages, valet | visitors | — |
+| Ek modüller | reservations, visitors, packages, valet, general-assembly, surveys, staff | visitors | — |
 | Aylık bütçe | 486.000 | 148.000 | 38.500 |
 | Tahsilat oranı | %94 | %78 | %61 |
 | IBAN (örnek) | TR33 0006 1005 1978 6457 8413 26 | TR62 0001 0002 2233 4455 6677 88 | TR11 0011 1000 0000 0012 3456 78 |

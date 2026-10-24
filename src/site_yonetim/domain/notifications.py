@@ -23,7 +23,7 @@ class NotificationCategory(StrEnum):
     ANNOUNCEMENT = "announcement"  # genel duyurular
 
 
-class Channel(StrEnum):
+class NotificationChannel(StrEnum):
     PUSH = "push"
     SMS = "sms"
     EMAIL = "email"
@@ -44,31 +44,37 @@ class Rule(StrEnum):
 @dataclass(frozen=True, slots=True)
 class CategoryInfo:
     label: str
-    defaults: frozenset[Channel]
+    defaults: frozenset[NotificationChannel]
     rule: Rule
 
 
 CATEGORIES: dict[NotificationCategory, CategoryInfo] = {
     NotificationCategory.URGENT: CategoryInfo(
-        "Acil", frozenset({Channel.PUSH, Channel.SMS}), Rule.LOCKED
+        "Acil", frozenset({NotificationChannel.PUSH, NotificationChannel.SMS}), Rule.LOCKED
     ),
     NotificationCategory.FINANCIAL: CategoryInfo(
-        "Finansal", frozenset({Channel.PUSH, Channel.EMAIL}), Rule.AT_LEAST_ONE
+        "Finansal",
+        frozenset({NotificationChannel.PUSH, NotificationChannel.EMAIL}),
+        Rule.AT_LEAST_ONE,
     ),
     NotificationCategory.SECURITY: CategoryInfo(
-        "Güvenlik", frozenset({Channel.PUSH}), Rule.AT_LEAST_ONE
+        "Güvenlik", frozenset({NotificationChannel.PUSH}), Rule.AT_LEAST_ONE
     ),
     NotificationCategory.OPERATIONS: CategoryInfo(
-        "Operasyon", frozenset({Channel.PUSH}), Rule.FREE
+        "Operasyon", frozenset({NotificationChannel.PUSH}), Rule.FREE
     ),
     NotificationCategory.GOVERNANCE: CategoryInfo(
-        "Yönetişim", frozenset({Channel.PUSH, Channel.EMAIL, Channel.SMS}), Rule.LOCKED
+        "Yönetişim",
+        frozenset({NotificationChannel.PUSH, NotificationChannel.EMAIL, NotificationChannel.SMS}),
+        Rule.LOCKED,
     ),
-    NotificationCategory.ANNOUNCEMENT: CategoryInfo("Duyuru", frozenset({Channel.PUSH}), Rule.FREE),
+    NotificationCategory.ANNOUNCEMENT: CategoryInfo(
+        "Duyuru", frozenset({NotificationChannel.PUSH}), Rule.FREE
+    ),
 }
 
-Matrix = dict[NotificationCategory, dict[Channel, bool]]
-Overrides = dict[tuple[NotificationCategory, Channel], bool]
+Matrix = dict[NotificationCategory, dict[NotificationChannel, bool]]
+Overrides = dict[tuple[NotificationCategory, NotificationChannel], bool]
 
 
 def preference_matrix(overrides: Overrides) -> Matrix:
@@ -76,13 +82,13 @@ def preference_matrix(overrides: Overrides) -> Matrix:
     return {
         category: {
             channel: overrides.get((category, channel), channel in info.defaults)
-            for channel in Channel
+            for channel in NotificationChannel
         }
         for category, info in CATEGORIES.items()
     }
 
 
-def is_locked(category: NotificationCategory, channel: Channel) -> bool:
+def is_locked(category: NotificationCategory, channel: NotificationChannel) -> bool:
     """Kapatılamayan hücre (kilit ikonu): kilitli kategorinin varsayılan kanalı."""
     info = CATEGORIES[category]
     return info.rule is Rule.LOCKED and channel in info.defaults

@@ -96,7 +96,7 @@ class Decision(StrEnum):
     REVISION = "revision"
 
 
-class RequestStatus(StrEnum):
+class ApprovalStatus(StrEnum):
     PENDING = "pending"
     REVISION_REQUESTED = "revision_requested"
     APPROVED = "approved"  # onaylandı, yürütme bekliyor (aynı işlemde yürütülür)
@@ -107,7 +107,7 @@ class RequestStatus(StrEnum):
     MODULE_DISABLED = "module_disabled"
 
 
-OPEN_STATUSES = frozenset({RequestStatus.PENDING, RequestStatus.REVISION_REQUESTED})
+OPEN_STATUSES = frozenset({ApprovalStatus.PENDING, ApprovalStatus.REVISION_REQUESTED})
 REMIND_MIN, REMIND_MAX = 1, 30
 STEPS_MAX = 5
 

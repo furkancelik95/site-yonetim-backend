@@ -166,6 +166,50 @@ async def test_malik_hissesi_doluysa_409(world: World) -> None:
     assert len(await pending(world)) == 1  # başvuru bekliyor; yönetici önce daireyi düzeltir
 
 
+async def test_hisseli_malik_onayi(world: World) -> None:
+    unit = (await world.post("/units", {"block_id": await _block(world), "number": "2"})).json()
+    unit_id = unit["data"]["id"]
+    first = await world.post(
+        f"/units/{unit_id}/parties",
+        {
+            "role": "owner",
+            "start_date": "2020-01-01",
+            "share_percent": "60",
+            "person": {"first_name": "Ali", "last_name": "Kaya"},
+        },
+    )
+    assert first.status_code == 201, first.text
+    await apply(world, await code(world), relation="owner")
+    [registration] = await pending(world)
+
+    full = await approve(world, registration["id"], unit_id=unit_id)  # boş = %100
+    assert full.status_code == 409
+    assert full.json()["error"]["code"] == "owner_shares_exceed"
+    too_much = await approve(world, registration["id"], unit_id=unit_id, share_percent="40.01")
+    assert too_much.json()["error"]["code"] == "owner_shares_exceed"
+    approved = await approve(world, registration["id"], unit_id=unit_id, share_percent="40")
+    assert approved.status_code == 200, approved.text
+    parties = (await world.get(f"/units/{unit_id}")).json()["parties"]
+    shares = sorted(p["share_percent"] for p in parties if p["role"] == "owner")
+    assert shares == ["40.00", "60.00"]
+
+
+async def test_hisse_yalniz_malik_basvurusunda(world: World) -> None:
+    await apply(world, await code(world))  # kiracı
+    [registration] = await pending(world)
+    response = await approve(world, registration["id"], share_percent="50")
+    assert response.status_code == 422
+    assert set(response.json()["error"]["fields"]) == {"share_percent"}
+    invalid = await approve(world, registration["id"], share_percent="0")
+    assert invalid.status_code == 422
+    assert len(await pending(world)) == 1
+
+
+async def _block(w: World) -> str:
+    blocks: list[dict[str, Any]] = (await w.get("/blocks")).json()["items"]
+    return str(blocks[0]["id"])
+
+
 async def test_ret_gerekce_ister(world: World) -> None:
     await apply(world, await code(world))
     [registration] = await pending(world)

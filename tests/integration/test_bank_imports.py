@@ -111,6 +111,8 @@ async def test_onizleme_eslestirir_ve_hicbir_sey_yazmaz(charged: World) -> None:
         "suggested", charged.account_id
     )  # fmt: skip
     assert (third["status"], third["suggestion"]) == ("unmatched", None)
+    assert third["reason"] == "Açıklamada referans kodu ya da kayıtlı bir ad yok"
+    assert (first["reason"], fourth["reason"]) == (None, None)
     assert (fourth["status"], fourth["direction"]) == ("ignored", "out")
     assert (await charged.get("/payments")).json()["total"] == 0
     assert await charged.balance() == Decimal("1000.00")

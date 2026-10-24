@@ -250,6 +250,8 @@ class Match:
     reason: str | None = None
 
 
+NO_MATCH_REASON = "Açıklamada referans kodu ya da kayıtlı bir ad yok"
+
 _TOKEN_SPLIT = re.compile(r"[^a-z0-9-]+")
 
 
@@ -304,4 +306,4 @@ class Matcher:
             )
         if by_name:
             return Match(MatchStatus.UNMATCHED, reason="Ad birden çok hesapla eşleşiyor")
-        return Match(MatchStatus.UNMATCHED)
+        return Match(MatchStatus.UNMATCHED, reason=NO_MATCH_REASON)
