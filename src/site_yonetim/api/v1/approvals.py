@@ -119,6 +119,28 @@ class RuleIn(BaseModel):
     )
 
 
+class ProposedRuleOut(RuleIn):
+    """Kural değişikliği talebinin önerdiği kural — `RuleIn` biçiminde, forma olduğu gibi dolar."""
+
+
+class RuleChangeOut(BaseModel):
+    op: Literal["create", "update", "archive"]
+    rule_id: uuid.UUID | None = Field(description="güncellenen/arşivlenen kural; yeni kuralda null")
+    rule: ProposedRuleOut | None = Field(description="önerilen kural; arşivlemede null")
+
+
+def _rule_change(request: ApprovalRequest) -> RuleChangeOut | None:
+    payload = request.payload
+    if ActionType(request.action_type) is not ActionType.APPROVAL_RULE_CHANGE or not payload:
+        return None
+    data = payload.get("data")
+    return RuleChangeOut(
+        op=payload.get("op", "create"),
+        rule_id=payload.get("rule_id"),
+        rule=ProposedRuleOut.model_validate(data) if data else None,
+    )
+
+
 def _rule_data(body: RuleIn) -> svc.RuleData:
     return svc.RuleData(
         action_type=body.action_type.value,
@@ -481,6 +503,11 @@ class ApprovalRequestOut(BaseModel):
     can_resubmit: bool
     steps: list[RequestStepOut]
     history: list[DecisionOut] = Field(description="tüm sürümlerin kararları")
+    rule_change: RuleChangeOut | None = Field(
+        default=None,
+        description="yalnız approval_rule_change: talebin önerdiği değişiklik (son sürüm); "
+        "yeniden gönderme formu bununla dolar",
+    )
 
 
 class RequestListItem(BaseModel):
@@ -642,6 +669,7 @@ async def _request_out(
         and ApprovalStatus(request.status) is ApprovalStatus.REVISION_REQUESTED,
         steps=steps,
         history=history,
+        rule_change=_rule_change(request),
     )
 
 
