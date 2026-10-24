@@ -457,6 +457,40 @@ async def test_kural_degisikligi_onaya_gider(world: World, board: list[Member]) 
     assert types == ["approval_rule_change", "purchase_request"]
 
 
+async def test_kural_degisikligi_ayrintisi_oneriyi_doner(world: World, board: list[Member]) -> None:
+    w, burak = world, board[1]
+    me = await kerem(w)
+    assert (await add_rule(w, action_type="approval_rule_change")).status_code == 201
+    pending = await add_rule(
+        w, amount_max="10000.00", steps=[{"roles": ["Yönetici"], "quorum": "any"}]
+    )
+    request_id = pending.json()["data"]["approval_request_id"]
+    change = (await detail(w, me, request_id))["rule_change"]
+    assert (change["op"], change["rule_id"]) == ("create", None)
+    assert change["rule"] == {
+        **RULE,
+        "steps": [{"roles": ["Yönetici"], "quorum": "any", "count": None}],
+        "mode": "sequential",
+        "reject_behavior": "single_rejects",
+        "amount_min": None,
+        "amount_max": "10000.00",
+        "source": None,
+        "day_basis": "calendar",
+        "escalation_role": None,
+        "basis_note": None,
+    }
+
+    # düzeltme istenir; form öneriyle dolar, değiştirilip gönderilir → ayrıntı son sürümü döner
+    assert (await act(w, burak, request_id, "request-revision", "Üst sınır 15.000")).is_success
+    fixed = {**change["rule"], "amount_max": "15000.00"}
+    again = await w.post(f"/approvals/{request_id}/resubmit", {"rule": fixed})
+    assert again.status_code == 200, again.text
+    assert again.json()["data"]["rule_change"]["rule"]["amount_max"] == "15000.00"
+    # kural değişikliği dışındaki taleplerde alan boş
+    other = await open_request(w, me)
+    assert (await detail(w, me, other))["rule_change"] is None
+
+
 async def test_hatirlatma_ve_eskalasyon(world: World, board: list[Member]) -> None:
     """ONY-02 S3: X=2, Y=5 gün; Y dolunca eskalasyon hedefi de karar verebilir; otomatik
     onay yok. İş tekrar güvenli."""
