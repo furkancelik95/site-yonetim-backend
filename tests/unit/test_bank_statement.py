@@ -6,6 +6,7 @@ from decimal import Decimal
 import pytest
 
 from site_yonetim.domain.bank import (
+    NO_MATCH_REASON,
     AccountRef,
     BankFileError,
     BankRow,
@@ -145,6 +146,19 @@ def test_cikis_hareketi_aktarilmaz() -> None:
 def test_eslesme_gerekcesi() -> None:
     match = Matcher(ACCOUNTS).match(row("FAST A1-K EKIM"))
     assert (match.confidence, match.reason) == ("high", "Açıklamada referans kodu var (A1-K)")
+
+
+@pytest.mark.parametrize(
+    ("description", "reason"),
+    [
+        ("A1-K ve A2-O birlikte", "Açıklamada birden çok referans kodu var"),
+        ("HAVALE CAN ER", "Ad birden çok hesapla eşleşiyor"),
+        ("VELI odeme", NO_MATCH_REASON),
+    ],
+)
+def test_eslesmeme_nedeni(description: str, reason: str) -> None:
+    match = Matcher(ACCOUNTS).match(row(description))
+    assert (match.status, match.reason) == (MatchStatus.UNMATCHED, reason)
 
 
 def test_mukerrer_anahtari() -> None:

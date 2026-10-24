@@ -14,7 +14,11 @@ from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Text, Uniqu
 from sqlalchemy.orm import Mapped, mapped_column
 
 from site_yonetim.db.base import Base, TenantMixin, enum_check, tenant_table_args
-from site_yonetim.domain.notifications import Channel, NotificationCategory, PushPlatform
+from site_yonetim.domain.notifications import (
+    NotificationCategory,
+    NotificationChannel,
+    PushPlatform,
+)
 
 
 class Notification(TenantMixin, Base):
@@ -42,7 +46,7 @@ class NotificationPreference(Base):
     __tablename__ = "notification_preferences"
     __table_args__ = (
         CheckConstraint(enum_check("category", NotificationCategory), name="category"),
-        CheckConstraint(enum_check("channel", Channel), name="channel"),
+        CheckConstraint(enum_check("channel", NotificationChannel), name="channel"),
         UniqueConstraint("user_id", "category", "channel"),
     )
 

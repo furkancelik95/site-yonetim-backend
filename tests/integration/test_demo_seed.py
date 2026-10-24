@@ -105,6 +105,7 @@ async def test_demo_verisi_yuklenir(
     assert enabled == {
         "finance", "announcements", "requests", "documents",
         "reservations", "visitors", "packages", "valet",
+        "general-assembly", "surveys", "staff",
     }  # fmt: skip
 
 

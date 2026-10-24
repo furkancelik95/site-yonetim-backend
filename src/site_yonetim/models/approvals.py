@@ -29,10 +29,10 @@ from sqlalchemy.orm import Mapped, mapped_column
 from site_yonetim.db.base import Base, TenantMixin, enum_check, tenant_fk, tenant_table_args
 from site_yonetim.domain.approvals import (
     ActionType,
+    ApprovalStatus,
     DayBasis,
     Decision,
     RejectBehavior,
-    RequestStatus,
     StepMode,
 )
 from site_yonetim.models.finance import MONEY
@@ -93,7 +93,7 @@ class ApprovalRequest(TenantMixin, Base):
         tenant_fk("rule_version_id", "approval_rule_versions"),
         UniqueConstraint("site_id", "number"),
         CheckConstraint(enum_check("action_type", ActionType), name="action_type"),
-        CheckConstraint(enum_check("status", RequestStatus), name="status"),
+        CheckConstraint(enum_check("status", ApprovalStatus), name="status"),
         Index("ix_approval_requests_site_status", "site_id", "status"),
         Index("ix_approval_requests_site_requester", "site_id", "requested_by"),
     )
@@ -112,7 +112,7 @@ class ApprovalRequest(TenantMixin, Base):
     requested_by_name: Mapped[str] = mapped_column(Text)
     rule_version_id: Mapped[uuid.UUID | None]  # boş: varsayılan kural
     snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB)  # adımlar ve süreler (donmuş)
-    status: Mapped[str] = mapped_column(Text, default=RequestStatus.PENDING.value)
+    status: Mapped[str] = mapped_column(Text, default=ApprovalStatus.PENDING.value)
     revision: Mapped[int] = mapped_column(default=1)
     current_step: Mapped[int] = mapped_column(default=0)
     step_started_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))

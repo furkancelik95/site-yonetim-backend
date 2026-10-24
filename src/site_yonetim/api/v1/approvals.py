@@ -35,11 +35,11 @@ from site_yonetim.domain.access import Permission, SiteRole
 from site_yonetim.domain.approvals import (
     ACTION_LABELS,
     ActionType,
+    ApprovalStatus,
     DayBasis,
     Decision,
     QuorumKind,
     RejectBehavior,
-    RequestStatus,
     StepMode,
     quorum_unreachable,
 )
@@ -455,7 +455,7 @@ class DecisionOut(BaseModel):
     at: dt.datetime
 
 
-class RequestOut(BaseModel):
+class ApprovalRequestOut(BaseModel):
     id: uuid.UUID
     number: int
     action_type: ActionType
@@ -463,7 +463,7 @@ class RequestOut(BaseModel):
     title: str
     summary: dict[str, Any]
     amount: Money | None
-    status: RequestStatus
+    status: ApprovalStatus
     revision: int
     requested_by: str
     requested_by_id: uuid.UUID
@@ -490,7 +490,7 @@ class RequestListItem(BaseModel):
     action_label: str
     title: str
     amount: Money | None
-    status: RequestStatus
+    status: ApprovalStatus
     requested_by: str
     created_at: dt.datetime
     progress: str
@@ -594,24 +594,24 @@ async def _steps_out(
 
 def _status_text(request: ApprovalRequest) -> str:
     labels = {
-        RequestStatus.APPROVED: "Onaylandı",
-        RequestStatus.EXECUTED: "Onaylandı",
-        RequestStatus.EXECUTION_FAILED: "Onaylandı – yürütülemedi",
-        RequestStatus.REJECTED: "Reddedildi",
-        RequestStatus.WITHDRAWN: "Geri çekildi",
-        RequestStatus.REVISION_REQUESTED: "Revizyon istendi",
-        RequestStatus.MODULE_DISABLED: "Modül kapalı",
+        ApprovalStatus.APPROVED: "Onaylandı",
+        ApprovalStatus.EXECUTED: "Onaylandı",
+        ApprovalStatus.EXECUTION_FAILED: "Onaylandı – yürütülemedi",
+        ApprovalStatus.REJECTED: "Reddedildi",
+        ApprovalStatus.WITHDRAWN: "Geri çekildi",
+        ApprovalStatus.REVISION_REQUESTED: "Revizyon istendi",
+        ApprovalStatus.MODULE_DISABLED: "Modül kapalı",
     }
-    return labels.get(RequestStatus(request.status), "")
+    return labels.get(ApprovalStatus(request.status), "")
 
 
 async def _request_out(
     ctx: SiteContext, request: ApprovalRequest, user_id: uuid.UUID, now: dt.datetime
-) -> RequestOut:
+) -> ApprovalRequestOut:
     steps, history, progress = await _steps_out(ctx, request)
     slot = await svc.find_slot(ctx.session, request, user_id, now)
     remind_on, escalate_on = svc.due_dates(request)
-    return RequestOut(
+    return ApprovalRequestOut(
         id=request.id,
         number=request.number,
         action_type=ActionType(request.action_type),
@@ -619,7 +619,7 @@ async def _request_out(
         title=request.title,
         summary=request.summary,
         amount=request.amount,
-        status=RequestStatus(request.status),
+        status=ApprovalStatus(request.status),
         revision=request.revision,
         requested_by=request.requested_by_name,
         requested_by_id=request.requested_by,
@@ -628,16 +628,18 @@ async def _request_out(
         failure_reason=request.failure_reason,
         post_approval=request.post_approval,
         escalated=request.escalated_at is not None,
-        remind_on=remind_on if RequestStatus(request.status) is RequestStatus.PENDING else None,
-        escalate_on=escalate_on if RequestStatus(request.status) is RequestStatus.PENDING else None,
+        remind_on=remind_on if ApprovalStatus(request.status) is ApprovalStatus.PENDING else None,
+        escalate_on=escalate_on
+        if ApprovalStatus(request.status) is ApprovalStatus.PENDING
+        else None,
         progress=progress or _status_text(request),
         can_decide=slot is not None and user_id != request.requested_by,
         acting_for=slot.assignment.user_name if slot and slot.delegation else None,
         can_withdraw=request.requested_by == user_id
-        and RequestStatus(request.status)
-        in (RequestStatus.PENDING, RequestStatus.REVISION_REQUESTED),
+        and ApprovalStatus(request.status)
+        in (ApprovalStatus.PENDING, ApprovalStatus.REVISION_REQUESTED),
         can_resubmit=request.requested_by == user_id
-        and RequestStatus(request.status) is RequestStatus.REVISION_REQUESTED,
+        and ApprovalStatus(request.status) is ApprovalStatus.REVISION_REQUESTED,
         steps=steps,
         history=history,
     )
@@ -646,7 +648,7 @@ async def _request_out(
 async def _list_item(ctx: SiteContext, request: ApprovalRequest) -> RequestListItem:
     _, _, progress = await _steps_out(ctx, request)
     remind_on, escalate_on = svc.due_dates(request)
-    pending = RequestStatus(request.status) is RequestStatus.PENDING
+    pending = ApprovalStatus(request.status) is ApprovalStatus.PENDING
     return RequestListItem(
         id=request.id,
         number=request.number,
@@ -654,7 +656,7 @@ async def _list_item(ctx: SiteContext, request: ApprovalRequest) -> RequestListI
         action_label=ACTION_LABELS[ActionType(request.action_type)],
         title=request.title,
         amount=request.amount,
-        status=RequestStatus(request.status),
+        status=ApprovalStatus(request.status),
         requested_by=request.requested_by_name,
         created_at=request.created_at,
         progress=progress or _status_text(request),
@@ -712,16 +714,16 @@ async def _visible(
 @router.get("/approvals/{request_id}", summary="Onay talebi ayrıntısı ve zinciri")
 async def get_request(
     request_id: uuid.UUID, ctx: Staff, current: CurrentUserDep, now: NowDep
-) -> RequestOut:
+) -> ApprovalRequestOut:
     request = await _visible(ctx, request_id, current.user.id, now)
     return await _request_out(ctx, request, current.user.id, now)
 
 
-class CommentIn(BaseModel):
+class ApprovalCommentIn(BaseModel):
     comment: str | None = Field(default=None, max_length=1000)
 
 
-class ReasonIn(BaseModel):
+class ApprovalReasonIn(BaseModel):
     comment: str = Field(max_length=1000, description="gerekçe (zorunlu)")
 
 
@@ -732,7 +734,7 @@ async def _decide(
     decision: Decision,
     comment: str | None,
     now: dt.datetime,
-) -> Written[RequestOut]:
+) -> Written[ApprovalRequestOut]:
     request = await _visible(ctx, request_id, current.user.id, now, lock=True)
     try:
         await svc.decide(
@@ -746,10 +748,12 @@ async def _decide(
     await ctx.session.commit()
     out = await _request_out(ctx, request, current.user.id, now)
     messages = {
-        RequestStatus.EXECUTED: "Onaylandı ve işlem yürütüldü.",
-        RequestStatus.EXECUTION_FAILED: "Onaylandı ama işlem yürütülemedi; talep edene bildirildi.",
-        RequestStatus.REJECTED: "Talep reddedildi; talep edene gerekçeyle bildirildi.",
-        RequestStatus.REVISION_REQUESTED: "Revizyon istendi; talep edene bildirildi.",
+        ApprovalStatus.EXECUTED: "Onaylandı ve işlem yürütüldü.",
+        ApprovalStatus.EXECUTION_FAILED: (
+            "Onaylandı ama işlem yürütülemedi; talep edene bildirildi."
+        ),
+        ApprovalStatus.REJECTED: "Talep reddedildi; talep edene gerekçeyle bildirildi.",
+        ApprovalStatus.REVISION_REQUESTED: "Revizyon istendi; talep edene bildirildi.",
     }
     message = messages.get(out.status, "Kararınız kaydedildi.")
     return Written(data=out, message=message)
@@ -757,29 +761,29 @@ async def _decide(
 
 @router.post("/approvals/{request_id}/approve", summary="Onayla")
 async def approve(
-    request_id: uuid.UUID, body: CommentIn, ctx: Staff, current: CurrentUserDep, now: NowDep
-) -> Written[RequestOut]:
+    request_id: uuid.UUID, body: ApprovalCommentIn, ctx: Staff, current: CurrentUserDep, now: NowDep
+) -> Written[ApprovalRequestOut]:
     return await _decide(ctx, current, request_id, Decision.APPROVE, body.comment, now)
 
 
 @router.post("/approvals/{request_id}/reject", summary="Reddet (gerekçe zorunlu)")
 async def reject(
-    request_id: uuid.UUID, body: ReasonIn, ctx: Staff, current: CurrentUserDep, now: NowDep
-) -> Written[RequestOut]:
+    request_id: uuid.UUID, body: ApprovalReasonIn, ctx: Staff, current: CurrentUserDep, now: NowDep
+) -> Written[ApprovalRequestOut]:
     return await _decide(ctx, current, request_id, Decision.REJECT, body.comment, now)
 
 
 @router.post("/approvals/{request_id}/request-revision", summary="Revizyon iste (gerekçe zorunlu)")
 async def request_revision(
-    request_id: uuid.UUID, body: ReasonIn, ctx: Staff, current: CurrentUserDep, now: NowDep
-) -> Written[RequestOut]:
+    request_id: uuid.UUID, body: ApprovalReasonIn, ctx: Staff, current: CurrentUserDep, now: NowDep
+) -> Written[ApprovalRequestOut]:
     return await _decide(ctx, current, request_id, Decision.REVISION, body.comment, now)
 
 
 @router.post("/approvals/{request_id}/withdraw", summary="Talebimi geri çek")
 async def withdraw(
     request_id: uuid.UUID, ctx: Staff, current: CurrentUserDep, now: NowDep
-) -> Written[RequestOut]:
+) -> Written[ApprovalRequestOut]:
     request = await _visible(ctx, request_id, current.user.id, now, lock=True)
     try:
         await svc.withdraw(ctx.session, request, user_id=current.user.id, now=now)
@@ -805,7 +809,7 @@ async def resubmit(
     current: CurrentUserDep,
     today: TodayDep,
     now: NowDep,
-) -> Written[RequestOut]:
+) -> Written[ApprovalRequestOut]:
     request = await _visible(ctx, request_id, current.user.id, now, lock=True)
     payload = None
     if ActionType(request.action_type) is ActionType.APPROVAL_RULE_CHANGE:

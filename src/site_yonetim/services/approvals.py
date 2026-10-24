@@ -37,13 +37,13 @@ from site_yonetim.domain.approvals import (
     OPEN_STATUSES,
     STEPS_MAX,
     ActionType,
+    ApprovalStatus,
     Condition,
     DayBasis,
     Decision,
     Quorum,
     QuorumKind,
     RejectBehavior,
-    RequestStatus,
     Step,
     StepMode,
     StepOutcome,
@@ -860,7 +860,7 @@ async def request_approval(
         requested_by_name=requester.name,
         rule_version_id=version.id if version else None,
         snapshot=snapshot_of(version),
-        status=RequestStatus.PENDING.value,
+        status=ApprovalStatus.PENDING.value,
         revision=1,
         current_step=0,
     )
@@ -1031,7 +1031,7 @@ async def open_assignments(
 
 
 def _open_indexes(request: ApprovalRequest) -> list[int]:
-    if RequestStatus(request.status) not in OPEN_STATUSES:
+    if ApprovalStatus(request.status) not in OPEN_STATUSES:
         return []
     steps = request.snapshot["steps"]
     if request.snapshot["mode"] == StepMode.PARALLEL.value:
@@ -1043,7 +1043,7 @@ async def find_slot(
     session: AsyncSession, request: ApprovalRequest, user_id: uuid.UUID, now: datetime
 ) -> Slot | None:
     """Kişinin bu talepte kullanabileceği karar hakkı: önce kendi, sonra vekâleten."""
-    if RequestStatus(request.status) is not RequestStatus.PENDING:
+    if ApprovalStatus(request.status) is not ApprovalStatus.PENDING:
         return None
     decided = {
         (d.user_id, d.slot_user_id)
@@ -1101,7 +1101,7 @@ async def decide(
     now: datetime,
 ) -> ApprovalRequest:
     """`request` kilitli gelmeli (`get_request(lock=True)`)."""
-    if RequestStatus(request.status) is not RequestStatus.PENDING:
+    if ApprovalStatus(request.status) is not ApprovalStatus.PENDING:
         raise ApprovalError(409, "not_pending", "Bu talep artık karar beklemiyor.")
     if decider.user_id == request.requested_by:
         raise ApprovalError(403, "own_request", "Kendi talebinizi onaylayamazsınız.")
@@ -1131,7 +1131,7 @@ async def decide(
         )
         await session.flush()
     if decision is Decision.REVISION:
-        request.status = RequestStatus.REVISION_REQUESTED.value
+        request.status = ApprovalStatus.REVISION_REQUESTED.value
         await session.flush()
         await _notify(
             session, [request.requested_by], request, "approval.revision_requested",
@@ -1177,7 +1177,7 @@ async def _advance(
     snapshot["steps"] = steps
     request.snapshot = snapshot
     if outcome is StepOutcome.REJECTED:
-        request.status = RequestStatus.REJECTED.value
+        request.status = ApprovalStatus.REJECTED.value
         request.decided_at = now
         await session.flush()
         await _notify(
@@ -1198,7 +1198,7 @@ async def _advance(
 
 
 async def _finish(session: AsyncSession, request: ApprovalRequest, now: datetime) -> None:
-    request.status = RequestStatus.APPROVED.value
+    request.status = ApprovalStatus.APPROVED.value
     request.decided_at = now
     await session.flush()
     executor = _EXECUTORS[ActionType(request.action_type)]
@@ -1206,7 +1206,7 @@ async def _finish(session: AsyncSession, request: ApprovalRequest, now: datetime
         async with session.begin_nested():
             await executor(session, request)
     except ExecutionError as exc:
-        request.status = RequestStatus.EXECUTION_FAILED.value
+        request.status = ApprovalStatus.EXECUTION_FAILED.value
         request.failure_reason = str(exc)[:COMMENT_MAX]
         await session.flush()
         await _notify(
@@ -1214,7 +1214,7 @@ async def _finish(session: AsyncSession, request: ApprovalRequest, now: datetime
             f"Onaylandı – yürütülemedi: {request.title}", key="failed", body=request.failure_reason,
         )  # fmt: skip
         return
-    request.status = RequestStatus.EXECUTED.value
+    request.status = ApprovalStatus.EXECUTED.value
     await session.flush()
     await _notify(
         session, [request.requested_by], request, "approval.approved",
@@ -1227,9 +1227,9 @@ async def withdraw(
 ) -> ApprovalRequest:
     if request.requested_by != user_id:
         raise ApprovalError(403, "not_requester", "Yalnız talebi açan geri çekebilir.")
-    if RequestStatus(request.status) not in OPEN_STATUSES:
+    if ApprovalStatus(request.status) not in OPEN_STATUSES:
         raise ApprovalError(409, "not_pending", "Bu talep artık geri çekilemez.")
-    request.status = RequestStatus.WITHDRAWN.value
+    request.status = ApprovalStatus.WITHDRAWN.value
     request.decided_at = now
     await session.flush()
     return request
@@ -1250,7 +1250,7 @@ async def resubmit(
     """Revizyon sonrası yeniden gönderim: yeni sürüm, zincir baştan; kural versiyonu aynı kalır."""
     if request.requested_by != user_id:
         raise ApprovalError(403, "not_requester", "Yalnız talebi açan yeniden gönderebilir.")
-    if RequestStatus(request.status) is not RequestStatus.REVISION_REQUESTED:
+    if ApprovalStatus(request.status) is not ApprovalStatus.REVISION_REQUESTED:
         raise ApprovalError(409, "not_in_revision", "Bu talepte revizyon istenmedi.")
     if title:
         request.title = " ".join(title.split())[:TITLE_MAX]
@@ -1261,7 +1261,7 @@ async def resubmit(
     if amount is not None:
         request.amount = amount
     request.revision += 1
-    request.status = RequestStatus.PENDING.value
+    request.status = ApprovalStatus.PENDING.value
     request.current_step = 0
     snapshot = dict(request.snapshot)
     snapshot["steps"] = [
@@ -1315,7 +1315,7 @@ def pending_for(user_id: uuid.UUID, delegator_ids: list[uuid.UUID]) -> Select[Ap
     )
     return (
         select(ApprovalRequest)
-        .where(ApprovalRequest.status == RequestStatus.PENDING.value, open_slot, ~already)
+        .where(ApprovalRequest.status == ApprovalStatus.PENDING.value, open_slot, ~already)
         .order_by(
             ApprovalRequest.post_approval.desc(),  # "sonradan onay" en üstte
             ApprovalRequest.created_at,
@@ -1417,7 +1417,7 @@ async def run_timers(
     pending = list(
         await session.scalars(
             select(ApprovalRequest)
-            .where(ApprovalRequest.status == RequestStatus.PENDING.value)
+            .where(ApprovalRequest.status == ApprovalStatus.PENDING.value)
             .with_for_update(skip_locked=True)
         )
     )
@@ -1515,7 +1515,7 @@ async def run_all_timers(
     with all_sites_scope():
         async with factory() as session:
             pending = select(ApprovalRequest.site_id).where(
-                ApprovalRequest.status == RequestStatus.PENDING.value
+                ApprovalRequest.status == ApprovalStatus.PENDING.value
             )
             starting = select(ApprovalDelegation.site_id).where(
                 ApprovalDelegation.start_notified.is_(False), *_active_delegation(now)

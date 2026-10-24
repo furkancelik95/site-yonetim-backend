@@ -15,6 +15,7 @@ import secrets
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
+from decimal import Decimal
 
 from sqlalchemy import Select, and_, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
@@ -24,7 +25,7 @@ from site_yonetim.core.security import hash_password
 from site_yonetim.db.tenancy import all_sites_scope, current_scope
 from site_yonetim.domain.access import SiteRole, UserKind
 from site_yonetim.domain.members import Applicant, Relation
-from site_yonetim.domain.structure import PartyRole
+from site_yonetim.domain.structure import FULL_SHARE, PartyRole
 from site_yonetim.models import (
     Block,
     Person,
@@ -251,8 +252,16 @@ async def approve(
     start_date: date,
     decided_by: str,
     now: datetime,
+    share_percent: Decimal | None = None,
 ) -> Approved:
+    """`share_percent` yalnız malik başvurusunda: hisseli mülkiyette yeni malikin payı
+    (verilmezse %100; mevcut maliklerle toplam %100'ü aşarsa owner_shares_exceed)."""
     _undecided(registration)
+    relation = Relation(registration.relation)
+    if share_percent is not None and relation is not Relation.OWNER:
+        raise RegistrationRuleError(
+            "share_only_for_owner", "Hisse oranı yalnız malik başvurusunda girilir."
+        )
     row = (
         await session.execute(
             select(Unit, Block)
@@ -264,10 +273,15 @@ async def approve(
         raise RegistrationRuleError("unit_not_found", "Bölüm seçin.")
     unit, block = row
     person = await _person(session, registration)
-    relation = Relation(registration.relation)
     role = PartyRole.OWNER if relation is Relation.OWNER else PartyRole.TENANT
     await structure.add_party(
-        session, unit=unit, block=block, person=person, role=role, start_date=start_date
+        session,
+        unit=unit,
+        block=block,
+        person=person,
+        role=role,
+        start_date=start_date,
+        share_percent=share_percent if share_percent is not None else FULL_SHARE,
     )
     login, password = await _login(session, registration, person)
     registration.status = "approved"
