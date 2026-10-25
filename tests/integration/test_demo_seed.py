@@ -36,6 +36,7 @@ from site_yonetim.models import (
     Person,
     Plan,
     Request,
+    RequestEvent,
     Site,
     SiteModule,
     Unit,
@@ -107,6 +108,28 @@ async def test_demo_verisi_yuklenir(
         "reservations", "visitors", "packages", "valet",
         "general-assembly", "surveys", "staff",
     }  # fmt: skip
+
+
+async def test_demo_talepleri_zaman_sirasinda(
+    dev_settings: Settings, session_factory: Factory, admin_engine: object
+) -> None:
+    """Açılış < atama < durum değişiklikleri; çözüm açılıştan önce olamaz (SLA raporu)."""
+    await seed_demo(dev_settings, session_factory)
+    with all_sites_scope():
+        async with session_factory() as session:
+            requests = list(await session.scalars(select(Request)))
+            events = list(await session.scalars(select(RequestEvent).order_by(RequestEvent.id)))
+    assert requests
+    by_request: dict[object, list[RequestEvent]] = {}
+    for event in events:
+        by_request.setdefault(event.request_id, []).append(event)
+    for request in requests:
+        if request.resolved_at is not None:
+            assert request.resolved_at > request.created_at, request.title
+        history = by_request[request.id]
+        assert history[0].created_at == request.created_at
+        times = [e.created_at for e in history]
+        assert times == sorted(times), request.title
 
 
 async def test_ikinci_calistirma_hicbir_sey_yapmaz(

@@ -497,9 +497,13 @@ async def _seed_operations(session: AsyncSession, spec: SiteSpec, today: date) -
                 reported_by_person_id=person_id,
             ),
             actor="Demo verisi",
+            now=opened,
         )
         if demand.assignee:
-            await requests.assign(session, request, demand.assignee, actor="Site Yönetimi")
+            await requests.assign(
+                session, request, demand.assignee, actor="Site Yönetimi",
+                now=opened + timedelta(hours=1),
+            )  # fmt: skip
         target = RequestStatus(demand.status)
         path = {
             RequestStatus.IN_PROGRESS: [RequestStatus.IN_PROGRESS],
