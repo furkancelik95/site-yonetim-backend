@@ -84,6 +84,18 @@ from site_yonetim.models.operations import (
 from site_yonetim.models.people import LedgerAccount, Person, UnitParty
 from site_yonetim.models.platform import Organization, Plan, PropertyKind, Site
 from site_yonetim.models.security import Incident, LostItem, Package, Visitor
+from site_yonetim.models.staffing import (
+    AttendanceEvent,
+    AttendanceSettings,
+    LeaveRequest,
+    ShiftAssignment,
+    ShiftTemplate,
+    ShiftWeek,
+    TimesheetDay,
+    TimesheetExport,
+    TimesheetFix,
+    TimesheetLine,
+)
 from site_yonetim.models.structure import Block, Unit, UnitType
 
 __all__ = [
@@ -99,6 +111,8 @@ __all__ = [
     "ApprovalRule",
     "ApprovalRuleVersion",
     "Asset",
+    "AttendanceEvent",
+    "AttendanceSettings",
     "AuditLog",
     "AuthEvent",
     "AuthEventKind",
@@ -124,6 +138,7 @@ __all__ = [
     "IdempotencyKey",
     "Incident",
     "LateFeePolicy",
+    "LeaveRequest",
     "LedgerAccount",
     "LedgerEntry",
     "LoginThrottle",
@@ -154,6 +169,9 @@ __all__ = [
     "Request",
     "RequestDepartment",
     "RequestEvent",
+    "ShiftAssignment",
+    "ShiftTemplate",
+    "ShiftWeek",
     "Site",
     "SiteFinanceSummary",
     "SiteMembership",
@@ -162,6 +180,10 @@ __all__ = [
     "StockItem",
     "StockMove",
     "StoredFile",
+    "TimesheetDay",
+    "TimesheetExport",
+    "TimesheetFix",
+    "TimesheetLine",
     "Unit",
     "UnitParty",
     "UnitType",

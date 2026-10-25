@@ -5,7 +5,9 @@ bilinçli `all_sites_scope()` kullanımı buradadır ve sorgu **yalnız o kullan
 sınırlıdır. İstek oturumu bu kapsama sabitlenmesin diye kendi kısa oturumunu açar.
 """
 
-from sqlalchemy import select
+from datetime import date
+
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from site_yonetim.db.tenancy import all_sites_scope
@@ -17,14 +19,18 @@ from site_yonetim.domain.access import (
     resolve_access,
 )
 from site_yonetim.models import OrganizationMembership as OrganizationMembershipRow
-from site_yonetim.models import Site, SiteMembership, User
+from site_yonetim.models import Site, SiteMembership, StaffMember, User
 
 
 def _ref(site: Site) -> SiteRef:
     return SiteRef(site.id, site.name, site.slug, site.organization_id)
 
 
-async def load_user_access(factory: async_sessionmaker[AsyncSession], user: User) -> UserAccess:
+async def load_user_access(
+    factory: async_sessionmaker[AsyncSession], user: User, *, today: date | None = None
+) -> UserAccess:
+    """`today` verilirse (istek günü) ayrılış tarihi geçmiş personel kartına bağlı üyelik pasif
+    sayılır — K29: gece işi üyeliği kapatmadan önce de erişim bir sonraki istekte kapanır."""
     explicit: list[ExplicitMembership] = []
     organizations: list[OrganizationMembership] = []
 
@@ -62,9 +68,24 @@ async def load_user_access(factory: async_sessionmaker[AsyncSession], user: User
                         .where(SiteMembership.user_id == user.id)
                     )
                 ).all()
+                departed: set[object] = set()
+                if today is not None:
+                    departed = set(
+                        await session.scalars(
+                            select(StaffMember.site_id).where(
+                                and_(
+                                    StaffMember.user_id == user.id,
+                                    StaffMember.end_date < today,
+                                )
+                            )
+                        )
+                    )
             explicit = [
                 ExplicitMembership(
-                    _ref(site), membership.role, membership.is_active, membership.person_id
+                    _ref(site),
+                    membership.role,
+                    membership.is_active and site.id not in departed,
+                    membership.person_id,
                 )
                 for membership, site in rows
             ]

@@ -9,7 +9,7 @@ import uuid
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from site_yonetim.api.deps import AuthenticatedUserDep, FactoryDep
+from site_yonetim.api.deps import AuthenticatedUserDep, FactoryDep, TodayDep
 from site_yonetim.domain.access import SiteAccess, UserAccess
 from site_yonetim.services.access import load_user_access
 
@@ -67,7 +67,7 @@ class MeResponse(BaseModel):
 
 
 @router.get("/me", summary="Oturumdaki kullanıcı ve erişimleri")
-async def me(current: AuthenticatedUserDep, factory: FactoryDep) -> MeResponse:
+async def me(current: AuthenticatedUserDep, factory: FactoryDep, today: TodayDep) -> MeResponse:
     """Geçici paroladayken de çalışır (frontend yönlendirmeyi buradan yapar)."""
-    access = await load_user_access(factory, current.user)
+    access = await load_user_access(factory, current.user, today=today)
     return MeResponse.of(access, must_change_password=current.user.must_change_password)

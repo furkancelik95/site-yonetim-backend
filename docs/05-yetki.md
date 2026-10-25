@@ -41,7 +41,7 @@ kümesi tanımlanmalı.
 | `polls.manage` | Anket açma ve kapatma (okuma: `announcements.read`) |
 | `contracts.manage` | Hizmet sözleşmesi ekleme, düzenleme, arşivleme (okuma: `expenses.read`) |
 | `inventory.read` / `inventory.manage` | Demirbaş ve stok görüntüleme / yönetimi (stok giriş-çıkışı dahil) |
-| `staff.manage` | Site personeli kaydı (okuma: `people.read`) |
+| `staff.manage` | Site personeli kaydı; vardiya planı, izin, puantaj, aktarım ve giriş-çıkış ayarı (okuma: `people.read` — personel listesi ve vardiya planı; izin listesi ve puantaj yalnız `staff.manage`, raporlu izin sağlık verisi olabilir). Puantaj aktarımını `finance.read` de okur. Kartı bağlı personel (K29) kendi vardiyasını, izin talebini ve giriş-çıkışını `/me/*` ile kullanır — izin gerekmez |
 | `approvals.rules.read` | Onay kurallarını görür (Yazılım Dokümanı ONY-01) |
 | `approvals.rules.manage` | Onay kurallarını yönetir; sitedeki tüm onay taleplerini görür (gözetim). Onay **kararı** izin istemez: talebe onaycı olarak atanmış (ya da onaycının etkin vekili) olmak yeter |
 

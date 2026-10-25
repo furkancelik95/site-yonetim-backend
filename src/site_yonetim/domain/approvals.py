@@ -43,6 +43,7 @@ class ActionType(StrEnum):
     REGISTRATION = "registration"  # kayıt başvurusu
     STOCK_COUNT_DIFFERENCE = "stock_count_difference"  # stok sayım farkı
     APPROVAL_RULE_CHANGE = "approval_rule_change"  # onay kuralı değişikliği
+    LEAVE_REQUEST = "leave_request"  # izin talebi (IK-03)
 
 
 ACTION_LABELS: dict[ActionType, str] = {
@@ -65,6 +66,7 @@ ACTION_LABELS: dict[ActionType, str] = {
     ActionType.REGISTRATION: "Kayıt başvurusu",
     ActionType.STOCK_COUNT_DIFFERENCE: "Stok sayım farkı",
     ActionType.APPROVAL_RULE_CHANGE: "Onay kuralı değişikliği",
+    ActionType.LEAVE_REQUEST: "İzin talebi",
 }
 
 
