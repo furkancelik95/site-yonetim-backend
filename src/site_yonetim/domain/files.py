@@ -41,6 +41,24 @@ def _signature(data: bytes) -> str | None:
     return None
 
 
+_BY_CONTENT_TYPE = {kind.content_type: kind for kind in _KINDS.values()}
+
+
+def kind_from_content(data: bytes) -> FileKind | None:
+    """Uzantıya bakmadan, yalnız içerik imzasından tür (belge arşivi). Tanınmazsa `None`."""
+    content_type = _signature(data)
+    return _BY_CONTENT_TYPE.get(content_type) if content_type else None
+
+
+def name_with_extension(file_name: str, kind: FileKind) -> str:
+    """Adın uzantısı içerikle uyuşmuyorsa doğrusu eklenir: `plan.png` (PDF) → `plan.pdf`."""
+    stem, dot, extension = file_name.rpartition(".")
+    if dot and _KINDS.get(extension.lower()) == kind:
+        return file_name
+    base = stem if dot and _KINDS.get(extension.lower()) else file_name
+    return f"{base[: FILE_NAME_MAX - len(kind.extension) - 1]}.{kind.extension}"
+
+
 def clean_file_name(name: str | None) -> str:
     """Yol ayıraçları ve geçersiz karakterler `_`; yalnız son parça; en fazla 120 karakter.
 

@@ -27,6 +27,7 @@ from site_yonetim.domain.finance import (
     PayerRule,
     ScopeKind,
 )
+from site_yonetim.domain.management import Employer
 from site_yonetim.domain.modules import ModuleKey
 from site_yonetim.domain.money import distribute, round_money
 from site_yonetim.domain.operations import (
@@ -39,6 +40,7 @@ from site_yonetim.domain.operations import (
 from site_yonetim.domain.parking import check_space
 from site_yonetim.domain.patrol import check_plan, check_point
 from site_yonetim.domain.security import VisitorKind
+from site_yonetim.domain.staffing import week_start
 from site_yonetim.domain.structure import AccountKind, PartyRole
 from site_yonetim.domain.text import normalize_person_name
 from site_yonetim.models import (
@@ -75,6 +77,7 @@ from site_yonetim.seed.demo_data import (
     CHARGED_MONTHS,
     CURRENT_MONTH_FACTOR,
     DEMO_PASSWORD,
+    DOCUMENTS,
     EXPENSES,
     LAST_MONTH_FACTOR,
     OLDER_MONTHS_BONUS,
@@ -85,9 +88,13 @@ from site_yonetim.seed.demo_data import (
     PLANS,
     REQUESTS,
     RESIDENT,
+    RESIDENT_DOCUMENT,
     SEED,
+    SHIFT_TEMPLATES,
     SITES,
+    STAFF_CARDS,
     UNPAID_SHARE_THIS_MONTH,
+    DocumentSpec,
     SiteSpec,
     occupancy_for,
     units_for,
@@ -96,6 +103,7 @@ from site_yonetim.services import (
     announcements,
     cash,
     charging,
+    documents,
     expenses,
     gatehouse,
     parking,
@@ -104,9 +112,15 @@ from site_yonetim.services import (
     requests,
     security,
 )
+from site_yonetim.services import approvals as approvals_svc
+from site_yonetim.services import leaves as leaves_svc
+from site_yonetim.services import shifts as shifts_svc
+from site_yonetim.services import staff as staff_svc
+from site_yonetim.services import timesheets as timesheets_svc
 from site_yonetim.services.charging import BUSINESS_TZ
+from site_yonetim.services.files import FileStore
 from site_yonetim.services.provisioning import provision_site
-from site_yonetim.services.sites import set_module_enabled
+from site_yonetim.services.sites import available_modules, set_module_enabled
 from site_yonetim.services.structure import add_party
 
 logger = logging.getLogger(__name__)
@@ -188,6 +202,7 @@ async def _seed_demo(
         user_ids = {email: user.id for email, user in users.items()}
 
     # 2) Her site kendi oturumunda (oturum tek site kapsamına sabitlenir)
+    store = FileStore(settings.file_storage_root)
     for spec in SITES:
         async with factory() as session, session.begin():
             site = await provision_site(
@@ -209,6 +224,8 @@ async def _seed_demo(
                 await _seed_operations(session, spec, today)
                 await _seed_gate(session, spec, today)
                 await _seed_security_setup(session, spec, today)
+                if ModuleKey.DOCUMENTS in await available_modules(session, site):
+                    await _seed_documents(session, store, today)
                 session.add_all(
                     SiteMembership(user_id=user_ids[account.email], role=account.site_role)
                     for account in ACCOUNTS
@@ -219,7 +236,8 @@ async def _seed_demo(
     async with factory() as session:
         aksu = await session.scalar(select(Site.id).where(Site.slug == RESIDENT.site_slug))
     if aksu is not None:
-        await _seed_resident(factory, aksu, password_hash)
+        await _seed_resident(factory, aksu, password_hash, store, today)
+        await _seed_staff(factory, aksu, user_ids, today)
 
     logger.info("Demo verisi yüklendi: %d site, %d hesap.", len(SITES), len(ACCOUNTS) + 1)
     return True
@@ -609,7 +627,11 @@ async def _seed_security_setup(session: AsyncSession, spec: SiteSpec, today: dat
 
 
 async def _seed_resident(
-    factory: async_sessionmaker[AsyncSession], site_id: uuid.UUID, password_hash: str
+    factory: async_sessionmaker[AsyncSession],
+    site_id: uuid.UUID,
+    password_hash: str,
+    store: FileStore,
+    today: date,
 ) -> None:
     """`sakin@demo.local`: Aksu'da en borçlu oturan hesabın kişisi (docs/10 §2)."""
     with site_scope(site_id):
@@ -642,6 +664,188 @@ async def _seed_resident(
             linked = await session.get(Person, person.id)
             if linked is not None:
                 linked.user_id = user_id
+            unit_id = await session.scalar(
+                select(UnitParty.unit_id).where(UnitParty.person_id == person.id).limit(1)
+            )
+            if unit_id is not None:  # sakinin bölümüne özel belge (servis isteği 78)
+                await _upload_document(session, store, RESIDENT_DOCUMENT, today, unit_id=unit_id)
+
+
+# --- Belge arşivi (RAP-03) ------------------------------------------------------------
+
+_ASCII = str.maketrans("çğıöşüÇĞİÖŞÜ—", "cgiosuCGIOSU-")
+
+
+def demo_pdf(title: str, version: int) -> bytes:
+    """Tek sayfalık küçük ama geçerli PDF (xref tablosu doğru): demo belge içeriği."""
+    lines = [title.translate(_ASCII), f"Surum {version} - demo belgesi, ornek icerik"]
+    text = " ".join(
+        f"BT /F1 {18 if i == 0 else 11} Tf 72 {760 - i * 28} Td ({line}) Tj ET"
+        for i, line in enumerate(lines)
+    ).encode("latin-1", "replace")
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] "
+        b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Length %d >>\nstream\n%s\nendstream" % (len(text), text),
+    ]
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for number, body in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n%s\nendobj\n" % (number, body)
+    xref = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+    out += b"".join(b"%010d 00000 n \n" % offset for offset in offsets)
+    out += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (
+        len(objects) + 1,
+        xref,
+    )
+    return bytes(out)
+
+
+async def _upload_document(
+    session: AsyncSession,
+    store: FileStore,
+    spec: DocumentSpec,
+    today: date,
+    *,
+    block_id: uuid.UUID | None = None,
+    unit_id: uuid.UUID | None = None,
+) -> None:
+    scope, target = (
+        ("unit", unit_id) if unit_id else ("block", block_id) if block_id else ("site", None)
+    )
+    for version in range(1, spec.versions + 1):
+        await documents.upload(
+            session,
+            documents.Upload(
+                title=spec.title,
+                kind=spec.kind,
+                scope=scope,
+                scope_id=target,
+                confidentiality=spec.confidentiality,
+                valid_until=today + timedelta(days=spec.valid_days)
+                if spec.valid_days is not None
+                else None,
+                retention_years=spec.retention_years,
+                file_name=f"{spec.title.translate(_ASCII).lower().replace(' ', '-')}.pdf",
+                data=demo_pdf(spec.title, version),
+            ),
+            uploader=documents.Uploader(None, "Site Yönetimi", can_confidential=True),
+            store=store,
+        )
+
+
+async def _seed_documents(session: AsyncSession, store: FileStore, today: date) -> None:
+    """Yönetim planı (2 sürüm), kurallar, süresi yaklaşan/dolan poliçe ve etiket, gizli belge."""
+    first_block = await session.scalar(select(Block.id).order_by(Block.sort_order, Block.name))
+    for spec in DOCUMENTS:
+        await _upload_document(
+            session, store, spec, today, block_id=first_block if spec.first_block else None
+        )
+
+
+async def _seed_staff(
+    factory: async_sessionmaker[AsyncSession],
+    site_id: uuid.UUID,
+    user_ids: dict[str, uuid.UUID],
+    today: date,
+) -> None:
+    """İnsan kaynakları (servis istekleri 35–39): kartlar (güvenlik ve teknik hesaplara bağlı —
+    K29), üç vardiya şablonu, geçen ve bu haftanın planı (yayında), izinler, kesinleşmiş günler."""
+    now = datetime.combine(today, time(9), BUSINESS_TZ)
+    monday = week_start(today)
+    with site_scope(site_id):
+        async with factory() as session, session.begin():
+            cards = []
+            for name, position, payroll, email in STAFF_CARDS:
+                cards.append(
+                    await staff_svc.create(
+                        session,
+                        staff_svc.StaffData(
+                            full_name=name,
+                            position=position,
+                            employer=Employer.SITE.value,
+                            contractor_name=None,
+                            phone=None,
+                            start_date=date(today.year - 1, 3, 1),
+                            end_date=None,
+                            shift=None,
+                            payroll_no=payroll,
+                            user_id=user_ids.get(email) if email else None,
+                        ),
+                        today=today,
+                        now=now,
+                    )
+                )
+            templates = [
+                await shifts_svc.save_template(
+                    session,
+                    shifts_svc.TemplateData(name, start, end, rest, None, "Ana kapı", True),
+                    item=None,
+                )
+                for name, start, end, rest in SHIFT_TEMPLATES
+            ]
+            # Dönüşümlü plan: kişi i, gün d → şablon (i + d) % 3; pazar boş
+            for week in (monday - timedelta(days=7), monday):
+                for offset in range(6):
+                    day = week + timedelta(days=offset)
+                    for index, card in enumerate(cards):
+                        await shifts_svc.assign(
+                            session,
+                            staff_id=card.id,
+                            work_date=day,
+                            template_id=templates[(index + offset) % len(templates)].id,
+                            actor_name="Demo verisi",
+                        )
+                await shifts_svc.publish(
+                    session, week=week, acknowledge=True, actor_name="Demo verisi", now=now
+                )
+            manager = approvals_svc.Person(user_ids["yonetici@demo.local"], "Kerem Yıldırım")
+            site = await session.get(Site, site_id)
+            if site is None:  # pragma: no cover
+                return
+            approved = await leaves_svc.create(
+                session,
+                site,
+                leaves_svc.LeaveData(
+                    cards[2].id,
+                    "annual",
+                    monday + timedelta(days=9),
+                    monday + timedelta(days=11),
+                    None,
+                ),
+                source="manager",
+                actor=manager,
+                today=today,
+                now=now,
+            )
+            approved.status = "approved"
+            approved.decided_by_name = manager.name
+            approved.decided_at = now
+            await leaves_svc.create(
+                session,
+                site,
+                leaves_svc.LeaveData(
+                    cards[1].id, "excuse", monday + timedelta(days=15), monday + timedelta(days=15),
+                    "Aile ziyareti",
+                ),
+                source="manager",
+                actor=manager,
+                today=today,
+                now=now,
+            )  # fmt: skip
+            await session.flush()
+            # Geçen haftanın ilk üç günü kesin (puantaj ekranı ve aktarım önizlemesi boş görünmesin)
+            for offset in range(3):
+                day = monday - timedelta(days=7 - offset)
+                if day < today:
+                    await timesheets_svc.finalize(
+                        session, day, today=today, actor_name="Demo verisi"
+                    )
 
 
 def _person(first: str, last: str) -> Person:

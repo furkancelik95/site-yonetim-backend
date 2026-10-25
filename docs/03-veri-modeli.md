@@ -477,7 +477,24 @@ Site içinde artan `number`; silinmez, içerik değişmez. Olay: `kind`, `locati
   `quantity > 0`) **değişmez** (`forbid_history_change` tetikleyicisi).
 - `staff_members` (`full_name`, `position`, `employer` `site` · `contractor` — taşeronda
   `contractor_name` zorunlu, `phone?`, `start_date`, `end_date?`, `shift?`). Veri minimizasyonu:
-  T.C. kimlik, maaş, adres, sağlık yok; saklama süresi K8.
+  T.C. kimlik, maaş, adres, sağlık yok; saklama süresi K8. + `payroll_no?` (site içinde tekil,
+  kısmi benzersiz dizin), `user_id?` → `users` (K29, site içinde tekil), `access_closed_at?`.
+
+### İnsan kaynakları [K] — vardiya, izin, puantaj (istekler 36–39, göç 0029)
+- `shift_templates` (`name` tekil, `start_time`/`end_time` TIME — bitiş ≤ başlangıç ertesi gün,
+  `break_minutes` 0–180, `position?`, `location?`, `is_active`). Silinmez.
+- `shift_assignments` (`staff_id`, `template_id`, `work_date`; `(staff, gün, şablon)` tekil;
+  `changed_after_publish`). `shift_weeks` (`week_start` pazartesi, yayın anı/eden,
+  `removed_after_publish`).
+- `leave_requests` (`leave_type`, `date_from`–`date_to`, `days`, `leave_note` — raporluda boş
+  (kısıt), `status` `pending`·`approved`·`rejected`·`cancelled`, `source`, `approval_request_id?`).
+  Denetim kaydında `leave_type`/`leave_note` maskeli (sağlık verisi olabilir).
+- `timesheet_fixes` (atama başına bir düzeltme, gerekçeli), `timesheet_days` (kesinleşen gün) ve
+  `timesheet_lines` (donmuş satır) — son ikisi **değişmez**. `timesheet_exports` (`month` tekil,
+  `rows` JSONB) **değişmez**.
+- `attendance_settings` (site başına bir: `method`, `qr_code`, konum NUMERIC(9,6), `radius_m`,
+  toleranslar) ve `attendance_events` (giriş/çıkış, cihaz ve sunucu saati, `verified`,
+  `distance_m`; konum saklanmaz) **değişmez**.
 
 Hiçbiri silinmez. Hepsi (oy tablosu hariç) denetim kaydında.
 
@@ -570,6 +587,28 @@ Açılış bakiyesi de bir harekettir (`source = opening`) — ekstrede nereden 
 | uploaded_by_name | TEXT NULL | |
 
 Kurallar: `09-guvenlik-kvkk.md` §3.
+
+### `documents` [K] — belge arşivi (RAP-03; servis isteği 78)
+| Sütun | Tip | Not |
+|---|---|---|
+| title · title_key | TEXT | ad (3–120) · sürüm eşleşmesi anahtarı (Türkçe küçük harf, boşluk tekleştirilmiş) |
+| kind | TEXT | `plan` · `rules` · `insurance` · `fire_report` · `elevator` · `contract` · `minutes` · `financial` · `other` |
+| scope · block_id · unit_id | TEXT · UUID NULL | `site` (ikisi boş) · `block` · `unit`; bileşik FK |
+| confidentiality | TEXT | `public` · `unit` (yalnız `scope = unit`) · `management` · `secret` |
+| valid_until | DATE NULL | geçerlilik bitişi (60/30 gün uyarı) |
+| retention_years | INT NULL | saklama süresi (K8), 1–100 — bilgi amaçlı, otomatik silme yok |
+| subject_type · subject_id | TEXT · UUID NULL | başka modülün kaydına bağ (ikisi birlikte) |
+| current_version | INT | son sürüm no |
+
+Benzersiz: `(site_id, title_key, scope, block_id, unit_id)` NULLS NOT DISTINCT — aynı ad + kapsam
+tek belge, yeni yükleme yeni sürüm. Silinmez.
+
+### `document_versions` [K] — **değişmez**
+`document_id`, `version` (belgede tekil), `stored_file_id` (tekil; ad, tür, boyut, SHA-256
+oradan), `uploaded_by_id`, `uploaded_by_name`.
+
+### `document_access_logs` [K] — gizli belge açılışı, **değişmez**
+`document_id`, `version`, `user_id`, `user_name`, `created_at`.
 
 ---
 
