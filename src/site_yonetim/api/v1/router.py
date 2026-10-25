@@ -16,18 +16,24 @@ from site_yonetim.api.v1 import (
     custom_fields,
     dashboard,
     departments,
+    documents,
     expenses,
+    gatehouse,
     health,
     import_history,
     imports,
     incidents,
     inventory,
     invitations,
+    leaves,
     me,
     meetings,
     members,
     notifications,
+    parking,
+    patrol,
     payments,
+    plates,
     platform,
     polls,
     portfolio,
@@ -39,11 +45,16 @@ from site_yonetim.api.v1 import (
     security,
     sessions,
     setup,
+    shift_log,
+    shifts,
     sites,
     staff,
+    staff_self,
     structure,
     structure_defs,
+    timesheets,
     vehicles,
+    visits,
 )
 
 API_V1_PREFIX = "/api/v1"
@@ -58,6 +69,13 @@ api_router.include_router(sites.router)
 api_router.include_router(platform.router)
 api_router.include_router(security.router)  # /units/lookup, /units/{id}'den önce
 api_router.include_router(incidents.router)
+# Güvenlik, devriye, otopark (servis istekleri 40–46, K30); /units/{id}/… yapıdan önce
+api_router.include_router(gatehouse.router)
+api_router.include_router(visits.router)
+api_router.include_router(plates.router)
+api_router.include_router(shift_log.router)
+api_router.include_router(patrol.router)
+api_router.include_router(parking.router)
 api_router.include_router(structure.router)
 api_router.include_router(structure_defs.router)
 api_router.include_router(vehicles.router)
@@ -81,6 +99,7 @@ api_router.include_router(reports.router)
 api_router.include_router(dashboard.router)
 api_router.include_router(resident.router)
 api_router.include_router(polls.resident_router)
+api_router.include_router(documents.resident_router)
 api_router.include_router(portfolio.router)
 api_router.include_router(audit.router)
 api_router.include_router(members.router)
@@ -94,5 +113,10 @@ api_router.include_router(polls.router)
 api_router.include_router(contracts.router)
 api_router.include_router(inventory.router)
 api_router.include_router(staff.router)
+api_router.include_router(shifts.router)
+api_router.include_router(leaves.router)
+api_router.include_router(timesheets.router)
+api_router.include_router(staff_self.router)
 api_router.include_router(notifications.router)
 api_router.include_router(approvals.router)
+api_router.include_router(documents.router)

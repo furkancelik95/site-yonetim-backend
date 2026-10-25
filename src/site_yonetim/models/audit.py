@@ -151,6 +151,14 @@ AUDITED_TABLES = frozenset(
         "incidents",
         "lost_items",
         "request_departments",
+        # güvenlik, devriye, otopark (ayar ve kurulum; ziyaretçi kararları ayrıca `record` ile,
+        # kişisel veri olmadan — saklama süresi denetimden kısa)
+        "gates",
+        "security_settings",
+        "patrol_points",
+        "patrol_plans",
+        "parking_spaces",
+        "parking_allocations",
         # yönetim (anket oyları gizli: poll_votes yazılmaz)
         "meetings",
         "meeting_agenda_items",
@@ -160,6 +168,15 @@ AUDITED_TABLES = frozenset(
         "stock_items",
         "stock_moves",
         "staff_members",
+        # insan kaynakları (IK-02..05): izin türü/açıklaması maskeli (sağlık verisi olabilir)
+        "shift_templates",
+        "shift_assignments",
+        "shift_weeks",
+        "leave_requests",
+        "timesheet_fixes",
+        "timesheet_days",
+        "timesheet_exports",
+        "attendance_settings",
         # ayarlar
         "charge_types",
         "allocation_rules",
@@ -187,6 +204,9 @@ AUDITED_TABLES = frozenset(
         "approval_requests",
         "approval_decisions",
         "approval_delegations",
+        # belge arşivi (gizli belge açılışı ayrıca document_access_logs'ta)
+        "documents",
+        "document_versions",
         # yetki / üyelik
         "site_memberships",
     }
@@ -199,7 +219,7 @@ _PENDING = "audit_pending"
 def _json(value: Any) -> Any:
     if isinstance(value, Decimal):
         return format(value, "f")
-    if isinstance(value, (dt.date, dt.datetime)):
+    if isinstance(value, (dt.date, dt.datetime, dt.time)):
         return value.isoformat()
     if isinstance(value, uuid.UUID):
         return str(value)

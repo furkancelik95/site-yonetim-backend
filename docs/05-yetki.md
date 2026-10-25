@@ -42,20 +42,26 @@ kümesi tanımlanmalı.
 | `polls.manage` | Anket açma ve kapatma (okuma: `announcements.read`) |
 | `contracts.manage` | Hizmet sözleşmesi ekleme, düzenleme, arşivleme (okuma: `expenses.read`) |
 | `inventory.read` / `inventory.manage` | Demirbaş ve stok görüntüleme / yönetimi (stok giriş-çıkışı dahil) |
-| `staff.manage` | Site personeli kaydı (okuma: `people.read`) |
+| `staff.manage` | Site personeli kaydı; vardiya planı, izin, puantaj, aktarım ve giriş-çıkış ayarı (okuma: `people.read` — personel listesi ve vardiya planı; izin listesi ve puantaj yalnız `staff.manage`, raporlu izin sağlık verisi olabilir). Puantaj aktarımını `finance.read` de okur. Kartı bağlı personel (K29) kendi vardiyasını, izin talebini ve giriş-çıkışını `/me/*` ile kullanır — izin gerekmez |
 | `approvals.rules.read` | Onay kurallarını görür (Yazılım Dokümanı ONY-01) |
+| `documents.read` | Belge arşivi: gizli dışındaki belgeleri görür ve indirir (RAP-03) |
+| `documents.manage` | Belge yükler, yeni sürüm ekler |
+| `documents.confidential` | Gizli belgeleri görür ve açar; her açılış kayda geçer, açılış kaydını görür |
 | `approvals.rules.manage` | Onay kurallarını yönetir; sitedeki tüm onay taleplerini görür (gözetim). Onay **kararı** izin istemez: talebe onaycı olarak atanmış (ya da onaycının etkin vekili) olmak yeter |
 
 Son yedi izin servis istekleri 09–18 için eklendi (karar: Furkan, 05.10.2026).
+Belge izinleri (`documents.*`) belge arşivi için eklendi (servis isteği 78, 25.10.2026): yükleme
+yalnız Yönetici; gizli belge Yönetici ve Denetçi; okuma Yönetici, YK üyesi, Denetçi, Muhasebe.
+Sakin belgeyi izinle değil kendi ucuyla görür (sakinlere açık + bölümüne özel).
 
 ## 3. Site rolleri (şablon)
 
 | Rol | İzinler |
 |---|---|
-| **Yönetici** | `finance.read`, `finance.charge.post`, `finance.payment.record`, `finance.budget.manage`, `finance.cash.read`, `finance.cash.manage`, `finance.reports.read`, `units.read`, `units.manage`, `people.read`, `people.manage`, `requests.read`, `requests.create`, `requests.assign`, `announcements.read`, `announcements.publish`, `expenses.read`, `expenses.manage`, `security.visitors`, `security.packages`, `modules.manage`, `members.manage`, `audit.read`, `security.incidents`, `meetings.read`, `meetings.manage`, `polls.manage`, `contracts.manage`, `inventory.read`, `inventory.manage`, `staff.manage`, `approvals.rules.read`, `approvals.rules.manage`, `people.contact` |
-| **Yönetim Kurulu Üyesi** — her şeyi görür, hiçbirini değiştirmez | `finance.read`, `units.read`, `people.read`, `requests.read`, `announcements.read`, `expenses.read`, `finance.cash.read`, `finance.reports.read`, `meetings.read`, `inventory.read`, `approvals.rules.read` |
-| **Denetçi** (KMK m.41) — salt okunur finans, **kişisel veri görmez** | `finance.read`, `expenses.read`, `audit.read`, `finance.cash.read`, `finance.reports.read`, `meetings.read` |
-| **Muhasebe** | `finance.read`, `finance.charge.post`, `finance.payment.record`, `finance.budget.manage`, `expenses.read`, `expenses.manage`, `finance.cash.read`, `finance.cash.manage`, `finance.reports.read`, `units.read`, `people.read`, `contracts.manage`, `inventory.read` |
+| **Yönetici** | `finance.read`, `finance.charge.post`, `finance.payment.record`, `finance.budget.manage`, `finance.cash.read`, `finance.cash.manage`, `finance.reports.read`, `units.read`, `units.manage`, `people.read`, `people.manage`, `requests.read`, `requests.create`, `requests.assign`, `announcements.read`, `announcements.publish`, `expenses.read`, `expenses.manage`, `security.visitors`, `security.packages`, `modules.manage`, `members.manage`, `audit.read`, `security.incidents`, `meetings.read`, `meetings.manage`, `polls.manage`, `contracts.manage`, `inventory.read`, `inventory.manage`, `staff.manage`, `approvals.rules.read`, `approvals.rules.manage`, `documents.read`, `documents.manage`, `documents.confidential`, `people.contact` |
+| **Yönetim Kurulu Üyesi** — her şeyi görür, hiçbirini değiştirmez | `finance.read`, `units.read`, `people.read`, `requests.read`, `announcements.read`, `expenses.read`, `finance.cash.read`, `finance.reports.read`, `meetings.read`, `inventory.read`, `approvals.rules.read`, `documents.read` |
+| **Denetçi** (KMK m.41) — salt okunur finans, **kişisel veri görmez** | `finance.read`, `expenses.read`, `audit.read`, `finance.cash.read`, `finance.reports.read`, `meetings.read`, `documents.read`, `documents.confidential` |
+| **Muhasebe** | `finance.read`, `finance.charge.post`, `finance.payment.record`, `finance.budget.manage`, `expenses.read`, `expenses.manage`, `finance.cash.read`, `finance.cash.manage`, `finance.reports.read`, `units.read`, `people.read`, `contracts.manage`, `inventory.read`, `documents.read` |
 | **Güvenlik** — yalnızca kapıdaki işi. Borç, kişi listesi, muhasebe **yok** | `security.visitors`, `security.packages`, `security.incidents`, `requests.create`, `announcements.read` |
 | **Teknik Personel** | `requests.read`, `requests.assign`, `requests.create`, `announcements.read`, `inventory.read`, `inventory.manage` (stok çıkışı) |
 | **Sakin** | `announcements.read`, `requests.create` + kendi dairesine ait okuma (§6) |

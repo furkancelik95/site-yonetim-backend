@@ -292,6 +292,52 @@ Modül kapalıysa ilgili uçlar 404; `units/lookup` için iki modülden biri aç
 | GET · POST | `/sites/{slug}/lost-items?status=waiting\|returned\|disposed` | `{description, location, found_by?, found_at?}` |
 | POST | `/sites/{slug}/lost-items/{id}/return` | `{returned_to}` teslim ya da `{disposed: true}`; yalnız bekleyen (409 `not_waiting`) |
 
+**Kapılar, ön davet, sakin onayı, plaka, nöbet defteri, devriye** (servis istekleri 40–46,
+Yazılım Dokümanı GUV-02..09, OTP-02; 25.10.2026). Modül `visitors` (kargo yetkilisi ve uzun
+bekleyen kargo `packages`); kapalıysa 404. Bildirimler uygulama içi (dış kanal K5).
+
+| Yöntem | Yol | İzin | Not |
+|---|---|---|---|
+| GET | `/sites/{slug}/gates` | `modules.manage` ya da `security.*` | küçük liste (sayfasız) `[{id, name, kind: vehicle\|pedestrian\|service, block_ids, always_open, is_active}]` |
+| POST · PATCH | `/sites/{slug}/gates` · `/gates/{id}` | `modules.manage` | ad harf duyarsız tekil (422 `fields.name`); kapı silinmez, pasifleşir |
+| GET · PUT | `/sites/{slug}/settings/security` | okuma `security.*`, yazma `modules.manage` | `{unannounced_method: info\|approval, approval_timeout_seconds 30–600, gate_methods {gate_id: yöntem}, parcel_method code\|qr\|both, visitor_fields {plate, phone, id_seen}, retention_months 1–24, auto_anonymize, parcel_long_wait_days 1–60, guest_parking_capacity 0–500, version, updated_at, updated_by}`. 24 ay üstü 422 `retention_limit`. Kapalı ziyaretçi alanı kaydedilmez. Her kayıt `version` artırır (geçmiş denetim kaydında) |
+| GET · POST | `/sites/{slug}/resident/visitor-invites` | sakin (kişiye bağlı üyelik) | `{unit_id?, visitor_name, type: once\|range\|recurring, date_from, date_to, weekdays (0=pzt), time_from, time_to, plate, note}`. **Kod (6 hane) yalnız oluşturma yanıtında**; sunucuda HMAC özeti. Plakalı davet misafir parkına sayılır: dolu 409 `guest_parking_full` |
+| POST | `…/resident/visitor-invites/{id}/cancel` · `/new-code` | sakin | iptal (etkin değilse 409 `invalid_status`); yeni kod (eski kod hemen geçersiz) |
+| GET | `/sites/{slug}/visitor-invites/expected` | `security.visitors` | bugün geçerli davetler: ad, bölüm, tip, saat, plaka (kod ve not yok) |
+| POST | `/sites/{slug}/visitor-invites/check-in` | `security.visitors` | `{code}` → ziyaretçi kaydı `entered`, davet sahibine bildirim; yok 404 `invite_not_found`, kullanılmış/geçerlilik dışı 409 `invite_not_valid`. Kullanıcı başına 5 dakikada 30 deneme (429) |
+| POST | `/sites/{slug}/visit-requests` | `security.visitors` | `{unit_id, full_name, kind, plate, gate_id}` — yöntem: kapı istisnası → site ayarı. `info`: hemen `allowed` + ziyaretçi kaydı + sakine bilgi; `approval`: `awaiting`, `expires_at = şimdi + süre`, sakine onay isteği |
+| GET | `/sites/{slug}/visit-requests?status=` | `security.visitors` | bugünkü (tesis saati) ve bekleyen talepler; `timed_out`, `seconds_left` |
+| POST | `/sites/{slug}/visit-requests/{id}/decide` | `security.visitors` | `{decision: allow\|deny, reason}` yalnız süre dolunca (409 `awaiting_resident`); gerekçe zorunlu (422 `fields.reason`) |
+| GET · POST | `/sites/{slug}/resident/visit-approvals` · `/{id}` | sakin | yalnız kendi bölümünün talepleri; `{decision}` süre içinde (dolunca 409 `timed_out`), verilmişse 409 `already_decided`. Kararlar denetim kaydında (ad/plaka olmadan) |
+| GET | `/sites/{slug}/plates/lookup?plate=` | `security.visitors` ya da `units.read` | `{plate, plate_display, result: registered\|guest\|unknown, unit_name, owner_name, valid_until, detail}`; kaynak: geçerli ya da bugün kullanılmış davet plakası, bugün içerideki ziyaretçi. **Kayıtlı araç P02 araç tablosu gelince** bağlanır. Hız sınırlı (5 dakikada 120) |
+| GET · POST | `/sites/{slug}/gate-logs?date=` | okuma: aynı; yazma `security.visitors` | sayfalı; `{plate, direction: in\|out, gate_id}` — sorgu sonucu kayda dondurulur |
+| GET · POST | `/sites/{slug}/parking-violations` | okuma: aynı; yazma `security.visitors` | sayfalı; `{plate, location, note}` — yetkili plakada not zorunlu (409 `plate_authorized`); bölüme bağlıysa o bölümün sakinlerine, değilse yönetime bildirim (`notified`) |
+| GET · POST | `/sites/{slug}/resident/parcel-delegates` · `/{id}/remove` | sakin (modül `packages`) | `{name, unit_id?}`; bölüm başına en fazla 3 (409 `delegate_limit`) |
+| GET | `/sites/{slug}/units/{id}/parcel-delegates` | `security.packages` | yalnız `[{id, name}]` |
+| GET | `/sites/{slug}/packages/long-waiting` | `security.packages` | `{days, items: [{id, unit_id, unit_name, carrier, received_at, waiting_days, delegates}]}` (en eski üstte, en fazla 200) |
+| GET · POST | `/sites/{slug}/shift-log?date=` | `security.incidents` | nöbet defteri (gün, tesis saati); `{kind: note\|event\|handover, text ≥ 5, gate_id}`; yanıtta `by_me`. **Değişmez** (tetikleyici) |
+| POST | `…/shift-log/{id}/addenda` · `/acknowledge` | `security.incidents` | ek not; devri yazan onaylayamaz (409 `same_person`), onay bir kez (409 `already_acknowledged`) |
+| GET · POST · PATCH | `/sites/{slug}/patrol-points` · `/{id}` | okuma `modules.manage` ya da `security.incidents`; yazma `modules.manage` | `{name, location, area, tag: qr\|nfc\|both, is_active}`; `code` 6 hane, sunucu üretir (QR: `SY-DEVRIYE:{kod}`) |
+| GET · POST · PATCH | `/sites/{slug}/patrol-plans` · `/{id}` | aynı | `{name, point_ids (sıralı), ordered, start_times ["22:00"], allowed_minutes 5–240, assignee, is_active}` |
+| GET | `/sites/{slug}/patrol-schedule?date=` | `security.incidents` | `[{plan_id, plan_name, slot, status: upcoming\|due\|not_started\|running\|overdue\|done\|done_with_deviation, run_id, report}]` — 15 dakikada başlamayan `not_started` |
+| GET · POST | `/sites/{slug}/patrol-runs?date=` | `security.incidents` | başlat `{plan_id, slot?}` — açık yürütme varsa 409 `run_open`; plan dondurulur |
+| POST | `…/patrol-runs/{id}/scans` · `/finish` | `security.incidents` | `{code, note}`: kod yok 422 `fields.code`, planda yok 409 `not_in_plan`, tekrar 409 `already_scanned`, sıralı turda beklenmeyen nokta `out_of_order` (kabul edilir). Rapor `{missed, out_of_order, duration_minutes, overtime, late_start_minutes, total_points, scanned_points, ok}`; bitişte yöneticiye özet |
+
+**Otopark — park yeri ve tahsis** (PM kararı K30, OTP-01; modül kapısı yok — yapı verisi):
+
+| Yöntem | Yol | İzin | Not |
+|---|---|---|---|
+| GET | `/sites/{slug}/parking-spaces?kind=&q=&unit_id=` | `units.read` ya da `security.visitors` | sayfalı; `{id, code, kind: standard\|disabled\|ev\|guest, location, is_paid, is_active, note, current}` (`current`: bugünkü tahsis ya da `null`) |
+| POST · PATCH | `/sites/{slug}/parking-spaces` · `/{id}` | `units.manage` | kod site içinde tekil (büyük harf) |
+| POST | `/sites/{slug}/parking-spaces/{id}/allocations` | `units.manage` | `{unit_id, start_date, end_date?, note}` — tarih çakışırsa 409 `space_taken` |
+| GET | `/sites/{slug}/parking-allocations?space_id=&unit_id=` | okuma | sayfalı tahsis geçmişi |
+| POST | `/sites/{slug}/parking-allocations/{id}/end` | `units.manage` | `{end_date}`; bitmişse 409 `allocation_ended` |
+| GET | `/sites/{slug}/resident/parking-spaces` | sakin | "Park yerim": bugünkü tahsisler |
+
+Zamanlanmış işler: `run-security-daily` (günde bir: uzun bekleyen kargo hatırlatması ve yönetime
+rapor; `auto_anonymize` açık sitelerde saklama süresi dolan ziyaretçi/plaka verisini anonimleştirir
+— **varsayılan kapalı**, K8) · `run-patrol-checks` (5 dakikada bir: başlamayan / süresi aşan tur).
+
 
 ### 2.13 Modüller
 | Yöntem | Yol | İzin | Durum | Not |
@@ -374,6 +420,38 @@ uçta yok, oy tablosu denetim kaydına yazılmaz. Sonuç danışma niteliğinded
 | POST | `/sites/{slug}/stock-items/{id}/moves` | `inventory.manage` | R | `{direction: in\|out, quantity > 0, note?}` → `{item, move}` (201). Çıkış mevcuttan fazlaysa 409 `insufficient_stock` (satır kilidi; eşzamanlıda da). Hareket değişmez; yanlışsa ters hareket |
 | GET | `/sites/{slug}/staff?active=true\|false` | `people.read` | R | modül `staff`; dizi, ada göre; `is_active`: ayrılışı yok ya da bugün/ileride |
 | POST · PATCH | `/sites/{slug}/staff` · `/{id}` | `staff.manage` | R | `{full_name (3–60 harf), position, employer: site\|contractor, contractor_name (taşeronda zorunlu), phone? (+905…), start_date, end_date?, shift?}`; PATCH kısmi, `{end_date}` ayrılış. T.C. kimlik, maaş, adres, sağlık **tutulmaz**; personel kaydı hesap açmaz |
+| — | personel kartı ek alanları (istek 35, K29) | | R | `payroll_no?` (harf, rakam, tire; ≤ 20; büyük harfe çevrilir; site içinde tekil → 409 `payroll_no_taken`), `user_id?` (bağlı giriş hesabı; sakin olmayan site üyesi, tek karta → 409 `user_taken`). Yanıtta + `user_name`, `access_closed_at`. Ayrılış tarihi **geçince** bağlı hesabın site üyeliği pasifleşir (gece `run-staff-jobs`; erişim çözümlemesi de ertesi gün düşürür); kartı yeniden açmak erişimi açmaz |
+| GET | `/sites/{slug}/staff/linkable-users` | `staff.manage` | R | karta bağlanabilecek hesaplar `[{user_id, full_name, email, role_name, staff_id?}]` |
+| GET | `/sites/{slug}/staff/{id}/open-items?after=` | `staff.manage` | R | `{future_shifts, first_shift, pending_leaves}` — ayrılışta bilgi; kayıt engellenmez |
+
+### 2.20a İnsan kaynakları (servis istekleri 36–39, Yazılım Dokümanı IK-02..05, K29)
+Modül `staff`. Saatler `"SS:DD"`, saat toplamları **metin** (`"6.67"`), dakikalar tam sayı.
+
+| Yöntem | Yol | İzin | Durum | Not |
+|---|---|---|---|---|
+| GET · POST · PATCH | `/sites/{slug}/shift-templates` · `/{id}` | `people.read` · `staff.manage` | R | `{name (tekil), start, end (≤ start → ertesi gün), break_minutes 0–180, position?, location?, is_active}` → + `overnight`. Silme yok, kapatılır |
+| GET | `/sites/{slug}/shift-plans?from=&to=` | `people.read` | R | `{from, to, staff, templates, assignments, leaves[{staff_id, from, to, type}], conflicts[{assignment_id, kind: overlap\|leave\|rest, message}], published?, changed_after_publish, final_days}`; en çok 42 gün. İzin `type` yalnız `staff.manage`'e (raporlu izin) |
+| POST · DELETE | `/sites/{slug}/shift-plans/assignments` · `/{id}` | `staff.manage` | R | `{staff_id, date, template_id}` → + `conflicts` (çakışma engellemez). 409 `duplicate`, `timesheet_final`, `has_attendance` |
+| POST | `/sites/{slug}/shift-plans/copy-week` | `staff.manage` | R | `{from_week, to_week}` (pazartesi) → `{created}`; var olanı korur |
+| POST | `/sites/{slug}/shift-plans/publish` | `staff.manage` | R | `{week, acknowledge_conflicts}`; 409 `conflicts`, `empty_plan`. Bağlı hesabı olan personele uygulama içi bildirim (yayın ve yayın sonrası değişiklik) |
+| GET · POST | `/sites/{slug}/leave-requests?status=&staff_id=` | `staff.manage` | R | sayfalı. `{staff_id, type: annual\|excuse\|sick\|unpaid, from, to, note?}` → `{…, days (takvim), status, source, created_by, decided_by, reject_reason, clashing_shifts, approval_request_id, approval_number}`. 409 `leave_overlap`, `timesheet_final`; raporluda `note` 422 (tanı tutulmaz) |
+| POST | `/sites/{slug}/leave-requests/{id}/approve` · `/reject` | `staff.manage` ya da onaycı | R | "İzin talebi" onay kuralı varsa karar **onay mekanizmasına** yazılır (403 `not_an_approver`); yoksa `staff.manage`. Kendi izni 403 `own_request`. Ret `{reason}` zorunlu |
+| POST | `/sites/{slug}/leave-requests/{id}/cancel` | `staff.manage` | R | onaylı izni iptal (kesin gün varsa 409 `timesheet_final`); bekleyen + onay talebi → ONY'de geri çekme |
+| GET | `/sites/{slug}/leave-balances?year=` | `staff.manage` | R | `[{staff_id, staff_name, used: {annual, excuse, sick, unpaid}}]` — onaylı gün, bilgi amaçlı |
+| GET | `/sites/{slug}/timesheets?date=` | `staff.manage` | R | `{date, is_final, finalized_by, finalized_at, attendance_method, rows}`; satır: atama `id` (izinli+vardiyasız satırda null), `planned_minutes`, `night_minutes`, `status: worked\|absent\|leave`, `leave_type`, geç/erken/fazla mesai dakikası, `worked_minutes`, `reason`, `fixed_by`, `is_exception`, `flags`. Canlı hesap; kesin gün donmuş satırlardan |
+| PATCH | `/sites/{slug}/timesheets/{assignment_id}` | `staff.manage` | R | `{status: worked\|absent, late_minutes, early_leave_minutes, overtime_minutes (0–960), reason (zorunlu)}`; denetim kaydında gerekçeyle. 409 `timesheet_final`, `day_not_started` |
+| POST | `/sites/{slug}/timesheets/finalize` | `staff.manage` | R | `{date}` → satırlar donar (değişmez). 409 `day_not_ended`, `already_final` |
+| GET | `/sites/{slug}/timesheet-exports/preview?month=` | `staff.manage` · `finance.read` | R | `{month, rows, missing_days, missing_payroll, exported?}`; satır saatleri metin |
+| GET · POST | `/sites/{slug}/timesheet-exports` | okuma `staff.manage` · `finance.read`; yazma `staff.manage` | R | sayfalı geçmiş `{id, month, staff_count, created_by, created_at, file_name}`. POST `{month}`: 409 `month_not_ended`, `days_not_final`, `payroll_missing`, `already_exported` (ay kilitli) |
+| GET | `/sites/{slug}/timesheet-exports/{id}/file` | okuma | R | CSV (`;`, UTF-8 BOM, ondalık virgül). Mod K (Kivi) A-01 sonrası |
+| GET · PUT | `/sites/{slug}/attendance-settings` | `staff.manage` | R | `{method: none\|qr\|location, latitude?, longitude?, radius_m 20–5000, late/early_tolerance_minutes 0–120}` → + `qr_code`, `qr_rotated_at` |
+| POST | `/sites/{slug}/attendance-settings/rotate-code` | `staff.manage` | R | kulübe kodunu yeniler |
+| GET | `/sites/{slug}/me/shifts?from=&to=` | kartı bağlı personel (K29) | R | Vardiyam: yalnız yayınlanmış haftalar + giriş-çıkış kayıtları |
+| POST | `/sites/{slug}/me/attendance-events` | kartı bağlı personel | R | `{kind: in\|out, assignment_id?, occurred_at? (çevrimdışı), code? (QR), latitude?, longitude?}` → `{…, verified, clock_skew_minutes}`. Doğrulanamayan kayıt reddedilmez, istisna olur; konum saklanmaz |
+| GET · POST | `/sites/{slug}/me/leave-requests` · `/{id}/cancel` | kartı bağlı personel | R | kendi izin taleplerim; geri çekme yalnız bekleyende |
+
+Kart bağlı değilse `/me/*` 403. Puantaj canlıdır: belgedeki "gece 01:00 puantaj üretimi" işinin
+yerine her an hazır; gün kesinleşince `timesheet_lines` donar.
 
 ### 2.21 Bildirim merkezi (Yazılım Dokümanı PLT-05)
 | Yöntem | Yol | İzin | Durum | Not |
@@ -394,7 +472,8 @@ olay aynı kişiye ikinci kez yazılmaz (tekil anahtar). İlk üretici: onay mek
 ### 2.22 Onay mekanizması (Yazılım Dokümanı Bölüm 6, ONY-01..03)
 Tüm modüllerin onayları tek servisten geçer (`services/approvals.request_approval`); modül komutu
 "onay bekliyor" bırakır, onay tamamlanınca kayıtlı yürütücü aynı transaction'da çalışır. **Şu an
-bağlı tek işlem "onay kuralı değişikliği"**; kayıt başvurusu, iade, tahakkuk, rol değişikliği
+bağlı işlemler "onay kuralı değişikliği" ve "izin talebi"** (IK-03; ret/geri çekmede modülün
+kapatıcısı çalışır — `register_closer`); kayıt başvurusu, iade, tahakkuk, rol değişikliği
 henüz bağlı değil (K21). Diğer işlem tipleri için kural şimdiden tanımlanabilir.
 
 | Yöntem | Yol | İzin | Durum | Not |
@@ -425,7 +504,27 @@ verir; "tek ret reddeder" ya da "ret hesaba sayılır"; hatırlatma X, eskalasyo
 yalnız hatırlatma (K20). Yetki devri yalnız **aynı role** (K20); devralan, devredenin kendi
 talebini onaylayamaz; kararlar "vekâleten" ve denetimde `actor_type: delegate`.
 
-### 2.23 Yapı, kişiler ve kayıt (servis istekleri 19–26, Yazılım Dokümanı YAP-01..10)
+### 2.23 Belge arşivi (Yazılım Dokümanı RAP-03, 18.2 — servis isteği 78, modül `documents`)
+| Yöntem | Yol | İzin | Durum | Not |
+|---|---|---|---|---|
+| GET | `/sites/{slug}/documents?q=&kind=&expiring=1` | `documents.read` | R | sayfalı, son yüklenen üstte: `{id, title, kind, kind_label, scope: site\|block\|unit, scope_id, scope_name, confidentiality: public\|unit\|management\|secret, valid_until, days_left, warning: "60"\|"30"\|"expired"\|null, retention_years, version, file_name, content_type, size, sha256, uploaded_by, updated_at, versions: [{v, file_name, content_type, size, sha256, uploaded_by, at}]}`. `expiring`: 60 gün içinde biten ya da bitmiş. Gizli belge yalnız `documents.confidential` sahibine listelenir |
+| POST | `/sites/{slug}/documents` | `documents.manage` | R | **multipart**: `title (3–120), kind, scope, scope_id? (blok/bölüm), confidentiality, valid_until?, retention_years? (1–100), file` → 201 `Written`. Aynı ad (Türkçe harf duyarsız, boşluklar tekleştirilir) + aynı kapsam → **yeni sürüm** (eski sürümler korunur; boş bırakılan bitiş/saklama korunur). Son sürümle aynı SHA-256 → 409 `same_file`. 422 `fields.title/kind/scope/confidentiality/valid_until/retention_years/file`; `unit` gizliliği bölüm kapsamı ister. Gizli belgeyi yalnız `documents.confidential` sahibi yükler |
+| GET | `/sites/{slug}/documents/{id}/versions/{v}/download` | `documents.read` | R | dosya (`inline`, temiz ad). Gizli belge: yetkisize **404**; her açılış `document_access_logs`'a. Her indirme denetim kaydında (`download`) |
+| GET | `/sites/{slug}/documents/{id}/access-log` | `documents.read` (gizlide `documents.confidential`) | R | sayfalı, yeni üstte: `{by, at, v}` — yalnız gizli belgenin açılışları |
+| GET | `/sites/{slug}/resident/documents` | sakin | R | sayfalı: sakinlere açık belgeler (tüm site; blok kapsamlıysa o bloktaki, bölüm kapsamlıysa o bölümün sakinleri) + bölümüne özel belgeler. Yükleyen, özet ve sürüm geçmişi yok |
+| GET | `/sites/{slug}/resident/documents/{id}/download` | sakin | R | son sürüm; göremediği belge 404 |
+
+Dosya türü **içerikten** belirlenir (PDF, PNG, JPEG, WebP imzası; uzantı yanlışsa ad düzeltilir),
+en fazla 10 MB, web kökü dışında `stored_files` ile saklanır, SHA-256 tutulur. **Virüs taraması
+yok** (ilk sürüm) — hiçbir yanıt "tarandı" demez. Sürüm ve açılış kaydı değişmez; belge silinmez.
+Saklama süresi (K8) bilgi amaçlıdır, otomatik silme yapılmaz. Geçerlilik uyarısı günlük iş
+`run-document-expiry`: 60 ve 30 gün kala ve bitince belge yöneticilerine (`documents.manage`;
+gizlide ayrıca `documents.confidential`) uygulama içi bildirim (`operations`, `document.expiring`
+· `document.expired`, `link_entity: documents`); aynı uyarı bir kez. Belgeyi başka kayda bağlamak
+için şemada `subject_type/subject_id` var (bugün uçta yok; modüller servis üzerinden bağlar).
+"Okudum" onayı (ILT-01, istek 71) sonraki adım.
+
+### 2.24 Yapı, kişiler ve kayıt (servis istekleri 19–26, Yazılım Dokümanı YAP-01..10)
 | Yöntem | Yol | İzin | Not |
 |---|---|---|---|
 | GET · POST · PATCH | `/sites/{slug}/common-areas` · `/{id}` | okuma `units.read`, yazma `units.manage` | dizi (az sayıda); `{name, kind: pool\|hall\|gym\|garden\|playground\|parking\|technical\|roof\|other, block_id?, is_reservable, is_active, note}` + `block_name`. Ad sitede tekil (422 `fields.name`); silinmez, pasifleşir |

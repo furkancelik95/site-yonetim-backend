@@ -14,6 +14,7 @@ from datetime import date, datetime
 from sqlalchemy import Select, and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from site_yonetim.domain.gatehouse import normalize_plate
 from site_yonetim.domain.operations import OperationRuleError
 from site_yonetim.domain.security import (
     PICKUP_CODE_MAX,
@@ -26,9 +27,18 @@ from site_yonetim.domain.security import (
     check_exit,
 )
 from site_yonetim.domain.structure import PartyRole
-from site_yonetim.domain.text import tr_lower, tr_upper
-from site_yonetim.domain.vehicles import VehicleStatus, normalize_plate
-from site_yonetim.models import Block, Package, Person, Unit, UnitParty, Vehicle, Visitor
+from site_yonetim.domain.text import tr_lower
+from site_yonetim.domain.vehicles import VehicleStatus
+from site_yonetim.models import (
+    Block,
+    Package,
+    Person,
+    SecuritySettings,
+    Unit,
+    UnitParty,
+    Vehicle,
+    Visitor,
+)
 
 LOOKUP_LIMIT = 20
 OCCUPANT_ROLES = (PartyRole.TENANT.value, PartyRole.RESIDENT.value)
@@ -48,6 +58,9 @@ def new_pickup_code() -> str:
 async def _require_unit(session: AsyncSession, unit_id: uuid.UUID) -> None:
     if await session.scalar(select(Unit.id).where(Unit.id == unit_id)) is None:
         raise OperationRuleError("unit_not_found", "Seçilen bölüm bulunamadı.", field="unit_id")
+
+
+require_unit = _require_unit  # diğer kapı servisleri için
 
 
 async def _require_person(session: AsyncSession, person_id: uuid.UUID | None, field: str) -> None:
@@ -181,13 +194,16 @@ async def record_visitor(
         raise OperationRuleError(
             "invalid_name", "Ziyaretçinin adını yazın (en az 2 karakter).", field="full_name"
         )
-    plate = tr_upper("".join((data.plate_number or "").split()))[:15] or None
+    # Site ayarında kapalı alan kaydedilmez (GUV-08: toplanacak alanları site seçer).
+    fields = await session.scalar(select(SecuritySettings.visitor_fields)) or {}
+    plate = normalize_plate(data.plate_number) or None if fields.get("plate", True) else None
+    phone = _clean(data.phone, 20) if fields.get("phone", False) else None
     enter = data.enter_now and data.expected_on in (None, today)
     visitor = Visitor(
         unit_id=data.unit_id,
         host_person_id=data.host_person_id,
         full_name=name,
-        phone=_clean(data.phone, 20),
+        phone=phone,
         plate_number=plate,
         kind=data.kind.value,
         expected_on=data.expected_on,

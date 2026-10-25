@@ -25,6 +25,7 @@ from site_yonetim.models.cash import (
     Refund,
     StoredFile,
 )
+from site_yonetim.models.documents import Document, DocumentAccessLog, DocumentVersion
 from site_yonetim.models.finance import (
     AccountBalance,
     AllocationComponent,
@@ -47,6 +48,18 @@ from site_yonetim.models.finance import (
     Period,
     SiteFinanceSummary,
     UnitWeight,
+)
+from site_yonetim.models.gatehouse import (
+    Gate,
+    GateLog,
+    ParcelDelegate,
+    ParkingViolation,
+    SecuritySettings,
+    ShiftHandoverAck,
+    ShiftLogAddendum,
+    ShiftLogEntry,
+    VisitorInvite,
+    VisitRequest,
 )
 from site_yonetim.models.identity import (
     AuthEvent,
@@ -81,6 +94,8 @@ from site_yonetim.models.operations import (
     RequestDepartment,
     RequestEvent,
 )
+from site_yonetim.models.parking import ParkingAllocation, ParkingSpace
+from site_yonetim.models.patrol import PatrolPlan, PatrolPoint, PatrolRun, PatrolScan
 from site_yonetim.models.people import (
     CustomField,
     CustomFieldValue,
@@ -93,6 +108,18 @@ from site_yonetim.models.people import (
 )
 from site_yonetim.models.platform import Organization, Plan, PropertyKind, Site
 from site_yonetim.models.security import Incident, LostItem, Package, Visitor
+from site_yonetim.models.staffing import (
+    AttendanceEvent,
+    AttendanceSettings,
+    LeaveRequest,
+    ShiftAssignment,
+    ShiftTemplate,
+    ShiftWeek,
+    TimesheetDay,
+    TimesheetExport,
+    TimesheetFix,
+    TimesheetLine,
+)
 from site_yonetim.models.structure import (
     Block,
     CommonArea,
@@ -116,6 +143,8 @@ __all__ = [
     "ApprovalRule",
     "ApprovalRuleVersion",
     "Asset",
+    "AttendanceEvent",
+    "AttendanceSettings",
     "AuditLog",
     "AuthEvent",
     "AuthEventKind",
@@ -139,14 +168,20 @@ __all__ = [
     "Contract",
     "CustomField",
     "CustomFieldValue",
+    "Document",
+    "DocumentAccessLog",
+    "DocumentVersion",
     "Expense",
     "ExpenseCategory",
+    "Gate",
+    "GateLog",
     "HouseholdMember",
     "IdempotencyKey",
     "ImportBatch",
     "Incident",
     "Invitation",
     "LateFeePolicy",
+    "LeaveRequest",
     "LedgerAccount",
     "LedgerEntry",
     "LoginThrottle",
@@ -158,6 +193,14 @@ __all__ = [
     "Organization",
     "OrganizationMembership",
     "Package",
+    "ParcelDelegate",
+    "ParkingAllocation",
+    "ParkingSpace",
+    "ParkingViolation",
+    "PatrolPlan",
+    "PatrolPoint",
+    "PatrolRun",
+    "PatrolScan",
     "Payment",
     "PaymentAllocation",
     "Period",
@@ -177,6 +220,13 @@ __all__ = [
     "Request",
     "RequestDepartment",
     "RequestEvent",
+    "SecuritySettings",
+    "ShiftAssignment",
+    "ShiftHandoverAck",
+    "ShiftLogAddendum",
+    "ShiftLogEntry",
+    "ShiftTemplate",
+    "ShiftWeek",
     "Site",
     "SiteFinanceSummary",
     "SiteMembership",
@@ -186,6 +236,10 @@ __all__ = [
     "StockMove",
     "StoredFile",
     "StructureSettings",
+    "TimesheetDay",
+    "TimesheetExport",
+    "TimesheetFix",
+    "TimesheetLine",
     "Unit",
     "UnitAttributeChange",
     "UnitParty",
@@ -194,5 +248,7 @@ __all__ = [
     "UnitWeight",
     "User",
     "Vehicle",
+    "VisitRequest",
     "Visitor",
+    "VisitorInvite",
 ]

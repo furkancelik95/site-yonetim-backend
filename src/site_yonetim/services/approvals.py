@@ -106,6 +106,21 @@ def register_executor(action: ActionType, executor: Executor) -> None:
     _EXECUTORS[action] = executor
 
 
+# Talep yürütülmeden kapanınca (ret, geri çekme) modülün kaydını kapatması için (ör. izin
+# talebi "reddedildi" olur). İsteğe bağlı; aynı transaction'da çağrılır.
+_CLOSERS: dict[ActionType, Executor] = {}
+
+
+def register_closer(action: ActionType, closer: Executor) -> None:
+    _CLOSERS[action] = closer
+
+
+async def _closed(session: AsyncSession, request: ApprovalRequest) -> None:
+    closer = _CLOSERS.get(ActionType(request.action_type))
+    if closer is not None:
+        await closer(session, request)
+
+
 def supported_actions() -> frozenset[ActionType]:
     return frozenset(_EXECUTORS)
 
@@ -1180,6 +1195,7 @@ async def _advance(
         request.status = ApprovalStatus.REJECTED.value
         request.decided_at = now
         await session.flush()
+        await _closed(session, request)
         await _notify(
             session, [request.requested_by], request, "approval.rejected",
             f"Reddedildi: {request.title}", key=f"rejected:{request.revision}",
@@ -1232,6 +1248,7 @@ async def withdraw(
     request.status = ApprovalStatus.WITHDRAWN.value
     request.decided_at = now
     await session.flush()
+    await _closed(session, request)
     return request
 
 

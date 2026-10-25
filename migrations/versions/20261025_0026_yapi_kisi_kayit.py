@@ -39,7 +39,8 @@ _ACTIONS = (
     "'charge_rule', 'charge_run', 'charge_run_reversal', 'refund', 'debt_write_off', "
     "'expense', 'emergency_expense', 'purchase_request', 'purchase_order', 'quote_exception', "
     "'reservation', 'renovation_permit', 'payment_plan', 'paid_service_tariff', 'role_change', "
-    "'finance_mode_change', 'registration', 'stock_count_difference', 'approval_rule_change'"
+    "'finance_mode_change', 'registration', 'stock_count_difference', 'approval_rule_change', "
+    "'leave_request'"
 )
 APPROVAL_ACTIONS_OLD = f"action_type IN ({_ACTIONS})"
 APPROVAL_ACTIONS_NEW = f"action_type IN ({_ACTIONS}, 'ownership_transfer')"
@@ -64,7 +65,7 @@ $$
 """
 
 revision: str = "0026"
-down_revision: str | None = "0024"
+down_revision: str | None = "0030"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

@@ -40,12 +40,21 @@ def mask_iban(value: str) -> str:
     return value[:2] + _STAR * (len(value) - 6) + value[-4:]
 
 
+def mask_all(value: str) -> str:
+    """Tamamı gizli: değişikliğin olduğu görünür, değer görünmez (ör. izin türü — raporlu izin
+    sağlık verisidir)."""
+    return "***"
+
+
 # Sütun adı → maskeleyici. Denetlenen her tabloda aynı adlı sütun aynı biçimde maskelenir.
 SENSITIVE_COLUMNS: dict[str, Callable[[str], str]] = {
     "phone": mask_phone,
     "email": mask_email,
     "iban": mask_iban,
     "tax_number": mask_tail,
+    "leave_type": mask_all,  # IK-03: raporlu izin özel nitelikli veri sayılabilir
+    "leave_note": mask_all,
+    "qr_code": mask_all,  # giriş-çıkış doğrulama kodu
 }
 
 
