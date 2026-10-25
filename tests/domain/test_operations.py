@@ -1,4 +1,4 @@
-"""Talep durum kuralı ve duyuru hedef kitlesi — saf (docs/03 §9)."""
+"""Talep durum akışı (K18) ve duyuru hedef kitlesi — saf (docs/03 §9, HIZ-02 "Durumlar")."""
 
 import uuid
 from datetime import date
@@ -11,15 +11,19 @@ from site_yonetim.domain.operations import (
     OperationRuleError,
     PartyRef,
     RequestEventKind,
+    RequestState,
     RequestStatus,
     channels_of,
     check_status_change,
+    next_statuses,
     recipients,
+    reopen_status,
 )
 from site_yonetim.domain.structure import PartyRole
 
 TODAY = date(2026, 10, 1)
 BLOCK_A, BLOCK_B = uuid.uuid7(), uuid.uuid7()
+S = RequestStatus
 
 
 def party(role: PartyRole, block: uuid.UUID = BLOCK_A, *, ended: bool = False) -> PartyRef:
@@ -33,41 +37,105 @@ def party(role: PartyRole, block: uuid.UUID = BLOCK_A, *, ended: bool = False) -
     )
 
 
+def state(status: RequestStatus, *, assignee: bool = True, resident: bool = True) -> RequestState:
+    return RequestState(status, has_assignee=assignee, awaits_resident=resident)
+
+
 # --- talep --------------------------------------------------------------------------
 
 
 def test_status_change_description_and_event() -> None:
-    change = check_status_change(RequestStatus.OPEN, RequestStatus.IN_PROGRESS, None)
+    change = check_status_change(state(S.ASSIGNED), S.IN_PROGRESS, None)
     assert change.event is RequestEventKind.STATUS_CHANGED
-    assert change.description == "Durum: Açık → İşlemde"
-    assert change.resolved is False
+    assert change.description == "Durum: Atandı → İşlemde"
+    assert (change.resolved, change.finished) == (False, False)
 
 
-@pytest.mark.parametrize("status", [RequestStatus.RESOLVED, RequestStatus.CLOSED])
-def test_resolution_required_when_resolving_or_closing(status: RequestStatus) -> None:
+def test_document_flow_is_allowed() -> None:
+    """Açık → Atandı → İşlemde → Beklemede → İşlemde → Çözüldü."""
+    for current, new in [
+        (S.OPEN, S.ASSIGNED),
+        (S.ASSIGNED, S.IN_PROGRESS),
+        (S.IN_PROGRESS, S.WAITING),
+        (S.WAITING, S.IN_PROGRESS),
+        (S.WAITING, S.RESOLVED),
+    ]:
+        check_status_change(state(current), new, "Yapıldı")
+
+
+@pytest.mark.parametrize(
+    ("current", "new"),
+    [
+        (S.OPEN, S.IN_PROGRESS),  # önce atanır
+        (S.OPEN, S.RESOLVED),
+        (S.ASSIGNED, S.RESOLVED),
+        (S.IN_PROGRESS, S.OPEN),
+        (S.RESOLVED, S.OPEN),
+    ],
+)
+def test_transitions_outside_table_are_rejected(current: RequestStatus, new: RequestStatus) -> None:
+    with pytest.raises(OperationRuleError) as caught:
+        check_status_change(state(current), new, "x")
+    assert (caught.value.code, caught.value.conflict) == ("invalid_transition", True)
+
+
+@pytest.mark.parametrize("final", [S.CLOSED, S.CANCELLED])
+def test_closed_and_cancelled_cannot_be_reopened(final: RequestStatus) -> None:
+    with pytest.raises(OperationRuleError) as caught:
+        check_status_change(state(final), S.OPEN, None)
+    assert caught.value.code == "request_finished"
+
+
+@pytest.mark.parametrize("status", [S.RESOLVED, S.CANCELLED])
+def test_reason_required_when_resolving_or_cancelling(status: RequestStatus) -> None:
     for empty in (None, "", "   "):
         with pytest.raises(OperationRuleError) as caught:
-            check_status_change(RequestStatus.IN_PROGRESS, status, empty)
+            check_status_change(state(S.IN_PROGRESS), status, empty)
         assert caught.value.field == "resolution"
-    change = check_status_change(RequestStatus.IN_PROGRESS, status, "  Conta   değişti ")
-    assert change.resolved is True
-    assert change.description.endswith("Çözüm: Conta değişti")
+    change = check_status_change(state(S.IN_PROGRESS), status, "  Conta   değişti ")
+    assert change.description.endswith(": Conta değişti")
 
 
-def test_resolved_event_kind() -> None:
-    change = check_status_change(RequestStatus.OPEN, RequestStatus.RESOLVED, "Tamam")
-    assert change.event is RequestEventKind.RESOLVED
+def test_resolved_and_cancelled_event_kinds() -> None:
+    resolved = check_status_change(state(S.IN_PROGRESS), S.RESOLVED, "Tamam")
+    assert (resolved.event, resolved.resolved, resolved.finished) == (
+        RequestEventKind.RESOLVED, True, False,
+    )  # fmt: skip
+    cancelled = check_status_change(state(S.OPEN), S.CANCELLED, "Yanlış açıldı")
+    assert (cancelled.event, cancelled.finished) == (RequestEventKind.CANCELLED, True)
 
 
 def test_same_status_is_rejected() -> None:
     with pytest.raises(OperationRuleError) as caught:
-        check_status_change(RequestStatus.OPEN, RequestStatus.OPEN, None)
+        check_status_change(state(S.OPEN), S.OPEN, None)
     assert caught.value.conflict is True
 
 
-def test_reopening_is_allowed() -> None:
-    change = check_status_change(RequestStatus.CLOSED, RequestStatus.OPEN, None)
-    assert change.resolved is False
+def test_assigned_needs_assignee() -> None:
+    with pytest.raises(OperationRuleError) as caught:
+        check_status_change(state(S.OPEN, assignee=False), S.ASSIGNED, None)
+    assert caught.value.code == "assignee_required"
+
+
+def test_staff_closes_only_when_no_resident_waits() -> None:
+    with pytest.raises(OperationRuleError) as caught:
+        check_status_change(state(S.RESOLVED), S.CLOSED, None)
+    assert caught.value.code == "awaiting_confirmation"
+    change = check_status_change(state(S.RESOLVED, resident=False), S.CLOSED, None)
+    assert (change.event, change.finished) == (RequestEventKind.CLOSED, True)
+
+
+def test_next_statuses() -> None:
+    assert next_statuses(state(S.OPEN, assignee=False)) == [S.CANCELLED]
+    assert next_statuses(state(S.OPEN)) == [S.ASSIGNED, S.CANCELLED]
+    assert next_statuses(state(S.RESOLVED)) == [S.IN_PROGRESS]
+    assert next_statuses(state(S.RESOLVED, resident=False)) == [S.IN_PROGRESS, S.CLOSED]
+    assert next_statuses(state(S.CLOSED)) == []
+
+
+def test_reopen_status() -> None:
+    assert reopen_status(True) is S.ASSIGNED
+    assert reopen_status(False) is S.OPEN
 
 
 # --- duyuru -------------------------------------------------------------------------

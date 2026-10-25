@@ -581,17 +581,22 @@ Kurallar: `09-guvenlik-kvkk.md` §3.
 | number | INT | site içinde artan: 1, 2, 3 … |
 | title | TEXT | |
 | description | TEXT NULL | |
-| category | TEXT | `other` · `plumbing` · `electrical` · `elevator` · `heating` · `cleaning` · `security` · `garden` · `common_area` |
+| category | TEXT | site kategorisinin anahtarı — `(site_id, category)` → `request_categories(site_id, key)` (D-26) |
 | priority | TEXT | `low` · `normal` · `high` · `urgent` |
-| status | TEXT | `open` · `in_progress` · `waiting` · `resolved` · `closed` · `cancelled` |
+| status | TEXT | `open` · `assigned` · `in_progress` · `waiting` · `resolved` · `closed` · `cancelled` (geçiş tablosu K18) |
 | reported_by_person_id | UUID NULL | |
 | unit_id | UUID NULL | ortak alan talebinde boş |
 | location | TEXT NULL | "B blok otopark girişi" |
 | assigned_to | TEXT NULL | |
 | due_at | TIMESTAMPTZ NULL | |
 | resolved_at | TIMESTAMPTZ NULL | |
-| resolution | TEXT NULL | **`resolved`/`closed` yapılırken zorunlu** |
+| resolution | TEXT NULL | **`resolved`/`closed` yapılırken zorunlu**; iptalde gerekçe |
 | created_by_name | TEXT NULL | talebi açan kullanıcının adı (Python backend) |
+| closed_at | TIMESTAMPTZ NULL | kapandı/iptal anı |
+| auto_close_at | TIMESTAMPTZ NULL | çözüldü talep sakin yanıtsızsa bu anda kapanır (`auto_close_days`) |
+| sla_hour_type, sla_target_hours, sla_calendar | TEXT/INT/JSONB NULL | SLA kural anlık görüntüsü (açılıştaki kategori + takvim); `due_at` bitiş |
+| sla_warn_at, sla_warned_at, sla_breached_at | TIMESTAMPTZ NULL | %80 anı; uyarı ve aşım bildirimi yazıldı mı (iş tekrarlamaz) |
+| outage_id | UUID NULL | ana olay (`outages`) |
 
 `(site_id, number)` UNIQUE; numara site başına işlem kilidi altında `max + 1`. İndeks `(site_id, status)`.
 
@@ -599,12 +604,36 @@ Kurallar: `09-guvenlik-kvkk.md` §3.
 | Sütun | Tip | Not |
 |---|---|---|
 | request_id | UUID | |
-| kind | TEXT | `created` · `status_changed` · `assigned` · `comment` · `resolved` |
+| kind | TEXT | `created` · `status_changed` · `assigned` · `comment` · `resolved` · `department_changed` · `closed` · `cancelled` · `reopened` · `feedback` · `outage_linked` · `outage_unlinked` · `quote` |
 | description | TEXT | |
 | actor_name | TEXT NULL | |
 | new_status | TEXT NULL | |
 
 UPDATE/DELETE tetikleyiciyle reddedilir.
+
+### Hizmetler (HIZ-01..05, göç 0031)
+- `request_categories` [K] — site tanımlı kategori: `key` (değişmez, site içinde benzersiz), `name`
+  (+`name_key` benzersiz), `hour_type` (`24x7` · `business`), `hours_low/normal/high/urgent`
+  (1–2160), `default_priority`, `department_id?` (atanacak ekip), `is_active`, `sort_order`.
+- `request_settings` [K] — tek satır: `calendar` JSONB (7 gün), `auto_close_days` (1–30, vars. 3),
+  `merge_window_hours` (1–168, vars. 24), `low_rating_threshold` (1–4, vars. 2).
+- `reply_templates` [K] — `title`, `category?` (→ kategori anahtarı), `body`, `is_active`.
+- `request_internal_notes` [K] — iç not (K26) **değişmez**: `request_id`, `body`, `author_user_id`, `author_name`.
+- `request_feedback` [K] — sakin değerlendirmesi **değişmez**: `request_id`, `solved`, `score`
+  (çözüldüyse 1–5, değilse NULL), `comment`, `person_id`, `by_name`. Son satır geçerli.
+- `outages` [K] — ana olay: `title`, `category`, `location`, `public_description`, `status`
+  (`open` · `resolved`), `resolution`, `resolved_at`. Bağlı talepler `requests.outage_id`.
+- `service_tariffs` [K] — `name` (+`name_key` benzersiz), `unit`, `price` > 0, `is_active`.
+- `service_quotes` [K] — `request_id`, `unit_id`, `account_id` (teklif anında belirlenir),
+  `total`, `status` (`pending` · `accepted` · `rejected` · `extra_pending` · `billed`),
+  `actual_total`, `billed_total`, `ledger_entry_id` (kaynak `service`). Talepte tek açık teklif
+  (kısmi benzersiz indeks). `service_quote_lines`: `line_no`, `description`, `qty`, `unit_price`, `total`.
+- `permit_settings` [K] — tek satır: `weekday_hours`, `saturday_hours?`, `sunday_allowed`,
+  `deposit_amount`, `checklist[]`.
+- `permits` [K] — `unit_id`, `person_id`, `type` (`renovation` · `move_in` · `move_out`),
+  `date_from/to`, `contractor`, `description`, `status` (`pending` · `approved` · `rejected` ·
+  `completed`), `reject_reason`, `checklist` JSONB, `deposit`, `deposit_entry_id` (kaynak
+  `deposit`), `refund_entry_id` (ters kayıt), `approval_request_id`.
 
 ### `announcements` [K]
 | Sütun | Tip | Not |

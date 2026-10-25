@@ -32,13 +32,13 @@ from site_yonetim.domain.money import distribute, round_money
 from site_yonetim.domain.operations import (
     Audience,
     Importance,
-    RequestCategory,
     RequestPriority,
     RequestStatus,
 )
 from site_yonetim.domain.security import VisitorKind
+from site_yonetim.domain.service_desk import PermitType
 from site_yonetim.domain.structure import AccountKind, PartyRole
-from site_yonetim.domain.text import normalize_person_name
+from site_yonetim.domain.text import ascii_fold, normalize_person_name
 from site_yonetim.models import (
     AccountBalance,
     AllocationRule,
@@ -55,6 +55,8 @@ from site_yonetim.models import (
     OrganizationMembership,
     Person,
     Plan,
+    Request,
+    ServiceTariff,
     Site,
     SiteMembership,
     Unit,
@@ -85,6 +87,7 @@ from site_yonetim.seed.demo_data import (
     RESIDENT,
     SEED,
     SITES,
+    TARIFFS,
     UNPAID_SHARE_THIS_MONTH,
     SiteSpec,
     occupancy_for,
@@ -95,9 +98,12 @@ from site_yonetim.services import (
     cash,
     charging,
     expenses,
+    paid_services,
     payments,
+    permits,
     requests,
     security,
+    service_desk,
 )
 from site_yonetim.services.charging import BUSINESS_TZ
 from site_yonetim.services.provisioning import provision_site
@@ -201,7 +207,7 @@ async def _seed_demo(
                 for key in spec.extra_modules:
                     await set_module_enabled(session, site, key, enable=True)
                 await _seed_finance(session, spec, today)
-                await _seed_operations(session, spec, today)
+                await _seed_operations(session, site, spec, today)
                 await _seed_gate(session, spec, today)
                 session.add_all(
                     SiteMembership(user_id=user_ids[account.email], role=account.site_role)
@@ -442,7 +448,7 @@ async def _seed_payments(
         )
 
 
-async def _seed_operations(session: AsyncSession, spec: SiteSpec, today: date) -> None:
+async def _seed_operations(session: AsyncSession, site: Site, spec: SiteSpec, today: date) -> None:
     """Duyurular ve farklı durumdaki talepler — servislerden geçer (docs/10 §1.4)."""
     for item in ANNOUNCEMENTS:
         published_on = today - timedelta(days=item.days_ago)
@@ -471,7 +477,15 @@ async def _seed_operations(session: AsyncSession, spec: SiteSpec, today: date) -
                 .values(expires_on=today - timedelta(days=item.days_ago - item.valid_days))
             )
 
-    rng = random.Random(f"{SEED}:requests:{spec.slug}")  # noqa: S311  # nosec B311
+    await _seed_requests(session, site, today)
+
+
+async def _seed_requests(session: AsyncSession, site: Site, today: date) -> None:
+    """Talepler dokümandaki akışla (K18): Açık → Atandı → İşlemde → Beklemede → Çözüldü →
+    (sakin onayıyla) Kapandı. Zamanlar açılıştan sonra ve sıralı; çözüldü talep sakin onayı
+    beklesin diye dün çözülür (otomatik kapanış süresi dolmasın). Ayrıca hizmet tarifesi, bir
+    ücretli hizmet teklifi, bir ana olay ve bir tadilat başvurusu (servis istekleri 49–52)."""
+    rng = random.Random(f"{SEED}:requests:{site.slug}")  # noqa: S311  # nosec B311
     reporters = list(
         await session.execute(
             select(UnitParty.person_id, UnitParty.unit_id).where(
@@ -479,6 +493,14 @@ async def _seed_operations(session: AsyncSession, spec: SiteSpec, today: date) -
             )
         )
     )
+    flow = [
+        RequestStatus.ASSIGNED,
+        RequestStatus.IN_PROGRESS,
+        RequestStatus.WAITING,
+        RequestStatus.RESOLVED,
+        RequestStatus.CLOSED,
+    ]
+    created: dict[str, Request] = {}
     for index, demand in enumerate(REQUESTS):
         person_id, unit_id = rng.choice(reporters)
         common = demand.location is not None
@@ -490,7 +512,7 @@ async def _seed_operations(session: AsyncSession, spec: SiteSpec, today: date) -
             requests.NewRequest(
                 title=demand.title,
                 description=None,
-                category=RequestCategory(demand.category),
+                category=demand.category,
                 priority=RequestPriority(demand.priority),
                 unit_id=None if common else unit_id,
                 location=demand.location,
@@ -499,23 +521,76 @@ async def _seed_operations(session: AsyncSession, spec: SiteSpec, today: date) -
             actor="Demo verisi",
             now=opened,
         )
-        if demand.assignee:
-            await requests.assign(
-                session, request, demand.assignee, actor="Site Yönetimi",
-                now=opened + timedelta(hours=1),
-            )  # fmt: skip
+        created[demand.title] = request
         target = RequestStatus(demand.status)
-        path = {
-            RequestStatus.IN_PROGRESS: [RequestStatus.IN_PROGRESS],
-            RequestStatus.WAITING: [RequestStatus.IN_PROGRESS, RequestStatus.WAITING],
-            RequestStatus.RESOLVED: [RequestStatus.IN_PROGRESS, RequestStatus.RESOLVED],
-            RequestStatus.CLOSED: [RequestStatus.CLOSED],
-        }.get(target, [])
-        for step, status in enumerate(path, start=1):
+        if target is RequestStatus.OPEN:
+            continue
+        await requests.assign(
+            session, request, demand.assignee or "Teknik ekip", actor="Site Yönetimi",
+            now=opened + timedelta(hours=1),
+        )  # fmt: skip
+        steps = flow[1 : flow.index(target) + 1]
+        if (
+            RequestStatus.RESOLVED in steps
+            and RequestStatus.WAITING in steps
+            and (target is not RequestStatus.WAITING)
+        ):
+            steps.remove(RequestStatus.WAITING)
+        for step, status in enumerate(steps, start=1):
+            at = opened + timedelta(hours=1 + 3 * step)
+            if status is RequestStatus.RESOLVED and target is RequestStatus.RESOLVED:
+                at = max(at, datetime.combine(today - timedelta(days=1), time(15), BUSINESS_TZ))
+            if status is RequestStatus.CLOSED:
+                await service_desk.confirm(
+                    session, site, request, solved=True, score=4, comment="Hızlı çözüldü.",
+                    person_id=person_id, actor="Sakin", now=at,
+                )  # fmt: skip
+                continue
             await requests.change_status(
-                session, request, status, demand.resolution, actor="Site Yönetimi",
-                now=opened + timedelta(hours=4 * step),
-            )  # fmt: skip
+                session, request, status, demand.resolution, actor="Site Yönetimi", now=at
+            )
+    morning = datetime.combine(today, time(8), BUSINESS_TZ)
+    for name, unit, price in TARIFFS:
+        session.add(
+            ServiceTariff(
+                name=name, name_key=" ".join(ascii_fold(name).split()), unit=unit, price=price,
+                is_active=True,
+            )
+        )  # fmt: skip
+    await session.flush()
+    leak = created["Mutfak lavabosu sızdırıyor"]
+    await paid_services.create_quote(
+        session, leak,
+        [("Batarya değişimi (malzeme)", Decimal(1), Decimal("650.00")),
+         ("İşçilik", Decimal("1.5"), Decimal("400.00"))],
+        "Mutfak bataryası değişecek.", actor="Teknik ekip", now=morning,
+    )  # fmt: skip
+    lift = created["Asansör kat arasında duruyor"]
+    await service_desk.create_outage(
+        session,
+        service_desk.OutageData(
+            "A blok asansör arızası", lift.category, lift.location,
+            "A blok asansörü bakımda; firma parça bekliyor. Lütfen B blok asansörünü kullanın.",
+            [lift.id],
+        ),
+        actor="Site Yönetimi", now=morning,
+    )  # fmt: skip
+    owner = await session.scalar(
+        select(UnitParty)
+        .where(UnitParty.role == PartyRole.OWNER.value)
+        .order_by(UnitParty.unit_id)
+        .limit(1)
+    )
+    if owner is not None:
+        await permits.apply(
+            session,
+            permits.PermitData(
+                owner.unit_id, PermitType.RENOVATION, today + timedelta(days=5),
+                today + timedelta(days=12), "Yapı Usta Tadilat",
+                "Banyo yenileme: fayans ve tesisat değişimi.",
+            ),
+            person_id=owner.person_id, actor="Sakin", today=today,
+        )  # fmt: skip
 
 
 async def _seed_gate(session: AsyncSession, spec: SiteSpec, today: date) -> None:

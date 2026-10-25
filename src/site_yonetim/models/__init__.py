@@ -84,6 +84,19 @@ from site_yonetim.models.operations import (
 from site_yonetim.models.people import LedgerAccount, Person, UnitParty
 from site_yonetim.models.platform import Organization, Plan, PropertyKind, Site
 from site_yonetim.models.security import Incident, LostItem, Package, Visitor
+from site_yonetim.models.service_desk import (
+    Outage,
+    Permit,
+    PermitSettings,
+    ReplyTemplate,
+    RequestCategory,
+    RequestFeedback,
+    RequestInternalNote,
+    RequestSettings,
+    ServiceQuote,
+    ServiceQuoteLine,
+    ServiceTariff,
+)
 from site_yonetim.models.structure import Block, Unit, UnitType
 
 __all__ = [
@@ -134,10 +147,13 @@ __all__ = [
     "NotificationPreference",
     "Organization",
     "OrganizationMembership",
+    "Outage",
     "Package",
     "Payment",
     "PaymentAllocation",
     "Period",
+    "Permit",
+    "PermitSettings",
     "Person",
     "Plan",
     "Poll",
@@ -151,9 +167,17 @@ __all__ = [
     "Refund",
     "Registration",
     "RegistrationLink",
+    "ReplyTemplate",
     "Request",
+    "RequestCategory",
     "RequestDepartment",
     "RequestEvent",
+    "RequestFeedback",
+    "RequestInternalNote",
+    "RequestSettings",
+    "ServiceQuote",
+    "ServiceQuoteLine",
+    "ServiceTariff",
     "Site",
     "SiteFinanceSummary",
     "SiteMembership",

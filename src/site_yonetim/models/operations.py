@@ -6,17 +6,20 @@ sonradan yazılamaz.
 
 import datetime as dt
 import uuid
+from typing import Any
 
 from sqlalchemy import (
     ARRAY,
     CheckConstraint,
     Date,
     DateTime,
+    ForeignKeyConstraint,
     Index,
     Text,
     UniqueConstraint,
     Uuid,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from site_yonetim.db.base import Base, TenantMixin, enum_check, tenant_fk, tenant_table_args
@@ -24,7 +27,6 @@ from site_yonetim.domain.operations import (
     Audience,
     Channel,
     Importance,
-    RequestCategory,
     RequestEventKind,
     RequestPriority,
     RequestStatus,
@@ -41,12 +43,16 @@ class Request(TenantMixin, Base):
         tenant_fk("unit_id", "units"),
         tenant_fk("reported_by_person_id", "persons"),
         tenant_fk("department_id", "request_departments"),
+        tenant_fk("outage_id", "outages"),
+        # Site tanımlı kategori (docs/12 D-26): anahtar değişmez, talep anahtarla bağlanır.
+        ForeignKeyConstraint(
+            ["site_id", "category"], ["request_categories.site_id", "request_categories.key"]
+        ),
         UniqueConstraint("site_id", "number"),
         CheckConstraint("number > 0", name="number_positive"),
         CheckConstraint(
             f"char_length(title) BETWEEN {TITLE_MIN} AND {TITLE_MAX}", name="title_length"
         ),
-        CheckConstraint(enum_check("category", RequestCategory), name="category"),
         CheckConstraint(enum_check("priority", RequestPriority), name="priority"),
         CheckConstraint(enum_check("status", RequestStatus), name="status"),
         CheckConstraint(
@@ -55,12 +61,13 @@ class Request(TenantMixin, Base):
         ),
         Index("ix_requests_site_status", "site_id", "status"),
         Index("ix_requests_reporter", "site_id", "reported_by_person_id"),
+        Index("ix_requests_outage", "site_id", "outage_id"),
     )
 
     number: Mapped[int]
     title: Mapped[str] = mapped_column(Text)
     description: Mapped[str | None] = mapped_column(Text)
-    category: Mapped[str] = mapped_column(Text, default=RequestCategory.OTHER.value)
+    category: Mapped[str] = mapped_column(Text)  # request_categories.key
     priority: Mapped[str] = mapped_column(Text, default=RequestPriority.NORMAL.value)
     status: Mapped[str] = mapped_column(Text, default=RequestStatus.OPEN.value)
     reported_by_person_id: Mapped[uuid.UUID | None]
@@ -72,6 +79,17 @@ class Request(TenantMixin, Base):
     resolved_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     resolution: Mapped[str | None] = mapped_column(Text)
     created_by_name: Mapped[str | None] = mapped_column(Text)  # talebi açan kullanıcı
+    closed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))  # kapandı/iptal
+    # Çözüldü talebe sakin yanıt vermezse bu anda kendiliğinden kapanır (§12.3, K18).
+    auto_close_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    # SLA kural anlık görüntüsü (HIZ-03 adım 4): açık talep açıldığı kuralla devam eder.
+    sla_hour_type: Mapped[str | None] = mapped_column(Text)
+    sla_target_hours: Mapped[int | None]
+    sla_calendar: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
+    sla_warn_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))  # %80
+    sla_warned_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    sla_breached_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    outage_id: Mapped[uuid.UUID | None]  # ana olay (servis isteği 49)
 
 
 class RequestEvent(TenantMixin, Base):

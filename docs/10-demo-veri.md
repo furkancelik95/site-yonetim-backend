@@ -72,6 +72,10 @@ Toplam **84 bağımsız bölüm**. Oranlar bilinçli farklı: panoda sağlıklı
   **ödenmemiş**; ödenenler kasadan düşmüş.
 - **Duyurular**, **talepler** (farklı durum ve önceliklerde), güvenlik modülü açık sitelerde
   **kargo ve ziyaretçi** kayıtları.
+- Talepler dokümandaki akışla (K18) üretilir: atama → işlemde → (beklemede) → çözüldü; kapanan
+  talep sakin onayı ve puanla kapanır, "çözüldü" talep sakin onayı bekler (dün çözülmüş). Ayrıca
+  hizmet tarifesi (3 kalem), açık talepte bir ücretli hizmet teklifi, asansör talebine bağlı bir
+  ana olay ve bir tadilat başvurusu (servis istekleri 49–52).
 
 ## 2. Demo hesapları
 

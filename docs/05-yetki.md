@@ -27,7 +27,8 @@ kümesi tanımlanmalı.
 | `finance.reports.read` | Rapor görüntüleme ve Excel |
 | `units.read` / `units.manage` | Daire görüntüleme / yönetimi (Excel içe aktarma dahil) |
 | `people.read` / `people.manage` | Kişi görüntüleme / yönetimi |
-| `requests.read` / `requests.create` / `requests.assign` | Talep görüntüleme / oluşturma / atama ve durum değiştirme |
+| `requests.read` / `requests.create` / `requests.assign` | Talep görüntüleme / oluşturma / atama ve durum değiştirme (iç not, ana olay, teklif, tadilat kararı dahil) |
+| `requests.settings` | Talep ayarları: kategori, SLA ve çalışma takvimi, hazır yanıt, hizmet tarifesi, tadilat kuralları (servis istekleri 47–52) |
 | `announcements.read` / `announcements.publish` | Duyuru görüntüleme / yayınlama |
 | `expenses.read` / `expenses.manage` | Gider görüntüleme / kaydetme, ödeme, geri alma |
 | `security.visitors` | Ziyaretçi kaydı |
@@ -51,7 +52,7 @@ Son yedi izin servis istekleri 09–18 için eklendi (karar: Furkan, 05.10.2026)
 
 | Rol | İzinler |
 |---|---|
-| **Yönetici** | `finance.read`, `finance.charge.post`, `finance.payment.record`, `finance.budget.manage`, `finance.cash.read`, `finance.cash.manage`, `finance.reports.read`, `units.read`, `units.manage`, `people.read`, `people.manage`, `requests.read`, `requests.create`, `requests.assign`, `announcements.read`, `announcements.publish`, `expenses.read`, `expenses.manage`, `security.visitors`, `security.packages`, `modules.manage`, `members.manage`, `audit.read`, `security.incidents`, `meetings.read`, `meetings.manage`, `polls.manage`, `contracts.manage`, `inventory.read`, `inventory.manage`, `staff.manage`, `approvals.rules.read`, `approvals.rules.manage` |
+| **Yönetici** | `finance.read`, `finance.charge.post`, `finance.payment.record`, `finance.budget.manage`, `finance.cash.read`, `finance.cash.manage`, `finance.reports.read`, `units.read`, `units.manage`, `people.read`, `people.manage`, `requests.read`, `requests.create`, `requests.assign`, `requests.settings`, `announcements.read`, `announcements.publish`, `expenses.read`, `expenses.manage`, `security.visitors`, `security.packages`, `modules.manage`, `members.manage`, `audit.read`, `security.incidents`, `meetings.read`, `meetings.manage`, `polls.manage`, `contracts.manage`, `inventory.read`, `inventory.manage`, `staff.manage`, `approvals.rules.read`, `approvals.rules.manage` |
 | **Yönetim Kurulu Üyesi** — her şeyi görür, hiçbirini değiştirmez | `finance.read`, `units.read`, `people.read`, `requests.read`, `announcements.read`, `expenses.read`, `finance.cash.read`, `finance.reports.read`, `meetings.read`, `inventory.read`, `approvals.rules.read` |
 | **Denetçi** (KMK m.41) — salt okunur finans, **kişisel veri görmez** | `finance.read`, `expenses.read`, `audit.read`, `finance.cash.read`, `finance.reports.read`, `meetings.read` |
 | **Muhasebe** | `finance.read`, `finance.charge.post`, `finance.payment.record`, `finance.budget.manage`, `expenses.read`, `expenses.manage`, `finance.cash.read`, `finance.cash.manage`, `finance.reports.read`, `units.read`, `people.read`, `contracts.manage`, `inventory.read` |
