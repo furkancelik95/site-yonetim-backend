@@ -7,6 +7,7 @@ uv run python -m site_yonetim.cli reconcile [--fix]    # özet bakiye ↔ defter
 uv run python -m site_yonetim.cli run-charge-schedules # otomatik aylık tahakkuk (günde bir)
 uv run python -m site_yonetim.cli run-recurring-expenses # tekrarlanan giderler (günde bir)
 uv run python -m site_yonetim.cli run-approval-jobs      # onay hatırlatma/eskalasyon (saatlik)
+uv run python -m site_yonetim.cli run-staff-jobs         # ayrılan personelin erişimini kapat (gece)
 uv run python -m site_yonetim.cli run-document-expiry    # belge geçerlilik uyarısı (günde bir)
 """
 
@@ -30,6 +31,7 @@ from site_yonetim.services import (
     rate_limit,
     reconciliation,
     recurring_expenses,
+    staff,
 )
 from site_yonetim.services.charging import BUSINESS_TZ
 from site_yonetim.services.imports import ImportStore
@@ -176,6 +178,22 @@ async def _run_approval_jobs() -> int:
     return 0
 
 
+async def _run_staff_jobs() -> int:
+    """K29 / IK-01 adım 4: ayrılış tarihi geçen personelin site erişimini kapatır (gece)."""
+    engine = create_engine_from_settings(get_settings())
+    now = datetime.now(UTC)
+    try:
+        closed = await staff.run_offboarding(
+            create_session_factory(engine), today=now.astimezone(BUSINESS_TZ).date(), now=now
+        )
+    finally:
+        await engine.dispose()
+    for item in closed:
+        print(f"{item.site_id}: {item.full_name} — site erişimi kapatıldı")
+    print(f"{len(closed)} ayrılan personelin erişimi kapatıldı.")
+    return 0
+
+
 async def _run_document_expiry() -> int:
     """Belge geçerlilik bitişi (RAP-03): 60/30 gün kala ve bitince bildirim merkezine uyarı;
     günde bir. Tekrar güvenli (aynı uyarı ikinci kez yazılmaz)."""
@@ -200,6 +218,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("run-charge-schedules", help="Otomatik aylık tahakkuku çalıştır (günde bir)")
     sub.add_parser("run-recurring-expenses", help="Tekrarlanan giderleri yaz (günde bir)")
     sub.add_parser("run-approval-jobs", help="Onay hatırlatma ve eskalasyonu (saatlik)")
+    sub.add_parser("run-staff-jobs", help="Ayrılan personelin site erişimini kapat (gece)")
     sub.add_parser("run-document-expiry", help="Belge geçerlilik uyarısı (günde bir)")
     reconcile = sub.add_parser("reconcile", help="Özet bakiyeleri defterle karşılaştır")
     reconcile.add_argument("--fix", action="store_true", help="Farklı siteleri onar")
@@ -213,6 +232,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_purge_login_throttle())
     if args.command == "run-approval-jobs":
         return asyncio.run(_run_approval_jobs())
+    if args.command == "run-staff-jobs":
+        return asyncio.run(_run_staff_jobs())
     if args.command == "run-document-expiry":
         return asyncio.run(_run_document_expiry())
     if args.command == "run-recurring-expenses":

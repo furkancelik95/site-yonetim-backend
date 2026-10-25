@@ -21,6 +21,7 @@ from site_yonetim.api.v1 import (
     imports,
     incidents,
     inventory,
+    leaves,
     me,
     meetings,
     members,
@@ -36,9 +37,12 @@ from site_yonetim.api.v1 import (
     resident,
     security,
     sessions,
+    shifts,
     sites,
     staff,
+    staff_self,
     structure,
+    timesheets,
 )
 
 API_V1_PREFIX = "/api/v1"
@@ -83,6 +87,10 @@ api_router.include_router(polls.router)
 api_router.include_router(contracts.router)
 api_router.include_router(inventory.router)
 api_router.include_router(staff.router)
+api_router.include_router(shifts.router)
+api_router.include_router(leaves.router)
+api_router.include_router(timesheets.router)
+api_router.include_router(staff_self.router)
 api_router.include_router(notifications.router)
 api_router.include_router(approvals.router)
 api_router.include_router(documents.router)

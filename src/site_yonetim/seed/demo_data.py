@@ -381,3 +381,17 @@ DOCUMENTS: tuple[DocumentSpec, ...] = (
     DocumentSpec("Hukuk görüşü — icra takibi", "other", "secret"),
 )  # fmt: skip
 RESIDENT_DOCUMENT = DocumentSpec("Tadilat izin belgesi", "other", "unit")
+
+
+# --- İnsan kaynakları (servis istekleri 35–39) -------------------------------------------
+# Kart: ad, görev, bordro sicil no, bağlı giriş hesabı (K29). Telefon üretilmez (KVKK).
+STAFF_CARDS: tuple[tuple[str, str, str, str | None], ...] = (
+    ("Recep Er", "Güvenlik görevlisi", "SG-1001", "guvenlik@demo.local"),
+    ("Ergün Kılıç", "Teknik görevli", "TK-2001", "teknik@demo.local"),
+    ("Hülya Demir", "Temizlik görevlisi", "TM-3001", None),
+)
+SHIFT_TEMPLATES: tuple[tuple[str, str, str, int], ...] = (
+    ("Sabah", "08:00", "16:00", 60),
+    ("Akşam", "16:00", "00:00", 30),
+    ("Gece", "00:00", "08:00", 30),
+)

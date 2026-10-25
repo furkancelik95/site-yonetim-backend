@@ -27,6 +27,7 @@ from site_yonetim.domain.finance import (
     PayerRule,
     ScopeKind,
 )
+from site_yonetim.domain.management import Employer
 from site_yonetim.domain.modules import ModuleKey
 from site_yonetim.domain.money import distribute, round_money
 from site_yonetim.domain.operations import (
@@ -37,6 +38,7 @@ from site_yonetim.domain.operations import (
     RequestStatus,
 )
 from site_yonetim.domain.security import VisitorKind
+from site_yonetim.domain.staffing import week_start
 from site_yonetim.domain.structure import AccountKind, PartyRole
 from site_yonetim.domain.text import normalize_person_name
 from site_yonetim.models import (
@@ -86,7 +88,9 @@ from site_yonetim.seed.demo_data import (
     RESIDENT,
     RESIDENT_DOCUMENT,
     SEED,
+    SHIFT_TEMPLATES,
     SITES,
+    STAFF_CARDS,
     UNPAID_SHARE_THIS_MONTH,
     DocumentSpec,
     SiteSpec,
@@ -103,6 +107,11 @@ from site_yonetim.services import (
     requests,
     security,
 )
+from site_yonetim.services import approvals as approvals_svc
+from site_yonetim.services import leaves as leaves_svc
+from site_yonetim.services import shifts as shifts_svc
+from site_yonetim.services import staff as staff_svc
+from site_yonetim.services import timesheets as timesheets_svc
 from site_yonetim.services.charging import BUSINESS_TZ
 from site_yonetim.services.files import FileStore
 from site_yonetim.services.provisioning import provision_site
@@ -222,6 +231,7 @@ async def _seed_demo(
         aksu = await session.scalar(select(Site.id).where(Site.slug == RESIDENT.site_slug))
     if aksu is not None:
         await _seed_resident(factory, aksu, password_hash, store, today)
+        await _seed_staff(factory, aksu, user_ids, today)
 
     logger.info("Demo verisi yüklendi: %d site, %d hesap.", len(SITES), len(ACCOUNTS) + 1)
     return True
@@ -688,6 +698,106 @@ async def _seed_documents(session: AsyncSession, store: FileStore, today: date) 
         await _upload_document(
             session, store, spec, today, block_id=first_block if spec.first_block else None
         )
+
+
+async def _seed_staff(
+    factory: async_sessionmaker[AsyncSession],
+    site_id: uuid.UUID,
+    user_ids: dict[str, uuid.UUID],
+    today: date,
+) -> None:
+    """İnsan kaynakları (servis istekleri 35–39): kartlar (güvenlik ve teknik hesaplara bağlı —
+    K29), üç vardiya şablonu, geçen ve bu haftanın planı (yayında), izinler, kesinleşmiş günler."""
+    now = datetime.combine(today, time(9), BUSINESS_TZ)
+    monday = week_start(today)
+    with site_scope(site_id):
+        async with factory() as session, session.begin():
+            cards = []
+            for name, position, payroll, email in STAFF_CARDS:
+                cards.append(
+                    await staff_svc.create(
+                        session,
+                        staff_svc.StaffData(
+                            full_name=name,
+                            position=position,
+                            employer=Employer.SITE.value,
+                            contractor_name=None,
+                            phone=None,
+                            start_date=date(today.year - 1, 3, 1),
+                            end_date=None,
+                            shift=None,
+                            payroll_no=payroll,
+                            user_id=user_ids.get(email) if email else None,
+                        ),
+                        today=today,
+                        now=now,
+                    )
+                )
+            templates = [
+                await shifts_svc.save_template(
+                    session,
+                    shifts_svc.TemplateData(name, start, end, rest, None, "Ana kapı", True),
+                    item=None,
+                )
+                for name, start, end, rest in SHIFT_TEMPLATES
+            ]
+            # Dönüşümlü plan: kişi i, gün d → şablon (i + d) % 3; pazar boş
+            for week in (monday - timedelta(days=7), monday):
+                for offset in range(6):
+                    day = week + timedelta(days=offset)
+                    for index, card in enumerate(cards):
+                        await shifts_svc.assign(
+                            session,
+                            staff_id=card.id,
+                            work_date=day,
+                            template_id=templates[(index + offset) % len(templates)].id,
+                            actor_name="Demo verisi",
+                        )
+                await shifts_svc.publish(
+                    session, week=week, acknowledge=True, actor_name="Demo verisi", now=now
+                )
+            manager = approvals_svc.Person(user_ids["yonetici@demo.local"], "Kerem Yıldırım")
+            site = await session.get(Site, site_id)
+            if site is None:  # pragma: no cover
+                return
+            approved = await leaves_svc.create(
+                session,
+                site,
+                leaves_svc.LeaveData(
+                    cards[2].id,
+                    "annual",
+                    monday + timedelta(days=9),
+                    monday + timedelta(days=11),
+                    None,
+                ),
+                source="manager",
+                actor=manager,
+                today=today,
+                now=now,
+            )
+            approved.status = "approved"
+            approved.decided_by_name = manager.name
+            approved.decided_at = now
+            await leaves_svc.create(
+                session,
+                site,
+                leaves_svc.LeaveData(
+                    cards[1].id, "excuse", monday + timedelta(days=15), monday + timedelta(days=15),
+                    "Aile ziyareti",
+                ),
+                source="manager",
+                actor=manager,
+                today=today,
+                now=now,
+            )  # fmt: skip
+            await session.flush()
+            # Geçen haftanın ilk üç günü kesin (puantaj ekranı ve aktarım önizlemesi boş görünmesin)
+            for offset in range(3):
+                day = monday - timedelta(days=7 - offset)
+                if day < today:
+                    await timesheets_svc.finalize(
+                        session, day, today=today, actor_name="Demo verisi"
+                    )
 
 
 def _person(first: str, last: str) -> Person:
