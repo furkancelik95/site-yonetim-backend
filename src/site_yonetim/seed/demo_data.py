@@ -351,6 +351,38 @@ EXPENSES: tuple[ExpenseSpec, ...] = (
 )  # fmt: skip
 
 
+# --- Belge arşivi (RAP-03; servis isteği 78) -------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentSpec:
+    title: str
+    kind: str
+    confidentiality: str
+    valid_days: int | None = None  # bugünden bitişe gün; eksi = süresi dolmuş
+    retention_years: int | None = None
+    first_block: bool = False  # kapsam: sitenin ilk bloğu (yoksa tüm site)
+    versions: int = 1
+
+
+# Ekran boş görünmesin: süresi yaklaşan (60 / 30 gün) ve dolmuş belge, gizli belge, sürümlü belge.
+DOCUMENTS: tuple[DocumentSpec, ...] = (
+    DocumentSpec("Yönetim planı", "plan", "public", versions=2),
+    DocumentSpec("Site kuralları", "rules", "public"),
+    DocumentSpec("Bina sigorta poliçesi", "insurance", "management", valid_days=24,
+                 retention_years=10),
+    DocumentSpec("Zorunlu deprem sigortası (DASK)", "insurance", "public", valid_days=52),
+    DocumentSpec("Yangın raporu", "fire_report", "public", valid_days=210),
+    DocumentSpec("Asansör muayene etiketi", "elevator", "public", valid_days=-6,
+                 first_block=True),
+    DocumentSpec("Temizlik hizmet sözleşmesi", "contract", "management", valid_days=300,
+                 retention_years=10),
+    DocumentSpec("2025 yılı mali tabloları", "financial", "management", retention_years=10),
+    DocumentSpec("Hukuk görüşü — icra takibi", "other", "secret"),
+)  # fmt: skip
+RESIDENT_DOCUMENT = DocumentSpec("Tadilat izin belgesi", "other", "unit")
+
+
 # --- İnsan kaynakları (servis istekleri 35–39) -------------------------------------------
 # Kart: ad, görev, bordro sicil no, bağlı giriş hesabı (K29). Telefon üretilmez (KVKK).
 STAFF_CARDS: tuple[tuple[str, str, str, str | None], ...] = (

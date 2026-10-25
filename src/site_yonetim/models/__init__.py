@@ -25,6 +25,7 @@ from site_yonetim.models.cash import (
     Refund,
     StoredFile,
 )
+from site_yonetim.models.documents import Document, DocumentAccessLog, DocumentVersion
 from site_yonetim.models.finance import (
     AccountBalance,
     AllocationComponent,
@@ -133,6 +134,9 @@ __all__ = [
     "ChargeType",
     "ClearanceCertificate",
     "Contract",
+    "Document",
+    "DocumentAccessLog",
+    "DocumentVersion",
     "Expense",
     "ExpenseCategory",
     "IdempotencyKey",

@@ -69,7 +69,7 @@ def _action_check(actions: tuple[str, ...]) -> None:
 
 
 revision: str = "0029"
-down_revision: str | None = "0024"
+down_revision: str | None = "0025"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

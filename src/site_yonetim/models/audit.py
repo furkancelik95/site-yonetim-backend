@@ -187,6 +187,9 @@ AUDITED_TABLES = frozenset(
         "approval_requests",
         "approval_decisions",
         "approval_delegations",
+        # belge arşivi (gizli belge açılışı ayrıca document_access_logs'ta)
+        "documents",
+        "document_versions",
         # yetki / üyelik
         "site_memberships",
     }

@@ -588,6 +588,28 @@ Açılış bakiyesi de bir harekettir (`source = opening`) — ekstrede nereden 
 
 Kurallar: `09-guvenlik-kvkk.md` §3.
 
+### `documents` [K] — belge arşivi (RAP-03; servis isteği 78)
+| Sütun | Tip | Not |
+|---|---|---|
+| title · title_key | TEXT | ad (3–120) · sürüm eşleşmesi anahtarı (Türkçe küçük harf, boşluk tekleştirilmiş) |
+| kind | TEXT | `plan` · `rules` · `insurance` · `fire_report` · `elevator` · `contract` · `minutes` · `financial` · `other` |
+| scope · block_id · unit_id | TEXT · UUID NULL | `site` (ikisi boş) · `block` · `unit`; bileşik FK |
+| confidentiality | TEXT | `public` · `unit` (yalnız `scope = unit`) · `management` · `secret` |
+| valid_until | DATE NULL | geçerlilik bitişi (60/30 gün uyarı) |
+| retention_years | INT NULL | saklama süresi (K8), 1–100 — bilgi amaçlı, otomatik silme yok |
+| subject_type · subject_id | TEXT · UUID NULL | başka modülün kaydına bağ (ikisi birlikte) |
+| current_version | INT | son sürüm no |
+
+Benzersiz: `(site_id, title_key, scope, block_id, unit_id)` NULLS NOT DISTINCT — aynı ad + kapsam
+tek belge, yeni yükleme yeni sürüm. Silinmez.
+
+### `document_versions` [K] — **değişmez**
+`document_id`, `version` (belgede tekil), `stored_file_id` (tekil; ad, tür, boyut, SHA-256
+oradan), `uploaded_by_id`, `uploaded_by_name`.
+
+### `document_access_logs` [K] — gizli belge açılışı, **değişmez**
+`document_id`, `version`, `user_id`, `user_name`, `created_at`.
+
 ---
 
 ## 9. Operasyon
