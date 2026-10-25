@@ -34,6 +34,7 @@ _UPLOAD_LIMITS = (
     (re.compile(rf"{API_V1_PREFIX}/sites/[^/]+/imports/units"), MAX_UPLOAD_BYTES + 64 * 1024),
     (re.compile(rf"{API_V1_PREFIX}/sites/[^/]+/bank-imports$"), MAX_UPLOAD_BYTES + 64 * 1024),
     (re.compile(rf"{API_V1_PREFIX}/sites/[^/]+/expenses"), MAX_FILE_BYTES + 64 * 1024),
+    (re.compile(rf"{API_V1_PREFIX}/sites/[^/]+/documents$"), MAX_FILE_BYTES + 64 * 1024),
 )
 
 

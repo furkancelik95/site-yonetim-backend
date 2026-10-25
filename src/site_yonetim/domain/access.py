@@ -47,6 +47,10 @@ class Permission(StrEnum):
     # Onay mekanizması (Yazılım Dokümanı ONY-01; karar vermek atamaya bağlı, izin istemez)
     APPROVAL_RULES_READ = "approvals.rules.read"
     APPROVAL_RULES_MANAGE = "approvals.rules.manage"  # + tüm talepleri görür (gözetim)
+    # Belge arşivi (Yazılım Dokümanı RAP-03; servis isteği 78)
+    DOCUMENTS_READ = "documents.read"  # gizli dışındaki belgeler (sakin kendi ucunu kullanır)
+    DOCUMENTS_MANAGE = "documents.manage"  # yükleme ve yeni sürüm
+    DOCUMENTS_CONFIDENTIAL = "documents.confidential"  # gizli belgeler; her açılış kayda geçer
 
 
 class SiteRole(StrEnum):
@@ -86,20 +90,21 @@ ROLE_PERMISSIONS: dict[SiteRole, frozenset[Permission]] = {
             P.AUDIT_READ, P.SECURITY_INCIDENTS, P.MEETINGS_READ, P.MEETINGS_MANAGE,
             P.POLLS_MANAGE, P.CONTRACTS_MANAGE, P.INVENTORY_READ, P.INVENTORY_MANAGE,
             P.STAFF_MANAGE, P.APPROVAL_RULES_READ, P.APPROVAL_RULES_MANAGE,
+            P.DOCUMENTS_READ, P.DOCUMENTS_MANAGE, P.DOCUMENTS_CONFIDENTIAL,
         }
     ),
     SiteRole.BOARD_MEMBER: frozenset(
         {
             P.FINANCE_READ, P.UNITS_READ, P.PEOPLE_READ, P.REQUESTS_READ, P.ANNOUNCEMENTS_READ,
             P.EXPENSES_READ, P.FINANCE_CASH_READ, P.FINANCE_REPORTS_READ, P.MEETINGS_READ,
-            P.INVENTORY_READ, P.APPROVAL_RULES_READ,
+            P.INVENTORY_READ, P.APPROVAL_RULES_READ, P.DOCUMENTS_READ,
         }
     ),
     # KMK m.41 — salt okunur finans, kişisel veri görmez
     SiteRole.AUDITOR: frozenset(
         {
             P.FINANCE_READ, P.EXPENSES_READ, P.AUDIT_READ, P.FINANCE_CASH_READ,
-            P.FINANCE_REPORTS_READ, P.MEETINGS_READ,
+            P.FINANCE_REPORTS_READ, P.MEETINGS_READ, P.DOCUMENTS_READ, P.DOCUMENTS_CONFIDENTIAL,
         }
     ),
     SiteRole.ACCOUNTING: frozenset(
@@ -107,7 +112,7 @@ ROLE_PERMISSIONS: dict[SiteRole, frozenset[Permission]] = {
             P.FINANCE_READ, P.FINANCE_CHARGE_POST, P.FINANCE_PAYMENT_RECORD,
             P.FINANCE_BUDGET_MANAGE, P.EXPENSES_READ, P.EXPENSES_MANAGE, P.FINANCE_CASH_READ,
             P.FINANCE_CASH_MANAGE, P.FINANCE_REPORTS_READ, P.UNITS_READ, P.PEOPLE_READ,
-            P.CONTRACTS_MANAGE, P.INVENTORY_READ,
+            P.CONTRACTS_MANAGE, P.INVENTORY_READ, P.DOCUMENTS_READ,
         }
     ),
     # Yalnızca kapıdaki iş: borç, kişi listesi, muhasebe yok

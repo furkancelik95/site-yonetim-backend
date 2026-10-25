@@ -34,7 +34,12 @@ class FileStore:
         fd = os.open(path, flags, 0o600)
         with os.fdopen(fd, "wb") as handle:
             handle.write(data)
-        return storage_path, hashlib.sha256(data).hexdigest()
+        return storage_path, self.digest(data)
+
+    @staticmethod
+    def digest(data: bytes) -> str:
+        """SHA-256 özeti (onaltılık) — sürüm karşılaştırması ve bütünlük için."""
+        return hashlib.sha256(data).hexdigest()
 
     def read(self, storage_path: str) -> bytes:
         return self._path(storage_path).read_bytes()
