@@ -81,10 +81,27 @@ from site_yonetim.models.operations import (
     RequestDepartment,
     RequestEvent,
 )
-from site_yonetim.models.people import LedgerAccount, Person, UnitParty
+from site_yonetim.models.people import (
+    CustomField,
+    CustomFieldValue,
+    HouseholdMember,
+    Invitation,
+    LedgerAccount,
+    Person,
+    UnitParty,
+    Vehicle,
+)
 from site_yonetim.models.platform import Organization, Plan, PropertyKind, Site
 from site_yonetim.models.security import Incident, LostItem, Package, Visitor
-from site_yonetim.models.structure import Block, Unit, UnitType
+from site_yonetim.models.structure import (
+    Block,
+    CommonArea,
+    ImportBatch,
+    StructureSettings,
+    Unit,
+    UnitAttributeChange,
+    UnitType,
+)
 
 __all__ = [
     "AccountBalance",
@@ -118,11 +135,17 @@ __all__ = [
     "ChargeScheduleRun",
     "ChargeType",
     "ClearanceCertificate",
+    "CommonArea",
     "Contract",
+    "CustomField",
+    "CustomFieldValue",
     "Expense",
     "ExpenseCategory",
+    "HouseholdMember",
     "IdempotencyKey",
+    "ImportBatch",
     "Incident",
+    "Invitation",
     "LateFeePolicy",
     "LedgerAccount",
     "LedgerEntry",
@@ -162,11 +185,14 @@ __all__ = [
     "StockItem",
     "StockMove",
     "StoredFile",
+    "StructureSettings",
     "Unit",
+    "UnitAttributeChange",
     "UnitParty",
     "UnitType",
     "UnitUsage",
     "UnitWeight",
     "User",
+    "Vehicle",
     "Visitor",
 ]

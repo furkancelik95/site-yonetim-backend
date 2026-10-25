@@ -22,6 +22,9 @@ class Permission(StrEnum):
     UNITS_MANAGE = "units.manage"
     PEOPLE_READ = "people.read"
     PEOPLE_MANAGE = "people.manage"
+    # İletişim bilgisi (telefon, e-posta): maskeli görür, "göster" ile açar — açma denetim kaydına
+    # yazılır (YAP-03 S1–S2). Yönetim Kurulu ve diğer roller iletişim alanını hiç almaz.
+    PEOPLE_CONTACT = "people.contact"
     REQUESTS_READ = "requests.read"
     REQUESTS_CREATE = "requests.create"
     REQUESTS_ASSIGN = "requests.assign"
@@ -85,7 +88,7 @@ ROLE_PERMISSIONS: dict[SiteRole, frozenset[Permission]] = {
             P.SECURITY_VISITORS, P.SECURITY_PACKAGES, P.MODULES_MANAGE, P.MEMBERS_MANAGE,
             P.AUDIT_READ, P.SECURITY_INCIDENTS, P.MEETINGS_READ, P.MEETINGS_MANAGE,
             P.POLLS_MANAGE, P.CONTRACTS_MANAGE, P.INVENTORY_READ, P.INVENTORY_MANAGE,
-            P.STAFF_MANAGE, P.APPROVAL_RULES_READ, P.APPROVAL_RULES_MANAGE,
+            P.STAFF_MANAGE, P.APPROVAL_RULES_READ, P.APPROVAL_RULES_MANAGE, P.PEOPLE_CONTACT,
         }
     ),
     SiteRole.BOARD_MEMBER: frozenset(

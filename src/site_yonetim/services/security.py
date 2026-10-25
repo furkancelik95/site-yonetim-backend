@@ -27,7 +27,8 @@ from site_yonetim.domain.security import (
 )
 from site_yonetim.domain.structure import PartyRole
 from site_yonetim.domain.text import tr_lower, tr_upper
-from site_yonetim.models import Block, Package, Person, Unit, UnitParty, Visitor
+from site_yonetim.domain.vehicles import VehicleStatus, normalize_plate
+from site_yonetim.models import Block, Package, Person, Unit, UnitParty, Vehicle, Visitor
 
 LOOKUP_LIMIT = 20
 OCCUPANT_ROLES = (PartyRole.TENANT.value, PartyRole.RESIDENT.value)
@@ -224,8 +225,21 @@ async def exit_(session: AsyncSession, visitor: Visitor, now: datetime) -> Visit
     return visitor
 
 
-def visitors_query(day: date, status: VisitorStatus | None) -> Select[Visitor]:
-    query = select(Visitor).where(Visitor.visit_date == day)
+def visitors_query(
+    day: date | None,
+    status: VisitorStatus | None,
+    *,
+    unit_id: uuid.UUID | None = None,
+    since: date | None = None,
+) -> Select[Visitor]:
+    """`day` verilirse o gün; yoksa `since` ve sonrası (bölüm kartı: son 30 gün)."""
+    query = select(Visitor)
+    if day is not None:
+        query = query.where(Visitor.visit_date == day)
+    elif since is not None:
+        query = query.where(Visitor.visit_date >= since)
+    if unit_id is not None:
+        query = query.where(Visitor.unit_id == unit_id)
     if status is not None:
         query = query.where(Visitor.status == status.value)
     return query.order_by(Visitor.created_at.desc(), Visitor.id.desc())
@@ -260,18 +274,26 @@ async def lookup(session: AsyncSession, q: str, today: date) -> list[LookupRow]:
         .join(Person, and_(Person.id == UnitParty.person_id, Person.site_id == UnitParty.site_id))
         .where(active, Person.search_name.like(_like(tr_lower(term))))
     )
+    matches = [
+        Unit.number.ilike(_like(term)),
+        func.concat(Block.name, Unit.number).ilike(_like(compact)),
+        Unit.id.in_(by_person),
+    ]
+    plate = normalize_plate(term)
+    if len(plate) >= 4:  # plaka eşleşmesi (istek 22): yalnız etkin araçlar, sonuç yine bölüm
+        matches.append(
+            Unit.id.in_(
+                select(Vehicle.unit_id).where(
+                    Vehicle.plate.like(_like(plate)),
+                    Vehicle.status == VehicleStatus.ACTIVE.value,
+                )
+            )
+        )
     units = list(
         await session.execute(
             select(Unit.id, Unit.number, Block.name)
             .join(Block, and_(Block.id == Unit.block_id, Block.site_id == Unit.site_id))
-            .where(
-                Unit.is_active,
-                or_(
-                    Unit.number.ilike(_like(term)),
-                    func.concat(Block.name, Unit.number).ilike(_like(compact)),
-                    Unit.id.in_(by_person),
-                ),
-            )
+            .where(Unit.is_active, or_(*matches))
             .order_by(Block.sort_order, Block.name, func.length(Unit.number), Unit.number)
             .limit(LOOKUP_LIMIT)
         )

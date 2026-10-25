@@ -58,7 +58,10 @@ async def test_herkese_acik_form_ve_basvuru(world: World) -> None:
     link = await code(world)
     assert len(link) >= 10
     site = await world.api.get(f"/api/v1/public/registration/{link}")
-    assert site.json() == {"site_name": "Aksu Konakları", "site_slug": "aksu-konaklari"}
+    body = site.json()
+    assert (body["site_name"], body["site_slug"]) == ("Aksu Konakları", "aksu-konaklari")
+    assert body["relations"] == ["owner", "tenant"]
+    assert body["document_required"] is False
     bad = await world.api.get("/api/v1/public/registration/yanlis-kod-123")
     assert bad.status_code == 404
     assert bad.json()["error"]["message"].startswith("Kayıt bağlantısı geçersiz ya da kapatılmış.")

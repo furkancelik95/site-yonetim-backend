@@ -246,8 +246,11 @@ async def test_kisi_adi_turkce_bicimlenir_telefon_e164(
 
     person = response.json()["data"]
     assert (person["first_name"], person["last_name"]) == ("Ayşe", "YILMAZ")
-    assert person["phone"] == "+905321234567"
-    assert person["email"] == "ayse@ornek.com"
+    # Kayıt E.164/küçük harf; yanıtta maskeli (YAP-03 S1). Açık değer contact-views ile.
+    assert person["phone"] == "+90 532 *** ** 67"
+    assert person["email"] == "a***@ornek.com"
+    shown = await _post(api, world, world.a, f"/people/{person['id']}/contact-views", {})
+    assert shown.json()["data"] == {"phone": "+905321234567", "email": "ayse@ornek.com"}
 
 
 @pytest.mark.parametrize(
@@ -294,7 +297,7 @@ async def test_kisi_guncellenir(api: httpx2.AsyncClient, world: World) -> None:
     )
 
     assert response.json()["data"]["full_name"] == "Ayşe KAYA"
-    assert response.json()["data"]["phone"] == "+905321234567"
+    assert response.json()["data"]["phone"] == "+90 532 *** ** 67"
 
 
 # --- Bölüm–kişi ilişkisi ve cari hesaplar ------------------------------------

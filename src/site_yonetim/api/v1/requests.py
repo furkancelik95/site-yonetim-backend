@@ -174,6 +174,7 @@ async def list_requests(
     category: RequestCategory | None = None,
     priority: RequestPriority | None = None,
     department_id: uuid.UUID | None = None,
+    unit_id: Annotated[uuid.UUID | None, Query(description="bölüm kartı süzgeci")] = None,
 ) -> Page[RequestOut]:
     query = svc.list_query(
         status=status_filter,
@@ -181,6 +182,7 @@ async def list_requests(
         priority=priority,
         reporter=_own_only(ctx),
         department_id=department_id,
+        unit_id=unit_id,
     )
     total = await ctx.session.scalar(select(func.count()).select_from(query.subquery())) or 0
     rows = list(await ctx.session.scalars(query.offset(paging.offset).limit(paging.page_size)))

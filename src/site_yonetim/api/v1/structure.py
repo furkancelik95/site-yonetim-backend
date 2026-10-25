@@ -2,7 +2,11 @@
 
 Her uç `site_context` (erişim 404, site kapsamı) + izin kontrolünden (403) geçer. Başka sitenin
 kimliği kiracı filtresi yüzünden görünmez: yol parametresindeyse 404, gövdedeyse 422.
-Kişisel veri (telefon, e-posta) yalnız `people.read` iznine gösterilir (docs/09 §5).
+İletişim bilgisi (telefon, e-posta) yalnız `people.contact` iznine ve **maskeli** döner
+(`+90 532 *** ** 33`); açık değer `POST people/{id}/contact-views` ile alınır ve denetim kaydına
+yazılır (YAP-03 S1–S2). Yönetim Kurulu gibi diğer roller iletişim alanını hiç almaz (null).
+m², arsa payı ve tip yürürlük tarihli tutulur: `PATCH units/{id}` ile değişirse bugünden geçerli
+bir geçmiş satırı yazılır (YAP-02 S3; ileri tarih için `PATCH units/{id}/attributes`).
 """
 
 import uuid
@@ -15,11 +19,17 @@ from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import Select, func, select
 
-from site_yonetim.api.deps import SiteContext, TodayDep, require_permission
+from site_yonetim.api.deps import NowDep, SiteContext, TodayDep, require_permission
 from site_yonetim.api.schemas import Page, PageParams, Written
 from site_yonetim.core.errors import ApiError, NotFoundError
 from site_yonetim.domain.access import Permission
-from site_yonetim.domain.structure import PartyRole, StructureRuleError
+from site_yonetim.domain.masking import mask_email, mask_phone_display
+from site_yonetim.domain.structure import (
+    VERSIONED_FIELDS,
+    PartyRole,
+    StructureRuleError,
+    check_effective_date,
+)
 from site_yonetim.domain.text import normalize_person_name
 from site_yonetim.domain.validation import (
     normalize_email_address,
@@ -27,6 +37,7 @@ from site_yonetim.domain.validation import (
     normalize_tr_mobile,
 )
 from site_yonetim.models import Block, LedgerAccount, Person, Unit, UnitParty, UnitType, UnitUsage
+from site_yonetim.models.audit import current_actor
 from site_yonetim.services import structure as svc
 
 router = APIRouter(prefix="/sites/{slug}", tags=["site yapısı"])
@@ -252,19 +263,28 @@ class PersonOut(BaseModel):
     first_name: str
     last_name: str
     full_name: str
-    phone: str | None = Field(description="Yalnız people.read izniyle; aksi halde null")
-    email: str | None = Field(description="Yalnız people.read izniyle; aksi halde null")
+    phone: str | None = Field(
+        description="Maskeli (`+90 532 *** ** 33`); yalnız people.contact izniyle, aksi halde null"
+    )
+    email: str | None = Field(
+        description="Maskeli (`a***@ornek.com`); yalnız people.contact izniyle, aksi halde null"
+    )
 
     @classmethod
     def of(cls, person: Person, *, contact: bool) -> PersonOut:
+        """`contact`: kullanıcı iletişim alanını (maskeli) görebilir mi (`people.contact`)."""
         return cls(
             id=person.id,
             first_name=person.first_name,
             last_name=person.last_name,
             full_name=person.full_name,
-            phone=person.phone if contact else None,
-            email=person.email if contact else None,
+            phone=mask_phone_display(person.phone) if contact and person.phone else None,
+            email=mask_email(person.email) if contact and person.email else None,
         )
+
+
+def can_contact(ctx: SiteContext) -> bool:
+    return ctx.access.can(Permission.PEOPLE_CONTACT)
 
 
 class PartyOut(BaseModel):
@@ -314,7 +334,7 @@ async def _load_unit(ctx: SiteContext, unit_id: uuid.UUID) -> tuple[Unit, Block,
 async def _unit_detail(ctx: SiteContext, unit_id: uuid.UUID, today: date) -> UnitDetail:
     unit, block, unit_type = await _load_unit(ctx, unit_id)
     current = (await svc.current_parties(ctx.session, [unit.id], today))[unit.id]
-    contact = ctx.access.can(Permission.PEOPLE_READ)
+    contact = can_contact(ctx)
     party_rows = await ctx.session.execute(
         select(UnitParty, Person)
         .join(Person, Person.id == UnitParty.person_id)
@@ -412,7 +432,7 @@ async def create_unit(ctx: UnitsManage, body: UnitCreate, today: TodayDep) -> Wr
 
 @router.patch("/units/{unit_id}", summary="Bölüm güncelle / pasifleştir")
 async def update_unit(
-    ctx: UnitsManage, unit_id: uuid.UUID, body: UnitUpdate, today: TodayDep
+    ctx: UnitsManage, unit_id: uuid.UUID, body: UnitUpdate, today: TodayDep, now: NowDep
 ) -> Written[UnitDetail]:
     unit, _, _ = await _load_unit(ctx, unit_id)
     data = body.model_dump(exclude_unset=True)
@@ -428,10 +448,28 @@ async def update_unit(
         data["usage"] = data["usage"].value
     try:
         await _validate_unit(ctx, data, unit)
+        versioned = {k: data.pop(k) for k in VERSIONED_FIELDS if k in data}
+        changes = svc.attribute_changes(unit, versioned)
+        if changes:
+            check_effective_date(
+                today, await svc.earliest_effective(ctx.session, today), "effective_from"
+            )
     except StructureRuleError as exc:
         raise _rule_error(exc) from None
     for key, value in data.items():
         setattr(unit, key, value)
+    if changes:
+        actor = current_actor()
+        await svc.record_attribute_change(
+            ctx.session,
+            unit,
+            changes,
+            effective_from=today,
+            today=today,
+            now=now,
+            actor_name=actor.name if actor else None,
+            user_id=actor.user_id if actor else None,
+        )
     await ctx.session.flush()
     detail = await _unit_detail(ctx, unit.id, today)
     await ctx.session.commit()
@@ -482,7 +520,7 @@ async def list_people(
 ) -> Page[PersonOut]:
     rows, total = await _page(ctx, svc.people_query(q), params)
     return Page(
-        items=[PersonOut.of(p, contact=True) for (p,) in rows],
+        items=[PersonOut.of(p, contact=can_contact(ctx)) for (p,) in rows],
         page=params.page,
         page_size=params.page_size,
         total=total,
@@ -494,14 +532,18 @@ async def create_person(ctx: PeopleManage, body: PersonCreate) -> Written[Person
     person = Person(**body.model_dump())
     ctx.session.add(person)
     await ctx.session.commit()
-    return Written(data=PersonOut.of(person, contact=True), message=f"{person.full_name} eklendi.")
+    return Written(
+        data=PersonOut.of(person, contact=can_contact(ctx)), message=f"{person.full_name} eklendi."
+    )
 
 
 @router.patch("/people/{person_id}", summary="Kişi güncelle")
 async def update_person(
     ctx: PeopleManage, person_id: uuid.UUID, body: PersonUpdate
 ) -> Written[PersonOut]:
-    person = await ctx.session.scalar(select(Person).where(Person.id == person_id))
+    person = await ctx.session.scalar(
+        select(Person).where(Person.id == person_id, Person.merged_into_id.is_(None))
+    )
     if person is None:
         raise NotFoundError
     data = body.model_dump(exclude_unset=True)
@@ -520,7 +562,8 @@ async def update_person(
         setattr(person, key, value)
     await ctx.session.commit()
     return Written(
-        data=PersonOut.of(person, contact=True), message=f"{person.full_name} güncellendi."
+        data=PersonOut.of(person, contact=can_contact(ctx)),
+        message=f"{person.full_name} güncellendi.",
     )
 
 
@@ -598,7 +641,7 @@ async def add_party(
                 start_date=party.start_date,
                 end_date=party.end_date,
                 is_current=party.start_date <= today,
-                person=PersonOut.of(person, contact=True),
+                person=PersonOut.of(person, contact=can_contact(ctx)),
             ),
             opened_accounts=[AccountOut.of(a) for a in added.opened_accounts],
         ),
@@ -640,7 +683,7 @@ async def end_party(
             start_date=party.start_date,
             end_date=party.end_date,
             is_current=party.start_date <= today and (party.end_date or today) >= today,
-            person=PersonOut.of(person, contact=True),
+            person=PersonOut.of(person, contact=can_contact(ctx)),
         ),
         message=f"{person.full_name} için bitiş tarihi kaydedildi; geçmiş kayıt korunur.",
     )

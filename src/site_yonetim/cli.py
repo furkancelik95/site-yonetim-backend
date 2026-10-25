@@ -7,6 +7,7 @@ uv run python -m site_yonetim.cli reconcile [--fix]    # özet bakiye ↔ defter
 uv run python -m site_yonetim.cli run-charge-schedules # otomatik aylık tahakkuk (günde bir)
 uv run python -m site_yonetim.cli run-recurring-expenses # tekrarlanan giderler (günde bir)
 uv run python -m site_yonetim.cli run-approval-jobs      # onay hatırlatma/eskalasyon (saatlik)
+uv run python -m site_yonetim.cli run-structure-jobs     # öznitelik yürürlüğü, davet (günde bir)
 """
 
 import argparse
@@ -28,6 +29,7 @@ from site_yonetim.services import (
     rate_limit,
     reconciliation,
     recurring_expenses,
+    structure_jobs,
 )
 from site_yonetim.services.charging import BUSINESS_TZ
 from site_yonetim.services.imports import ImportStore
@@ -174,6 +176,22 @@ async def _run_approval_jobs() -> int:
     return 0
 
 
+async def _run_structure_jobs() -> int:
+    """Yürürlük tarihi gelen bölüm öznitelikleri ve süresi dolan davetler (günde bir)."""
+    engine = create_engine_from_settings(get_settings())
+    now = datetime.now(UTC)
+    try:
+        results = await structure_jobs.run_all(
+            create_session_factory(engine), today=now.astimezone(BUSINESS_TZ).date(), now=now
+        )
+    finally:
+        await engine.dispose()
+    for r in results:
+        print(f"{r.site_id}: öznitelik {r.applied}, süresi dolan davet {r.expired}")
+    print(f"{len(results)} sitede yapı işleri çalıştı.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="site_yonetim.cli")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -183,6 +201,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("run-charge-schedules", help="Otomatik aylık tahakkuku çalıştır (günde bir)")
     sub.add_parser("run-recurring-expenses", help="Tekrarlanan giderleri yaz (günde bir)")
     sub.add_parser("run-approval-jobs", help="Onay hatırlatma ve eskalasyonu (saatlik)")
+    sub.add_parser("run-structure-jobs", help="Öznitelik yürürlüğü, davet süresi (günde bir)")
     reconcile = sub.add_parser("reconcile", help="Özet bakiyeleri defterle karşılaştır")
     reconcile.add_argument("--fix", action="store_true", help="Farklı siteleri onar")
     args = parser.parse_args(argv)
@@ -195,6 +214,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_purge_login_throttle())
     if args.command == "run-approval-jobs":
         return asyncio.run(_run_approval_jobs())
+    if args.command == "run-structure-jobs":
+        return asyncio.run(_run_structure_jobs())
     if args.command == "run-recurring-expenses":
         return asyncio.run(_run_recurring_expenses())
     if args.command == "run-charge-schedules":
