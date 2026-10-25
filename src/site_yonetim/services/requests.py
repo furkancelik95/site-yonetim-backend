@@ -62,14 +62,18 @@ def _event(
     description: str,
     actor: str,
     status: RequestStatus | None = None,
+    at: datetime | None = None,
 ) -> RequestEvent:
-    return RequestEvent(
+    event = RequestEvent(
         request_id=request.id,
         kind=kind.value,
         description=description,
         actor_name=actor,
         new_status=status.value if status else None,
     )
+    if at is not None:  # verilmezse veritabanı saati (geçmiş değişmez; sonradan düzeltilemez)
+        event.created_at = at
+    return event
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,7 +87,10 @@ class NewRequest:
     reported_by_person_id: uuid.UUID | None
 
 
-async def create(session: AsyncSession, data: NewRequest, *, actor: str) -> Request:
+async def create(
+    session: AsyncSession, data: NewRequest, *, actor: str, now: datetime | None = None
+) -> Request:
+    """`now` yalnız geçmişe dönük kayıt (demo verisi) için; verilmezse veritabanı saati."""
     if (
         data.unit_id is not None
         and await session.scalar(select(Unit.id).where(Unit.id == data.unit_id)) is None
@@ -110,6 +117,8 @@ async def create(session: AsyncSession, data: NewRequest, *, actor: str) -> Requ
         reported_by_person_id=data.reported_by_person_id,
         created_by_name=actor,
     )
+    if now is not None:
+        request.created_at = now
     session.add(request)
     await session.flush()
     session.add(
@@ -119,6 +128,7 @@ async def create(session: AsyncSession, data: NewRequest, *, actor: str) -> Requ
             f"Talep açıldı: {request.title}",
             actor,
             RequestStatus.OPEN,
+            at=now,
         )
     )
     await session.flush()
@@ -151,12 +161,19 @@ async def change_status(
         request.resolved_at = now
     else:
         request.resolved_at = None
-    session.add(_event(request, change.event, change.description, actor, new_status))
+    session.add(_event(request, change.event, change.description, actor, new_status, at=now))
     await session.flush()
     return request
 
 
-async def assign(session: AsyncSession, request: Request, assignee: str, *, actor: str) -> Request:
+async def assign(
+    session: AsyncSession,
+    request: Request,
+    assignee: str,
+    *,
+    actor: str,
+    now: datetime | None = None,
+) -> Request:
     name = " ".join(assignee.split())
     if not name:
         raise OperationRuleError("assignee_required", "Atanacak kişiyi yazın.", field="assignee")
@@ -165,7 +182,7 @@ async def assign(session: AsyncSession, request: Request, assignee: str, *, acto
             "already_assigned", f"Talep zaten {name} kişisine atanmış.", conflict=True
         )
     request.assigned_to = name
-    session.add(_event(request, RequestEventKind.ASSIGNED, f"Atandı: {name}", actor))
+    session.add(_event(request, RequestEventKind.ASSIGNED, f"Atandı: {name}", actor, at=now))
     await session.flush()
     return request
 
