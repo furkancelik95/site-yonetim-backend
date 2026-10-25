@@ -48,6 +48,18 @@ from site_yonetim.models.finance import (
     SiteFinanceSummary,
     UnitWeight,
 )
+from site_yonetim.models.gatehouse import (
+    Gate,
+    GateLog,
+    ParcelDelegate,
+    ParkingViolation,
+    SecuritySettings,
+    ShiftHandoverAck,
+    ShiftLogAddendum,
+    ShiftLogEntry,
+    VisitorInvite,
+    VisitRequest,
+)
 from site_yonetim.models.identity import (
     AuthEvent,
     AuthEventKind,
@@ -81,6 +93,8 @@ from site_yonetim.models.operations import (
     RequestDepartment,
     RequestEvent,
 )
+from site_yonetim.models.parking import ParkingAllocation, ParkingSpace
+from site_yonetim.models.patrol import PatrolPlan, PatrolPoint, PatrolRun, PatrolScan
 from site_yonetim.models.people import LedgerAccount, Person, UnitParty
 from site_yonetim.models.platform import Organization, Plan, PropertyKind, Site
 from site_yonetim.models.security import Incident, LostItem, Package, Visitor
@@ -121,6 +135,8 @@ __all__ = [
     "Contract",
     "Expense",
     "ExpenseCategory",
+    "Gate",
+    "GateLog",
     "IdempotencyKey",
     "Incident",
     "LateFeePolicy",
@@ -135,6 +151,14 @@ __all__ = [
     "Organization",
     "OrganizationMembership",
     "Package",
+    "ParcelDelegate",
+    "ParkingAllocation",
+    "ParkingSpace",
+    "ParkingViolation",
+    "PatrolPlan",
+    "PatrolPoint",
+    "PatrolRun",
+    "PatrolScan",
     "Payment",
     "PaymentAllocation",
     "Period",
@@ -154,6 +178,10 @@ __all__ = [
     "Request",
     "RequestDepartment",
     "RequestEvent",
+    "SecuritySettings",
+    "ShiftHandoverAck",
+    "ShiftLogAddendum",
+    "ShiftLogEntry",
     "Site",
     "SiteFinanceSummary",
     "SiteMembership",
@@ -168,5 +196,7 @@ __all__ = [
     "UnitUsage",
     "UnitWeight",
     "User",
+    "VisitRequest",
     "Visitor",
+    "VisitorInvite",
 ]

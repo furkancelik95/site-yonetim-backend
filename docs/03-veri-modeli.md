@@ -660,6 +660,24 @@ UPDATE/DELETE tetikleyiciyle reddedilir.
 
 ---
 
+### Güvenlik, devriye, otopark (göç 0030 — servis istekleri 40–46, K30) [K]
+
+| Tablo | Özet |
+|---|---|
+| `gates` | kapı: ad (`name_key` tekil), tip, bağlı bloklar (`uuid[]`), 7/24, etkin |
+| `security_settings` | site başına tek satır: yöntem, süre, kapı istisnası (JSONB), kargo yöntemi, ziyaretçi alanları (JSONB), saklama (1–24 ay), `auto_anonymize` (varsayılan false), `version` |
+| `visitor_invites` | ön davet; `code_hash` (HMAC — kod saklanmaz), etkin davetlerde tekil (kısmi indeks); tip, tarih/gün/saat, plaka, durum, `anonymized_at` |
+| `visit_requests` | habersiz ziyaretçi: yöntem, durum, `expires_at`, `visit_date` (tesis günü), karar kaynağı ve gerekçe (görevli kararında zorunlu — CHECK), ziyaretçi kaydı |
+| `gate_logs` | plaka giriş/çıkış; sorgu sonucu dondurulur; `log_date`; plaka anonimleşince boş |
+| `parking_violations` | otopark ihlali; sonuç, bölüm, bildirim hedefi (`resident` / `management`) |
+| `parcel_delegates` | kargo teslim yetkilisi (yalnız ad); kaldırılınca `is_active = false` |
+| `shift_log_entries` · `shift_log_addenda` · `shift_handover_acks` | nöbet defteri — **değişmez** (`forbid_history_change`); devir onayı devir başına tekil |
+| `patrol_points` · `patrol_plans` · `patrol_runs` · `patrol_scans` | devriye; nokta kodu site içinde tekil; yürütme planı dondurur; planın tek açık yürütmesi (kısmi tekil indeks); okutma (yürütme, nokta) tekil |
+| `parking_spaces` · `parking_allocations` | park yeri (kod tekil, tip, ücretli) ve tarihçeli tahsis — silinmez, bitirilir; çakışma uygulamada satır kilidiyle engellenir |
+
+`visitors.anonymized_at` eklendi. Kişisel veri (ziyaretçi adı, plaka, not) saklama süresi dolunca
+gece işiyle silinir ya da "Anonim" olur; kaydın kendisi (tarih, sayı) kalır.
+
 ## 10. Eksik ama gerekecek
 
 Referans uygulamada yok, PRD'de MVP işaretli. Tasarlanırken bunlara yer bırak:

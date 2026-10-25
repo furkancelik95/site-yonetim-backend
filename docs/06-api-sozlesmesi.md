@@ -290,6 +290,52 @@ Modül kapalıysa ilgili uçlar 404; `units/lookup` için iki modülden biri aç
 | GET · POST | `/sites/{slug}/lost-items?status=waiting\|returned\|disposed` | `{description, location, found_by?, found_at?}` |
 | POST | `/sites/{slug}/lost-items/{id}/return` | `{returned_to}` teslim ya da `{disposed: true}`; yalnız bekleyen (409 `not_waiting`) |
 
+**Kapılar, ön davet, sakin onayı, plaka, nöbet defteri, devriye** (servis istekleri 40–46,
+Yazılım Dokümanı GUV-02..09, OTP-02; 25.10.2026). Modül `visitors` (kargo yetkilisi ve uzun
+bekleyen kargo `packages`); kapalıysa 404. Bildirimler uygulama içi (dış kanal K5).
+
+| Yöntem | Yol | İzin | Not |
+|---|---|---|---|
+| GET | `/sites/{slug}/gates` | `modules.manage` ya da `security.*` | küçük liste (sayfasız) `[{id, name, kind: vehicle\|pedestrian\|service, block_ids, always_open, is_active}]` |
+| POST · PATCH | `/sites/{slug}/gates` · `/gates/{id}` | `modules.manage` | ad harf duyarsız tekil (422 `fields.name`); kapı silinmez, pasifleşir |
+| GET · PUT | `/sites/{slug}/settings/security` | okuma `security.*`, yazma `modules.manage` | `{unannounced_method: info\|approval, approval_timeout_seconds 30–600, gate_methods {gate_id: yöntem}, parcel_method code\|qr\|both, visitor_fields {plate, phone, id_seen}, retention_months 1–24, auto_anonymize, parcel_long_wait_days 1–60, guest_parking_capacity 0–500, version, updated_at, updated_by}`. 24 ay üstü 422 `retention_limit`. Kapalı ziyaretçi alanı kaydedilmez. Her kayıt `version` artırır (geçmiş denetim kaydında) |
+| GET · POST | `/sites/{slug}/resident/visitor-invites` | sakin (kişiye bağlı üyelik) | `{unit_id?, visitor_name, type: once\|range\|recurring, date_from, date_to, weekdays (0=pzt), time_from, time_to, plate, note}`. **Kod (6 hane) yalnız oluşturma yanıtında**; sunucuda HMAC özeti. Plakalı davet misafir parkına sayılır: dolu 409 `guest_parking_full` |
+| POST | `…/resident/visitor-invites/{id}/cancel` · `/new-code` | sakin | iptal (etkin değilse 409 `invalid_status`); yeni kod (eski kod hemen geçersiz) |
+| GET | `/sites/{slug}/visitor-invites/expected` | `security.visitors` | bugün geçerli davetler: ad, bölüm, tip, saat, plaka (kod ve not yok) |
+| POST | `/sites/{slug}/visitor-invites/check-in` | `security.visitors` | `{code}` → ziyaretçi kaydı `entered`, davet sahibine bildirim; yok 404 `invite_not_found`, kullanılmış/geçerlilik dışı 409 `invite_not_valid`. Kullanıcı başına 5 dakikada 30 deneme (429) |
+| POST | `/sites/{slug}/visit-requests` | `security.visitors` | `{unit_id, full_name, kind, plate, gate_id}` — yöntem: kapı istisnası → site ayarı. `info`: hemen `allowed` + ziyaretçi kaydı + sakine bilgi; `approval`: `awaiting`, `expires_at = şimdi + süre`, sakine onay isteği |
+| GET | `/sites/{slug}/visit-requests?status=` | `security.visitors` | bugünkü (tesis saati) ve bekleyen talepler; `timed_out`, `seconds_left` |
+| POST | `/sites/{slug}/visit-requests/{id}/decide` | `security.visitors` | `{decision: allow\|deny, reason}` yalnız süre dolunca (409 `awaiting_resident`); gerekçe zorunlu (422 `fields.reason`) |
+| GET · POST | `/sites/{slug}/resident/visit-approvals` · `/{id}` | sakin | yalnız kendi bölümünün talepleri; `{decision}` süre içinde (dolunca 409 `timed_out`), verilmişse 409 `already_decided`. Kararlar denetim kaydında (ad/plaka olmadan) |
+| GET | `/sites/{slug}/plates/lookup?plate=` | `security.visitors` ya da `units.read` | `{plate, plate_display, result: registered\|guest\|unknown, unit_name, owner_name, valid_until, detail}`; kaynak: geçerli ya da bugün kullanılmış davet plakası, bugün içerideki ziyaretçi. **Kayıtlı araç P02 araç tablosu gelince** bağlanır. Hız sınırlı (5 dakikada 120) |
+| GET · POST | `/sites/{slug}/gate-logs?date=` | okuma: aynı; yazma `security.visitors` | sayfalı; `{plate, direction: in\|out, gate_id}` — sorgu sonucu kayda dondurulur |
+| GET · POST | `/sites/{slug}/parking-violations` | okuma: aynı; yazma `security.visitors` | sayfalı; `{plate, location, note}` — yetkili plakada not zorunlu (409 `plate_authorized`); bölüme bağlıysa o bölümün sakinlerine, değilse yönetime bildirim (`notified`) |
+| GET · POST | `/sites/{slug}/resident/parcel-delegates` · `/{id}/remove` | sakin (modül `packages`) | `{name, unit_id?}`; bölüm başına en fazla 3 (409 `delegate_limit`) |
+| GET | `/sites/{slug}/units/{id}/parcel-delegates` | `security.packages` | yalnız `[{id, name}]` |
+| GET | `/sites/{slug}/packages/long-waiting` | `security.packages` | `{days, items: [{id, unit_id, unit_name, carrier, received_at, waiting_days, delegates}]}` (en eski üstte, en fazla 200) |
+| GET · POST | `/sites/{slug}/shift-log?date=` | `security.incidents` | nöbet defteri (gün, tesis saati); `{kind: note\|event\|handover, text ≥ 5, gate_id}`; yanıtta `by_me`. **Değişmez** (tetikleyici) |
+| POST | `…/shift-log/{id}/addenda` · `/acknowledge` | `security.incidents` | ek not; devri yazan onaylayamaz (409 `same_person`), onay bir kez (409 `already_acknowledged`) |
+| GET · POST · PATCH | `/sites/{slug}/patrol-points` · `/{id}` | okuma `modules.manage` ya da `security.incidents`; yazma `modules.manage` | `{name, location, area, tag: qr\|nfc\|both, is_active}`; `code` 6 hane, sunucu üretir (QR: `SY-DEVRIYE:{kod}`) |
+| GET · POST · PATCH | `/sites/{slug}/patrol-plans` · `/{id}` | aynı | `{name, point_ids (sıralı), ordered, start_times ["22:00"], allowed_minutes 5–240, assignee, is_active}` |
+| GET | `/sites/{slug}/patrol-schedule?date=` | `security.incidents` | `[{plan_id, plan_name, slot, status: upcoming\|due\|not_started\|running\|overdue\|done\|done_with_deviation, run_id, report}]` — 15 dakikada başlamayan `not_started` |
+| GET · POST | `/sites/{slug}/patrol-runs?date=` | `security.incidents` | başlat `{plan_id, slot?}` — açık yürütme varsa 409 `run_open`; plan dondurulur |
+| POST | `…/patrol-runs/{id}/scans` · `/finish` | `security.incidents` | `{code, note}`: kod yok 422 `fields.code`, planda yok 409 `not_in_plan`, tekrar 409 `already_scanned`, sıralı turda beklenmeyen nokta `out_of_order` (kabul edilir). Rapor `{missed, out_of_order, duration_minutes, overtime, late_start_minutes, total_points, scanned_points, ok}`; bitişte yöneticiye özet |
+
+**Otopark — park yeri ve tahsis** (PM kararı K30, OTP-01; modül kapısı yok — yapı verisi):
+
+| Yöntem | Yol | İzin | Not |
+|---|---|---|---|
+| GET | `/sites/{slug}/parking-spaces?kind=&q=&unit_id=` | `units.read` ya da `security.visitors` | sayfalı; `{id, code, kind: standard\|disabled\|ev\|guest, location, is_paid, is_active, note, current}` (`current`: bugünkü tahsis ya da `null`) |
+| POST · PATCH | `/sites/{slug}/parking-spaces` · `/{id}` | `units.manage` | kod site içinde tekil (büyük harf) |
+| POST | `/sites/{slug}/parking-spaces/{id}/allocations` | `units.manage` | `{unit_id, start_date, end_date?, note}` — tarih çakışırsa 409 `space_taken` |
+| GET | `/sites/{slug}/parking-allocations?space_id=&unit_id=` | okuma | sayfalı tahsis geçmişi |
+| POST | `/sites/{slug}/parking-allocations/{id}/end` | `units.manage` | `{end_date}`; bitmişse 409 `allocation_ended` |
+| GET | `/sites/{slug}/resident/parking-spaces` | sakin | "Park yerim": bugünkü tahsisler |
+
+Zamanlanmış işler: `run-security-daily` (günde bir: uzun bekleyen kargo hatırlatması ve yönetime
+rapor; `auto_anonymize` açık sitelerde saklama süresi dolan ziyaretçi/plaka verisini anonimleştirir
+— **varsayılan kapalı**, K8) · `run-patrol-checks` (5 dakikada bir: başlamayan / süresi aşan tur).
+
 
 ### 2.13 Modüller
 | Yöntem | Yol | İzin | Durum | Not |
