@@ -15,6 +15,7 @@ from site_yonetim.api.v1 import (
     contracts,
     dashboard,
     departments,
+    documents,
     expenses,
     health,
     imports,
@@ -71,6 +72,7 @@ api_router.include_router(reports.router)
 api_router.include_router(dashboard.router)
 api_router.include_router(resident.router)
 api_router.include_router(polls.resident_router)
+api_router.include_router(documents.resident_router)
 api_router.include_router(portfolio.router)
 api_router.include_router(audit.router)
 api_router.include_router(members.router)
@@ -83,3 +85,4 @@ api_router.include_router(inventory.router)
 api_router.include_router(staff.router)
 api_router.include_router(notifications.router)
 api_router.include_router(approvals.router)
+api_router.include_router(documents.router)
