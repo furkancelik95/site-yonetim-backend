@@ -5,8 +5,9 @@
 - **Başvuru** herkese açık uçtan gelir (oturum yok); kod çözümlemesi bilinçli "tüm siteler"
   kapsamında, yazım o sitenin kapsamında yapılır. Aynı telefonla bekleyen başvuru 409.
 - **Onay** mevcut bölüme kişi ekleme mantığıyla (`structure.add_party`) tek işlemde: telefon ya
-  da e-postayla eşleşen kişi varsa yeni kişi açılmaz. E-posta varsa sakin giriş hesabı açılır;
-  geçici parola yalnız yanıtta döner — SMS/e-posta gönderimi açık karar K5 (o zamana kadar elden).
+  da e-postayla eşleşen kişi varsa yeni kişi açılmaz. Sakin giriş hesabı **telefonla** açılır
+  (P5, PLT-01: sakin telefon + SMS koduyla girer; parola yok, geçici parola yok); telefonu ya da
+  e-postası eşleşen hesap varsa ona bağlanır. Kişiye onay SMS'i gider (gönderim katmanı).
 - Başvuru verisi kişiseldir; saklama süresi açık karar K8. Kararlar denetim kaydına yalnız
   numara ve sonuçla yazılır (kişisel veri kopyalanmaz).
 """
@@ -21,7 +22,6 @@ from sqlalchemy import Select, and_, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from site_yonetim.core.security import hash_password
 from site_yonetim.db.tenancy import all_sites_scope, current_scope
 from site_yonetim.domain.access import SiteRole, UserKind
 from site_yonetim.domain.members import Applicant, Relation
@@ -39,7 +39,6 @@ from site_yonetim.models import (
 from site_yonetim.services import structure
 
 CODE_BYTES = 8
-TEMPORARY_PASSWORD_BYTES = 12
 _NUMBER_LOCK = text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))")
 RELATION_LABELS = {Relation.OWNER: "malik", Relation.TENANT: "kiracı"}
 
@@ -186,8 +185,8 @@ async def unit_names(session: AsyncSession, unit_ids: set[uuid.UUID]) -> dict[uu
 class Approved:
     registration: Registration
     unit_name: str
-    login: str  # created · linked · none
-    temporary_password: str | None  # yalnız yeni hesapta; saklanmaz
+    login: str  # created · linked
+    phone: str  # giriş telefonu (E.164)
 
 
 def _undecided(registration: Registration) -> None:
@@ -211,24 +210,36 @@ async def _person(session: AsyncSession, r: Registration) -> Person:
     return person
 
 
-async def _login(session: AsyncSession, r: Registration, person: Person) -> tuple[str, str | None]:
-    if not r.email:
-        return "none", None
-    user: User | None = await session.scalar(select(User).where(User.email == r.email))
-    password = None
-    login = "linked"
-    if user is None:
-        password = secrets.token_urlsafe(TEMPORARY_PASSWORD_BYTES)
-        user = User(
-            email=r.email,
-            full_name=f"{r.first_name} {r.last_name}",
-            password_hash=hash_password(password),
-            kind=UserKind.RESIDENT.value,
-            must_change_password=True,
-        )
-        session.add(user)
-        await session.flush()
-        login = "created"
+async def _account(session: AsyncSession, r: Registration) -> tuple[User, str]:
+    """Telefonla eşleşen hesap; yoksa e-postayla eşleşen (telefonu boşsa eklenir); yoksa yeni
+    telefon hesabı (parolasız — sakin SMS koduyla girer)."""
+    user: User | None = await session.scalar(select(User).where(User.phone == r.phone))
+    if user is not None:
+        return user, "linked"
+    if r.email:
+        user = await session.scalar(select(User).where(User.email == r.email))
+        if user is not None:
+            if user.phone is None:
+                user.phone = r.phone
+            return user, "linked"
+    taken_email = (
+        r.email is not None
+        and await session.scalar(select(User.id).where(User.email == r.email)) is not None
+    )
+    user = User(
+        phone=r.phone,
+        email=None if taken_email else r.email,
+        full_name=f"{r.first_name} {r.last_name}",
+        password_hash=None,
+        kind=UserKind.RESIDENT.value,
+    )
+    session.add(user)
+    await session.flush()
+    return user, "created"
+
+
+async def _login(session: AsyncSession, r: Registration, person: Person) -> str:
+    user, login = await _account(session, r)
     member = await session.scalar(
         select(SiteMembership.id).where(SiteMembership.user_id == user.id)
     )
@@ -241,7 +252,7 @@ async def _login(session: AsyncSession, r: Registration, person: Person) -> tupl
     if person.user_id is None:
         person.user_id = user.id
     await session.flush()
-    return login, password
+    return login
 
 
 async def approve(
@@ -283,14 +294,14 @@ async def approve(
         start_date=start_date,
         share_percent=share_percent if share_percent is not None else FULL_SHARE,
     )
-    login, password = await _login(session, registration, person)
+    login = await _login(session, registration, person)
     registration.status = "approved"
     registration.decided_at = now
     registration.decided_by_name = decided_by
     registration.unit_id = unit.id
     registration.person_id = person.id
     await session.flush()
-    return Approved(registration, f"{block.name}-{unit.number}", login, password)
+    return Approved(registration, f"{block.name}-{unit.number}", login, registration.phone)
 
 
 async def reject(

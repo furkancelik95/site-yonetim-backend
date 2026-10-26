@@ -54,12 +54,15 @@ from site_yonetim.models.identity import (
     AuthEventKind,
     AuthSession,
     LoginThrottle,
+    MfaRecoveryCode,
     OrganizationMembership,
+    OtpChallenge,
     RateLimit,
     Registration,
     RegistrationLink,
     SiteMembership,
     User,
+    UserInvitation,
 )
 from site_yonetim.models.management import (
     Asset,
@@ -72,6 +75,12 @@ from site_yonetim.models.management import (
     StaffMember,
     StockItem,
     StockMove,
+)
+from site_yonetim.models.messaging import (
+    MessagingSettings,
+    NotificationDelivery,
+    ScheduledReport,
+    ScheduledReportRun,
 )
 from site_yonetim.models.modules import SiteModule
 from site_yonetim.models.notifications import Notification, NotificationPreference, PushToken
@@ -149,10 +158,14 @@ __all__ = [
     "LostItem",
     "Meeting",
     "MeetingAgendaItem",
+    "MessagingSettings",
+    "MfaRecoveryCode",
     "Notification",
+    "NotificationDelivery",
     "NotificationPreference",
     "Organization",
     "OrganizationMembership",
+    "OtpChallenge",
     "Package",
     "Payment",
     "PaymentAllocation",
@@ -173,6 +186,8 @@ __all__ = [
     "Request",
     "RequestDepartment",
     "RequestEvent",
+    "ScheduledReport",
+    "ScheduledReportRun",
     "ShiftAssignment",
     "ShiftTemplate",
     "ShiftWeek",
@@ -194,5 +209,6 @@ __all__ = [
     "UnitUsage",
     "UnitWeight",
     "User",
+    "UserInvitation",
     "Visitor",
 ]

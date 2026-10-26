@@ -141,6 +141,12 @@ async def test_me_kullanici_bilgisi(api: httpx2.AsyncClient, user: User) -> None
         "can_see_portfolio": False,
         "must_change_password": False,
         "sites": [],
+        "email": EMAIL,
+        "phone": None,
+        "mfa_enabled": False,
+        "mfa_required": False,
+        "mfa_setup_deadline": None,
+        "mfa_setup_required": False,
     }
 
 

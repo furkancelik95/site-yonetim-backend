@@ -9,6 +9,9 @@ uv run python -m site_yonetim.cli run-recurring-expenses # tekrarlanan giderler 
 uv run python -m site_yonetim.cli run-approval-jobs      # onay hatırlatma/eskalasyon (saatlik)
 uv run python -m site_yonetim.cli run-staff-jobs         # ayrılan personelin erişimini kapat (gece)
 uv run python -m site_yonetim.cli run-document-expiry    # belge geçerlilik uyarısı (günde bir)
+uv run python -m site_yonetim.cli run-notification-jobs  # bildirim gönderimi, sessiz saat
+                                                         # kuyruğu, kritik SMS yedeği (dakikalık)
+uv run python -m site_yonetim.cli run-scheduled-reports  # planlı rapor e-postası (dakikalık)
 """
 
 import argparse
@@ -26,13 +29,16 @@ from site_yonetim.services import (
     approvals,
     bank_imports,
     charge_schedule,
+    delivery,
     documents,
     login_throttle,
     rate_limit,
     reconciliation,
     recurring_expenses,
+    scheduled_reports,
     staff,
 )
+from site_yonetim.services.channels import channels_from_settings
 from site_yonetim.services.charging import BUSINESS_TZ
 from site_yonetim.services.imports import ImportStore
 
@@ -209,6 +215,53 @@ async def _run_document_expiry() -> int:
     return 0
 
 
+async def _run_notification_jobs() -> int:
+    """Bildirim gönderim katmanı (PLT-05, §4.6): kritik push için 2 dk SMS yedeği, sonra zamanı
+    gelen bütün teslimler (sessiz saat kuyruğu dahil). Dakikalık; tekrar güvenli."""
+    settings = get_settings()
+    engine = create_engine_from_settings(settings)
+    now = datetime.now(UTC)
+    try:
+        factory = create_session_factory(engine)
+        fallbacks = await delivery.run_critical_fallbacks(factory, now=now)
+        results = await delivery.dispatch_due(
+            factory,
+            channels_from_settings(settings),
+            now=now,
+            default_quota=settings.sms_default_monthly_quota,
+        )
+    finally:
+        await engine.dispose()
+    for site_id, r in results:
+        print(f"{site_id}: gönderildi {r.sent}, başarısız {r.failed}, SMS yedeği {r.fallbacks}")
+    print(f"{fallbacks} kritik bildirim için SMS yedeği üretildi; {len(results)} sitede gönderim.")
+    return 0
+
+
+async def _run_scheduled_reports() -> int:
+    """Planlı rapor gönderimi (RAP-05): zamanı gelen tanımlar için e-posta kuyruğa alınır ve
+    gönderilir. Dakikalık; aynı zaman dilimi iki kez çalışmaz."""
+    settings = get_settings()
+    engine = create_engine_from_settings(settings)
+    now = datetime.now(UTC)
+    try:
+        factory = create_session_factory(engine)
+        results = await scheduled_reports.run_due(factory, now=now, web_url=settings.web_url)
+        await delivery.dispatch_due(
+            factory,
+            channels_from_settings(settings),
+            now=now,
+            default_quota=settings.sms_default_monthly_quota,
+            site_ids=[site_id for site_id, _ in results],
+        )
+    finally:
+        await engine.dispose()
+    for site_id, count in results:
+        print(f"{site_id}: {count} planlı rapor")
+    print(f"{len(results)} sitede planlı rapor çalıştı.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="site_yonetim.cli")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -220,6 +273,10 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("run-approval-jobs", help="Onay hatırlatma ve eskalasyonu (saatlik)")
     sub.add_parser("run-staff-jobs", help="Ayrılan personelin site erişimini kapat (gece)")
     sub.add_parser("run-document-expiry", help="Belge geçerlilik uyarısı (günde bir)")
+    sub.add_parser(
+        "run-notification-jobs", help="Bildirim gönderimi ve kritik SMS yedeği (dakikalık)"
+    )
+    sub.add_parser("run-scheduled-reports", help="Planlı rapor e-postaları (dakikalık)")
     reconcile = sub.add_parser("reconcile", help="Özet bakiyeleri defterle karşılaştır")
     reconcile.add_argument("--fix", action="store_true", help="Farklı siteleri onar")
     args = parser.parse_args(argv)
@@ -236,6 +293,10 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_run_staff_jobs())
     if args.command == "run-document-expiry":
         return asyncio.run(_run_document_expiry())
+    if args.command == "run-notification-jobs":
+        return asyncio.run(_run_notification_jobs())
+    if args.command == "run-scheduled-reports":
+        return asyncio.run(_run_scheduled_reports())
     if args.command == "run-recurring-expenses":
         return asyncio.run(_run_recurring_expenses())
     if args.command == "run-charge-schedules":

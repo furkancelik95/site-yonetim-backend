@@ -266,7 +266,10 @@ async def linkable_users(session: AsyncSession) -> list[Linkable]:
         .where(SiteMembership.role != SiteRole.RESIDENT.value, SiteMembership.is_active)
         .order_by(User.full_name, User.id)
     )
-    return [Linkable(u.id, u.full_name, u.email, role, sid) for u, role, sid in rows.all()]
+    return [
+        Linkable(u.id, u.full_name, u.email or u.phone or "", role, sid)
+        for u, role, sid in rows.all()
+    ]
 
 
 async def user_names(session: AsyncSession, ids: set[uuid.UUID]) -> dict[uuid.UUID, str]:

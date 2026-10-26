@@ -20,6 +20,7 @@ from site_yonetim.api.deps import (
     CurrentUserDep,
     FactoryDep,
     NowDep,
+    SettingsDep,
     SiteContext,
     require_permission,
 )
@@ -28,11 +29,13 @@ from site_yonetim.api.v1.members import form_error
 from site_yonetim.core.errors import ApiError, NotFoundError
 from site_yonetim.db.tenancy import site_scope
 from site_yonetim.domain.access import Permission
+from site_yonetim.domain.masking import mask_phone
 from site_yonetim.domain.members import FormFieldError, Relation, check_applicant
+from site_yonetim.domain.notifications import NotificationCategory, NotificationChannel
 from site_yonetim.domain.structure import StructureRuleError
 from site_yonetim.models import Registration
 from site_yonetim.models.audit import AuditAction, record
-from site_yonetim.services import rate_limit
+from site_yonetim.services import delivery, rate_limit
 from site_yonetim.services import registrations as svc
 
 router = APIRouter(prefix="/sites/{slug}", tags=["kayıt başvuruları"])
@@ -183,9 +186,10 @@ class ApproveIn(BaseModel):
 
 
 class ApprovedOut(RegistrationOut):
-    temporary_password: str | None = Field(
-        description="yeni sakin giriş hesabının geçici parolası; yalnız bu yanıtta (K5'e dek elden)"
+    login: Literal["created", "linked"] = Field(
+        description="created: telefonla yeni giriş hesabı · linked: mevcut hesaba bağlandı"
     )
+    login_phone: str = Field(description="giriş telefonu (maskeli); sakin SMS koduyla girer")
 
 
 @router.post("/registrations/{registration_id}/approve", summary="Onayla: bölüme kişi ekle")
@@ -196,6 +200,7 @@ async def approve(
     current: CurrentUserDep,
     now: NowDep,
     response: Response,
+    settings: SettingsDep,
 ) -> Written[ApprovedOut]:
     registration = await _registration(ctx, registration_id)
     try:
@@ -214,21 +219,31 @@ async def approve(
         raise ApiError(HTTPStatus.CONFLICT, exc.code, exc.message) from exc
     record(ctx.session, AuditAction.UPDATE, "registrations", registration.id,
            {"reference": svc.reference(registration.number), "status": "approved"})  # fmt: skip
+    await delivery.queue_direct(
+        ctx.session,
+        channel=NotificationChannel.SMS,
+        to=approved.phone,
+        body=f"Kayıt başvurunuz onaylandı ({approved.unit_name}). Telefon numaranızla, SMS "
+        f"koduyla giriş yapabilirsiniz: {settings.web_url}/giris",
+        category=NotificationCategory.OPERATIONS,
+        kind="registration.approved",
+        now=now,
+    )
     await ctx.session.commit()
     response.headers["Cache-Control"] = "no-store"
     r = approved.registration
     relation = svc.RELATION_LABELS[Relation(r.relation)]
     who = f"{r.first_name} {r.last_name} {approved.unit_name} {relation}"
     notes = {
-        "created": " Giriş hesabı açıldı; geçici parolayı kişiye elden iletin (SMS/e-posta "
-        "gönderimi henüz yok).",
-        "linked": " Kişinin mevcut giriş hesabı bu siteye bağlandı.",
-        "none": " E-posta verilmediği için giriş hesabı açılmadı.",
+        "created": " Giriş hesabı telefonla açıldı; kişiye SMS gitti — telefon numarasıyla, "
+        "SMS koduyla girer.",
+        "linked": " Kişinin mevcut giriş hesabı bu siteye bağlandı; kişiye SMS gitti.",
     }
     return Written(
         data=ApprovedOut(
             **RegistrationOut.of(r, approved.unit_name).model_dump(),
-            temporary_password=approved.temporary_password,
+            login=approved.login,  # type: ignore[arg-type]
+            login_phone=mask_phone(approved.phone),
         ),
         message=f"{who} olarak eklendi.{notes[approved.login]}",
     )

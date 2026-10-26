@@ -219,7 +219,9 @@ async def create_customer_endpoint(
             name=org.name,
             tax_number=org.tax_number,
             plan_id=body.plan_id,
-            admin=CustomerAdminOut(user_id=admin.id, email=admin.email, full_name=admin.full_name),
+            admin=CustomerAdminOut(
+                user_id=admin.id, email=admin.email or "", full_name=admin.full_name
+            ),
             temporary_password=created.temporary_password,
         ),
         message=(
