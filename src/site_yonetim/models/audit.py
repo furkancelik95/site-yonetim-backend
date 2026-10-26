@@ -192,6 +192,8 @@ AUDITED_TABLES = frozenset(
         "document_versions",
         # yetki / üyelik
         "site_memberships",
+        "site_roles",
+        "site_role_assignments",
     }
 )
 _SKIPPED_COLUMNS = frozenset({"id", "site_id", "created_at", "updated_at"})

@@ -4,7 +4,8 @@ Tüm modüllerin onayları tek servisten geçer (`services/approvals.py`); burad
 kural eşleştirme, tutar aralığı çakışması, gerekli onay sayısı (M-of-N), adım sonucu, süre.
 
 Kurala bağlı kararlar (Furkan, 19.10.2026 — docs/12 K20):
-- Rol sırası tanımsız: eskalasyon hedefi kuralda açıkça seçilir; seçilmezse yalnız hatırlatma.
+- Eskalasyon hedefi kuralda açıkça seçilir; seçilmezse yalnız hatırlatma. Rol sırası (K20, rol
+  düzeyi) yalnız **öneri** verir (`domain/roles.suggest_escalation`).
 - Tutar aralığı **(alt, üst]**: alt sınır hariç, üst sınır dahil — dokümanın "≤ 10.000 → site
   yöneticisi; 10.000–100.000 → …; > 100.000 → …" örneğiyle aynı.
 - Hiçbir kural eşleşmezse varsayılan: tek adım, site yöneticisi, 1/1 (ONY-01).
@@ -137,7 +138,7 @@ class Quorum:
 
 @dataclass(frozen=True, slots=True)
 class Step:
-    roles: tuple[SiteRole, ...]
+    roles: tuple[str, ...]  # rol adları (hazır şablon ya da siteye özel rol)
     quorum: Quorum
 
 
@@ -204,7 +205,7 @@ def coverage_gaps(conditions: list[Condition]) -> list[tuple[Decimal | None, Dec
     return gaps
 
 
-DEFAULT_STEPS = (Step((SiteRole.MANAGER,), Quorum(QuorumKind.ANY)),)
+DEFAULT_STEPS = (Step((SiteRole.MANAGER.value,), Quorum(QuorumKind.ANY)),)
 
 
 # --- Adım sonucu --------------------------------------------------------------------------

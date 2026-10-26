@@ -11,7 +11,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime
 
-from sqlalchemy import Select, and_, func, or_, select
+from sqlalchemy import Select, and_, func, or_, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from site_yonetim.domain.operations import OperationRuleError
@@ -129,10 +129,29 @@ async def deliver_package(
     return package
 
 
+def units_in(block_ids: frozenset[uuid.UUID]) -> Select[uuid.UUID]:
+    """Blok kapsamlı güvenlik ataması (PLT-09): yalnız bu blokların bölümleri."""
+    return select(Unit.id).where(Unit.block_id.in_(block_ids))
+
+
+async def unit_in_blocks(
+    session: AsyncSession, unit_id: uuid.UUID, block_ids: frozenset[uuid.UUID] | None
+) -> bool:
+    if block_ids is None:
+        return True
+    block = await session.scalar(select(Unit.block_id).where(Unit.id == unit_id))
+    return block is None or block in block_ids  # bölüm yoksa iş kuralı ayrıca 422 verir
+
+
 def packages_query(
-    *, status: PackageStatus | None, unit_ids: set[uuid.UUID] | None = None
+    *,
+    status: PackageStatus | None,
+    unit_ids: set[uuid.UUID] | None = None,
+    block_ids: frozenset[uuid.UUID] | None = None,
 ) -> Select[Package]:
     query = select(Package)
+    if block_ids is not None:
+        query = query.where(Package.unit_id.in_(units_in(block_ids)))
     if status is not None:
         query = query.where(Package.status == status.value)
     if unit_ids is not None:
@@ -224,8 +243,12 @@ async def exit_(session: AsyncSession, visitor: Visitor, now: datetime) -> Visit
     return visitor
 
 
-def visitors_query(day: date, status: VisitorStatus | None) -> Select[Visitor]:
+def visitors_query(
+    day: date, status: VisitorStatus | None, block_ids: frozenset[uuid.UUID] | None = None
+) -> Select[Visitor]:
     query = select(Visitor).where(Visitor.visit_date == day)
+    if block_ids is not None:
+        query = query.where(Visitor.unit_id.in_(units_in(block_ids)))
     if status is not None:
         query = query.where(Visitor.status == status.value)
     return query.order_by(Visitor.created_at.desc(), Visitor.id.desc())
@@ -246,7 +269,9 @@ def _like(text: str) -> str:
     return f"%{escaped}%"
 
 
-async def lookup(session: AsyncSession, q: str, today: date) -> list[LookupRow]:
+async def lookup(
+    session: AsyncSession, q: str, today: date, block_ids: frozenset[uuid.UUID] | None = None
+) -> list[LookupRow]:
     """Bölüm (`A-12`, `A12`, `12`) ya da oturan adıyla arama. Oturan: kiracı/oturan, yoksa malik."""
     term = " ".join(q.split())
     compact = term.replace("-", "").replace(" ", "")
@@ -266,6 +291,7 @@ async def lookup(session: AsyncSession, q: str, today: date) -> list[LookupRow]:
             .join(Block, and_(Block.id == Unit.block_id, Block.site_id == Unit.site_id))
             .where(
                 Unit.is_active,
+                Unit.block_id.in_(block_ids) if block_ids is not None else true(),
                 or_(
                     Unit.number.ilike(_like(term)),
                     func.concat(Block.name, Unit.number).ilike(_like(compact)),

@@ -59,6 +59,8 @@ from site_yonetim.models.identity import (
     Registration,
     RegistrationLink,
     SiteMembership,
+    SiteRoleAssignment,
+    SiteRoleDefinition,
     User,
 )
 from site_yonetim.models.management import (
@@ -180,6 +182,8 @@ __all__ = [
     "SiteFinanceSummary",
     "SiteMembership",
     "SiteModule",
+    "SiteRoleAssignment",
+    "SiteRoleDefinition",
     "StaffMember",
     "StockItem",
     "StockMove",

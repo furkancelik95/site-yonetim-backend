@@ -31,7 +31,7 @@ from site_yonetim.api.deps import (
 from site_yonetim.api.schemas import Money, Page, PageParams, Written
 from site_yonetim.api.v1.members import form_error
 from site_yonetim.core.errors import ApiError, ForbiddenError, NotFoundError
-from site_yonetim.domain.access import Permission, SiteRole
+from site_yonetim.domain.access import Permission
 from site_yonetim.domain.approvals import (
     ACTION_LABELS,
     ActionType,
@@ -44,6 +44,7 @@ from site_yonetim.domain.approvals import (
     quorum_unreachable,
 )
 from site_yonetim.domain.members import FormFieldError
+from site_yonetim.domain.roles import can_take_over, suggest_escalation
 from site_yonetim.models.approvals import (
     ApprovalAssignment,
     ApprovalDecision,
@@ -52,9 +53,11 @@ from site_yonetim.models.approvals import (
     ApprovalRule,
 )
 from site_yonetim.services import approvals as svc
+from site_yonetim.services import roles as roles_svc
 
 router = APIRouter(prefix="/sites/{slug}", tags=["onay"])
 Paging = Annotated[PageParams, Depends()]
+RoleName = Annotated[str, Field(min_length=1, max_length=100)]
 RulesRead = Annotated[SiteContext, Depends(require_permission(Permission.APPROVAL_RULES_READ))]
 RulesManage = Annotated[SiteContext, Depends(require_permission(Permission.APPROVAL_RULES_MANAGE))]
 
@@ -94,7 +97,9 @@ async def action_types(ctx: RulesRead) -> list[ActionTypeOut]:
 
 
 class StepIn(BaseModel):
-    roles: list[SiteRole] = Field(min_length=1, max_length=6)
+    roles: list[RoleName] = Field(
+        min_length=1, max_length=6, description="rol adları (`GET /roles`): şablon ya da özel rol"
+    )
     quorum: QuorumKind = Field(description="any (1/N) · all (N/N) · majority · count (M)")
     count: int | None = Field(default=None, ge=1, le=50, description="yalnız quorum=count")
 
@@ -110,8 +115,9 @@ class RuleIn(BaseModel):
     remind_after_days: int = Field(ge=1, le=30)
     escalate_after_days: int = Field(ge=2, le=365)
     day_basis: DayBasis = DayBasis.CALENDAR
-    escalation_role: SiteRole | None = Field(
-        default=None, description="boşsa yalnız hatırlatma gider (rol sırası tanımsız: K20)"
+    escalation_role: RoleName | None = Field(
+        default=None,
+        description="boşsa yalnız hatırlatma; öneri: `…/approval-rules/escalation-suggestion`",
     )
     effective_from: dt.date
     basis_note: str | None = Field(
@@ -153,14 +159,14 @@ def _rule_data(body: RuleIn) -> svc.RuleData:
         remind_after_days=body.remind_after_days,
         escalate_after_days=body.escalate_after_days,
         day_basis=body.day_basis.value,
-        escalation_role=body.escalation_role.value if body.escalation_role else None,
+        escalation_role=body.escalation_role,
         effective_from=body.effective_from,
         basis_note=body.basis_note,
     )
 
 
 class StepOut(BaseModel):
-    roles: list[SiteRole]
+    roles: list[str]
     quorum: QuorumKind
     count: int | None
     eligible: int = Field(description="bu roldeki aktif kullanıcı sayısı (N)")
@@ -178,7 +184,7 @@ class VersionOut(BaseModel):
     remind_after_days: int
     escalate_after_days: int
     day_basis: DayBasis
-    escalation_role: SiteRole | None
+    escalation_role: str | None
     steps: list[StepOut]
     basis_note: str | None
     created_by: str | None
@@ -197,7 +203,7 @@ class RuleOut(BaseModel):
 
 
 async def _rule_out(
-    ctx: SiteContext, rule: ApprovalRule, today: dt.date, counts: dict[SiteRole, int]
+    ctx: SiteContext, rule: ApprovalRule, today: dt.date, counts: dict[str, int]
 ) -> RuleOut:
     latest = await svc.latest_version(ctx.session, rule)
     in_force = await svc.effective_version(ctx.session, rule, today)
@@ -232,7 +238,7 @@ async def _rule_out(
             remind_after_days=latest.remind_after_days,
             escalate_after_days=latest.escalate_after_days,
             day_basis=DayBasis(latest.day_basis),
-            escalation_role=SiteRole(latest.escalation_role) if latest.escalation_role else None,
+            escalation_role=latest.escalation_role,
             steps=steps,
             basis_note=latest.basis_note,
             created_by=latest.created_by_name,
@@ -395,6 +401,29 @@ async def restore_defaults(
     return Written(data=RestoreOut(created=created, skipped=result.skipped), message=message)
 
 
+class EscalationSuggestionOut(BaseModel):
+    role: str | None = Field(
+        description="adımlardaki en üst rolün hemen üstündeki düzeyden rol (K20); yoksa null"
+    )
+
+
+@router.get(
+    "/approval-rules/escalation-suggestion",
+    summary="Eskalasyon hedefi önerisi (rol sırasından)",
+)
+async def escalation_suggestion(
+    ctx: RulesRead,
+    now: NowDep,
+    roles: Annotated[list[str], Query(max_length=30, description="adımlardaki rol adları")],
+) -> EscalationSuggestionOut:
+    catalog = await roles_svc.load_catalog(ctx.session)
+    levels = {r.name: r.level for r in catalog.staff}
+    counts = await svc._holder_counts(ctx.session, ctx.site, now)
+    names = [r.name for name in roles if (r := catalog.by_name(name)) is not None]
+    held = [name for name, n in counts.items() if n > 0]
+    return EscalationSuggestionOut(role=suggest_escalation(names, levels, with_holders=held))
+
+
 class SimulateIn(BaseModel):
     action_type: ActionType
     amount: Money | None = None
@@ -402,7 +431,7 @@ class SimulateIn(BaseModel):
 
 
 class SimulatedStep(BaseModel):
-    roles: list[SiteRole]
+    roles: list[str]
     required: int
     eligible: int
     approvers: list[str]
@@ -416,15 +445,15 @@ class SimulateOut(BaseModel):
 
 
 @router.post("/approval-rules/simulate", summary="Bu işlem için hangi kural uygulanır?")
-async def simulate(body: SimulateIn, ctx: RulesRead, today: TodayDep) -> SimulateOut:
+async def simulate(body: SimulateIn, ctx: RulesRead, today: TodayDep, now: NowDep) -> SimulateOut:
     version = await svc.match_rule(
         ctx.session, body.action_type, amount=body.amount, source=body.source, today=today
     )
     snapshot = svc.snapshot_of(version)
-    holders = await svc._role_holders(ctx.session, ctx.site, tuple(SiteRole))
+    holders = await roles_svc.holders(ctx.session, ctx.site, now)
     steps = []
     for step in svc.snapshot_steps(snapshot):
-        names = [name for _, name, role in holders if role in step.roles]
+        names = [h.user.full_name for h in holders if any(r.name in step.roles for r in h.roles)]
         steps.append(
             SimulatedStep(
                 roles=list(step.roles),
@@ -457,7 +486,7 @@ class ApproverOut(BaseModel):
 
 class RequestStepOut(BaseModel):
     index: int
-    roles: list[SiteRole]
+    roles: list[str]
     required: int | None
     eligible: int | None
     approvals: int
@@ -571,7 +600,7 @@ async def _steps_out(
         steps.append(
             RequestStepOut(
                 index=index,
-                roles=[SiteRole(r) for r in raw["roles"]],
+                roles=[str(r) for r in raw["roles"]],
                 required=required,
                 eligible=eligible,
                 approvals=approvals,
@@ -873,7 +902,9 @@ async def resubmit(
 
 class DelegationIn(BaseModel):
     to_user_id: uuid.UUID
-    roles: list[SiteRole] = Field(min_length=1, max_length=1)
+    roles: list[RoleName] = Field(
+        min_length=1, max_length=6, description="devredilen kendi rolleriniz (ad)"
+    )
     starts_at: dt.datetime
     ends_at: dt.datetime
     note: str | None = Field(default=None, max_length=500)
@@ -885,7 +916,7 @@ class DelegationOut(BaseModel):
     from_name: str
     to_user_id: uuid.UUID
     to_name: str
-    roles: list[SiteRole]
+    roles: list[str]
     starts_at: dt.datetime
     ends_at: dt.datetime
     ended_at: dt.datetime | None
@@ -905,7 +936,7 @@ class DelegationOut(BaseModel):
             from_name=d.from_name,
             to_user_id=d.to_user_id,
             to_name=d.to_name,
-            roles=[SiteRole(r) for r in d.roles],
+            roles=list(d.roles),
             starts_at=d.starts_at,
             ends_at=d.ends_at,
             ended_at=d.ended_at,
@@ -930,13 +961,46 @@ async def list_delegations(ctx: Staff, current: CurrentUserDep, now: NowDep) -> 
 class CandidateOut(BaseModel):
     user_id: uuid.UUID
     name: str
-    role: SiteRole
+    role: str = Field(description="adayın ana (en üst) rolü")
+    roles: list[str] = Field(description="adayın bütün etkin rolleri")
+    can_take: list[str] = Field(
+        description="devredebileceğiniz rollerinizden bu kişinin alabildikleri "
+        "(aynı ya da üst rol — ONY-03, K20)"
+    )
 
 
-@router.get("/delegations/candidates", summary="Yetkimi devredebileceğim kişiler (aynı rol)")
-async def delegation_candidates(ctx: Staff, current: CurrentUserDep) -> list[CandidateOut]:
-    holders = await svc._role_holders(ctx.session, ctx.site, (ctx.access.role,))
-    return [CandidateOut(user_id=u, name=n, role=r) for u, n, r in holders if u != current.user.id]
+class DelegationCandidatesOut(BaseModel):
+    my_roles: list[str] = Field(description="devredebileceğiniz rolleriniz (ana rol önce)")
+    candidates: list[CandidateOut]
+
+
+@router.get(
+    "/delegations/candidates", summary="Yetkimi devredebileceğim kişiler (aynı ya da üst rol)"
+)
+async def delegation_candidates(
+    ctx: Staff, current: CurrentUserDep, now: NowDep
+) -> DelegationCandidatesOut:
+    catalog = await roles_svc.load_catalog(ctx.session)
+    holders = await roles_svc.holders(ctx.session, ctx.site, now, catalog)
+    mine = next((h for h in holders if h.user.id == current.user.id), None)
+    my_roles = list(mine.roles) if mine else []
+    candidates = []
+    for h in holders:
+        if h.user.id == current.user.id:
+            continue
+        levels = [r.level for r in h.roles]
+        can_take = [r.name for r in my_roles if can_take_over(r.level, levels)]
+        if can_take:
+            candidates.append(
+                CandidateOut(
+                    user_id=h.user.id,
+                    name=h.user.full_name,
+                    role=h.roles[0].name,
+                    roles=[r.name for r in h.roles],
+                    can_take=can_take,
+                )
+            )
+    return DelegationCandidatesOut(my_roles=[r.name for r in my_roles], candidates=candidates)
 
 
 @router.post("/delegations", status_code=HTTPStatus.CREATED, summary="Yetki devri tanımla")
@@ -946,7 +1010,7 @@ async def create_delegation(
     try:
         delegation = await svc.create_delegation(
             ctx.session, ctx.site, delegator=_person(current), to_user_id=body.to_user_id,
-            roles=[r.value for r in body.roles], starts_at=body.starts_at, ends_at=body.ends_at,
+            roles=list(body.roles), starts_at=body.starts_at, ends_at=body.ends_at,
             note=body.note, now=now,
         )  # fmt: skip
     except FormFieldError as exc:

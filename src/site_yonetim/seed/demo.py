@@ -37,6 +37,7 @@ from site_yonetim.domain.operations import (
     RequestPriority,
     RequestStatus,
 )
+from site_yonetim.domain.roles import RESIDENT_KEY, TEMPLATE_BY_NAME
 from site_yonetim.domain.security import VisitorKind
 from site_yonetim.domain.staffing import week_start
 from site_yonetim.domain.structure import AccountKind, PartyRole
@@ -59,6 +60,7 @@ from site_yonetim.models import (
     Plan,
     Site,
     SiteMembership,
+    SiteRoleAssignment,
     Unit,
     UnitParty,
     UnitType,
@@ -220,11 +222,17 @@ async def _seed_demo(
                 await _seed_gate(session, spec, today)
                 if ModuleKey.DOCUMENTS in await available_modules(session, site):
                     await _seed_documents(session, store, today)
-                session.add_all(
-                    SiteMembership(user_id=user_ids[account.email], role=account.site_role)
-                    for account in ACCOUNTS
-                    if account.site_slug == spec.slug
-                )
+                for account in ACCOUNTS:
+                    if account.site_slug == spec.slug and account.site_role:
+                        user_id = user_ids[account.email]
+                        session.add(SiteMembership(user_id=user_id))
+                        session.add(
+                            SiteRoleAssignment(
+                                user_id=user_id,
+                                role_key=TEMPLATE_BY_NAME[account.site_role].key,
+                                assigned_by_name="Demo verisi",
+                            )
+                        )
                 await session.flush()  # kiracı satırları kapsam kapanmadan yazılmalı
 
     async with factory() as session:
@@ -610,8 +618,11 @@ async def _seed_resident(
         user_id = user.id
     with site_scope(site_id):
         async with factory() as session, session.begin():
+            session.add(SiteMembership(user_id=user_id, person_id=person.id))
             session.add(
-                SiteMembership(user_id=user_id, role=RESIDENT.site_role, person_id=person.id)
+                SiteRoleAssignment(
+                    user_id=user_id, role_key=RESIDENT_KEY, assigned_by_name="Demo verisi"
+                )
             )
             linked = await session.get(Person, person.id)
             if linked is not None:
