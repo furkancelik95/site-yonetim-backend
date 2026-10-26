@@ -12,6 +12,7 @@ from site_yonetim.api.v1 import (
     certificates,
     charge_schedule,
     charges,
+    checklists,
     contracts,
     dashboard,
     departments,
@@ -20,11 +21,14 @@ from site_yonetim.api.v1 import (
     health,
     imports,
     incidents,
+    insurance,
     inventory,
+    keys,
     leaves,
     me,
     meetings,
     members,
+    meters,
     notifications,
     payments,
     platform,
@@ -35,6 +39,7 @@ from site_yonetim.api.v1 import (
     reports,
     requests,
     resident,
+    routine_tasks,
     security,
     sessions,
     shifts,
@@ -42,6 +47,8 @@ from site_yonetim.api.v1 import (
     staff,
     staff_self,
     structure,
+    subject_documents,
+    technical_assets,
     timesheets,
 )
 
@@ -86,6 +93,13 @@ api_router.include_router(meetings.router)
 api_router.include_router(polls.router)
 api_router.include_router(contracts.router)
 api_router.include_router(inventory.router)
+api_router.include_router(keys.router)
+api_router.include_router(checklists.router)
+api_router.include_router(insurance.router)
+api_router.include_router(meters.router)
+api_router.include_router(routine_tasks.router)
+api_router.include_router(technical_assets.router)
+api_router.include_router(subject_documents.router)
 api_router.include_router(staff.router)
 api_router.include_router(shifts.router)
 api_router.include_router(leaves.router)

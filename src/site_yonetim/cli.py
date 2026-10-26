@@ -9,6 +9,9 @@ uv run python -m site_yonetim.cli run-recurring-expenses # tekrarlanan giderler 
 uv run python -m site_yonetim.cli run-approval-jobs      # onay hatırlatma/eskalasyon (saatlik)
 uv run python -m site_yonetim.cli run-staff-jobs         # ayrılan personelin erişimini kapat (gece)
 uv run python -m site_yonetim.cli run-document-expiry    # belge geçerlilik uyarısı (günde bir)
+uv run python -m site_yonetim.cli run-operations-jobs    # muayene 60/30/7, bakım iş emri, poliçe,
+                                                         # görev gün sonu özeti (günde bir, gece)
+uv run python -m site_yonetim.cli run-key-reminders      # anahtar iade gecikmesi (saatlik)
 """
 
 import argparse
@@ -27,11 +30,15 @@ from site_yonetim.services import (
     bank_imports,
     charge_schedule,
     documents,
+    insurance,
+    keys,
     login_throttle,
     rate_limit,
     reconciliation,
     recurring_expenses,
+    routine_tasks,
     staff,
+    technical_assets,
 )
 from site_yonetim.services.charging import BUSINESS_TZ
 from site_yonetim.services.imports import ImportStore
@@ -209,6 +216,45 @@ async def _run_document_expiry() -> int:
     return 0
 
 
+async def _run_operations_jobs() -> int:
+    """Operasyon ve teknik varlık günlük işleri (HIZ-06/07, OPS-04, OPS-06): yasal muayene
+    60/30/7 gün uyarısı, planı gelen periyodik bakımın iş emri, poliçe bitiş 60/30 uyarısı, dünün
+    görev özeti. Hepsi tekrar güvenli (aynı uyarı/iş emri ikinci kez yazılmaz)."""
+    engine = create_engine_from_settings(get_settings())
+    today = datetime.now(UTC).astimezone(BUSINESS_TZ).date()
+    try:
+        factory = create_session_factory(engine)
+        assets = await technical_assets.run_daily(factory, today=today)
+        policies = await insurance.run_expiry_warnings(factory, today=today)
+        tasks = await routine_tasks.run_daily_summary(factory, today=today)
+    finally:
+        await engine.dispose()
+    for r in assets:
+        print(f"{r.site_id}: muayene uyarısı {r.warnings}, bakım iş emri {r.runs}")
+    for site_id, written in policies:
+        print(f"{site_id}: poliçe uyarısı {written}")
+    for site_id, written in tasks:
+        print(f"{site_id}: görev özeti {written}")
+    print(f"{len(assets)} sitede varlık/bakım, {len(policies)} sitede poliçe işi çalıştı.")
+    return 0
+
+
+async def _run_key_reminders() -> int:
+    """Anahtar iade gecikmesi (OPS-01): iade zamanı geçen teslimler için yöneticiye bildirim
+    (saatlik; teslim başına bir kez)."""
+    engine = create_engine_from_settings(get_settings())
+    try:
+        results = await keys.run_overdue_warnings(
+            create_session_factory(engine), now=datetime.now(UTC)
+        )
+    finally:
+        await engine.dispose()
+    for site_id, written in results:
+        print(f"{site_id}: {written} gecikme uyarısı")
+    print(f"{len(results)} sitede anahtar iade kontrolü çalıştı.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="site_yonetim.cli")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -220,6 +266,10 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("run-approval-jobs", help="Onay hatırlatma ve eskalasyonu (saatlik)")
     sub.add_parser("run-staff-jobs", help="Ayrılan personelin site erişimini kapat (gece)")
     sub.add_parser("run-document-expiry", help="Belge geçerlilik uyarısı (günde bir)")
+    sub.add_parser(
+        "run-operations-jobs", help="Muayene/bakım/poliçe uyarıları ve görev özeti (günde bir)"
+    )
+    sub.add_parser("run-key-reminders", help="Anahtar iade gecikmesi uyarısı (saatlik)")
     reconcile = sub.add_parser("reconcile", help="Özet bakiyeleri defterle karşılaştır")
     reconcile.add_argument("--fix", action="store_true", help="Farklı siteleri onar")
     args = parser.parse_args(argv)
@@ -236,6 +286,10 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_run_staff_jobs())
     if args.command == "run-document-expiry":
         return asyncio.run(_run_document_expiry())
+    if args.command == "run-operations-jobs":
+        return asyncio.run(_run_operations_jobs())
+    if args.command == "run-key-reminders":
+        return asyncio.run(_run_key_reminders())
     if args.command == "run-recurring-expenses":
         return asyncio.run(_run_recurring_expenses())
     if args.command == "run-charge-schedules":

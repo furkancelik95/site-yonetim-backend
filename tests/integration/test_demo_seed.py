@@ -378,7 +378,19 @@ async def test_demo_duyuru_ve_talep(
     ]
     manager = await login_headers(api, "yonetici@demo.local", DEMO_PASSWORD)
     requests_page = (await api.get("/api/v1/sites/aksu-konaklari/requests", headers=manager)).json()
-    assert requests_page["total"] == 6
+    # 6 demo talebi + bugün planı gelen hidrofor bakımının iş emri (HIZ-06)
+    assert requests_page["total"] == 7
+    base = "/api/v1/sites/aksu-konaklari"
+    assets = (await api.get(f"{base}/technical-assets", headers=manager)).json()
+    assert len(assets) == 6
+    warnings = {a["next_inspection"]["warning"] for a in assets if a["next_inspection"]}
+    assert {"7", "30"} <= warnings  # yaklaşan yasal muayeneler (K28, HIZ-07)
+    assert (await api.get(f"{base}/assets", headers=manager)).json() == []  # mali demirbaş ayrı
+    keys = (await api.get(f"{base}/keys", headers=manager)).json()
+    loans = [k for k in keys if k["loan"]]
+    assert len(loans) == 2  # biri dışarıda; gecikme gerçek saate göre (sabit demo gününde ikisi)
+    assert any(k["overdue"] for k in loans)
+    assert len((await api.get(f"{base}/maintenance-runs?status=open", headers=manager)).json()) == 1
 
 
 async def test_demo_kasa_ve_gider(

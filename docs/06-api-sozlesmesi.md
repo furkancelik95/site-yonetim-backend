@@ -376,6 +376,51 @@ uçta yok, oy tablosu denetim kaydına yazılmaz. Sonuç danışma niteliğinded
 | GET | `/sites/{slug}/staff/linkable-users` | `staff.manage` | R | karta bağlanabilecek hesaplar `[{user_id, full_name, email, role_name, staff_id?}]` |
 | GET | `/sites/{slug}/staff/{id}/open-items?after=` | `staff.manage` | R | `{future_shifts, first_shift, pending_leaves}` — ayrılışta bilgi; kayıt engellenmez |
 
+### 2.20b Operasyon ekleri ve teknik varlık (servis istekleri 53–58; Yazılım Dokümanı OPS-01..06, HIZ-06, HIZ-07; K28, K29, K14)
+Çekirdek (modül yok). Küçük listeler **dizi** döner (envanter uçlarıyla aynı; üst sınır uçta yazılı).
+Endeks, tüketim, miktar ve çarpan **ondalık metin**; para `Money`. Saha fotoğrafı istekte veri adresi
+(`data:image/jpeg;base64,…`, içerik imzası JPEG/PNG/WebP, ≤ 2 MB), dosya deposuna yazılır; yanıtta
+yalnız `photo_id` döner.
+
+| Yöntem | Yol | İzin | Durum | Not |
+|---|---|---|---|---|
+| GET · POST · PATCH | `/sites/{slug}/keys` · `/{id}` | `requests.assign` **ya da** `security.visitors` | R | `{kind: key\|card\|remote, code (site içinde tekil, Türkçe büyük harf), name, area?, authorized_roles[] (boş: herkes), is_active}` → `{…, loan, overdue}` |
+| POST | `/sites/{slug}/keys/{id}/loans` | aynı | R | `{to_name, to_phone?, role?, due_at (ileri)}` → 201. Açık teslim tekil (kısmi indeks): 409 `key_out`; rol yetkili değil 409 `not_authorized`; pasif anahtar 409 `key_inactive` |
+| POST · GET | `/sites/{slug}/key-loans/{id}/return` · `/key-loans` | aynı | R | iade (409 `already_returned`); geçmiş son 100 |
+| GET · POST | `/sites/{slug}/deposited-keys` · `/{id}/receive\|hand\|return` | aynı | R | emanet; `hand {name, id_checked}` — ad yetkili listesinde (harf duyarsız, Türkçe harf katlanır) değilse 409 `not_authorized` (+ sakine bildirim), kimlik kontrolü yoksa 422 `fields.id_checked`, süre geçmişse 409 `expired`. Verilince sakine bildirim. `status: requested\|held\|handed\|returned\|expired` (expired okumada) |
+| GET · POST | `/sites/{slug}/resident/deposited-keys` | sakin | R | `{authorized: [{name, phone?}], valid_until ≥ bugün, note?, unit_id?}` (boş: ilk bölüm) |
+| GET · POST | `/sites/{slug}/stock-counts` | `inventory.read` · `inventory.manage` | R | `{lines: [{item_id, counted}]}` → `{id, status, approval_request_id, lines: [{item_id, name, system, counted, diff}], created_by, created_at, applied_at}`. Fark "Sayım farkı" hareketi; **"Stok sayım farkı" onay kuralı varsa 202** `approval_pending`, hareket onaydan sonra (ret → `rejected`, geri çekme → `withdrawn`, yürütülemedi → `failed`). 422 `fields.lines` / `fields.lines.{item_id}`, bilinmeyen malzeme 404 |
+| GET · POST · PATCH | `/sites/{slug}/checklist-templates` · `/{id}` | `requests.assign` | R | `{name, items: [{text, type: yesno\|number\|score, photo_required, min?, max?}], is_active}`; ilk listede 5 hazır şablon |
+| GET · POST | `/sites/{slug}/inspections` | `requests.assign` | R | `{template_id, location, answers: [{value, photo?}], open_requests=true}` → `{…, answers: [{text, type, value, ok, photo_id}], score, failed, opened_request_ids}`. Olumsuz her madde ortak alan talebi (talep modülü açıksa). Denetim değişmez |
+| GET · POST · PATCH | `/sites/{slug}/insurance-policies` · `/{id}` | `expenses.read` · `expenses.manage` | R | `{kind, insurer, policy_no, coverage?, premium, start, end > start, area?, note?}` → `+ days_left, warning: "60"\|"30"\|"expired"\|null, documents[]` |
+| GET · POST · PATCH | `/sites/{slug}/insurance-claims` · `/{id}` | aynı | R | `{policy_id, source?, description, incident_date ≤ bugün, claimed?}`; PATCH `{status, paid?, paid_on?}` — açık → iletildi/ret; iletildi → ödendi/ret/açık; ödendi tutar zorunlu (422 `fields.paid`); diğer geçiş 409 `invalid_status` |
+| GET · POST · PATCH | `/sites/{slug}/meters` · `/{id}` | `units.manage` | R | `{kind, serial (aktif sayaçlarda tekil), unit_id \| area, unit_label?, multiplier, installed_on?, status: active\|faulty}` (`?include_replaced=true`) |
+| GET · POST | `/sites/{slug}/meter-readings?period=YYYY-AA` | `units.manage` | R | dönem: `{period, rows: [{meter, reading, last}], missing}`; okuma `{meter_id, period, value \| unreadable_reason, photo?, replacement?: {old_final, new_serial, new_initial}}`. Endeks düşerse 422 `index_decreased`; okunmuş dönem 409 `already_read` (okunamadı ve anormal yeniden okunabilir); ±%X (ayar, varsayılan 50) sapma `anomaly` |
+| POST | `/sites/{slug}/meter-readings/{id}/approve\|reread` | `units.manage` | R | yalnız `anomaly` (409 `invalid_status`) |
+| GET · PUT | `/sites/{slug}/operation-settings` | `units.manage` | R | `{meter_anomaly_percent (1–1000), meter_photo_required}` |
+| GET | `/sites/{slug}/resident/meter-readings` · `/{id}/photo` | sakin | R | bölümlerinin sayaçları ve son 24 okuma; fotoğraf |
+| GET · POST · PATCH | `/sites/{slug}/task-templates` · `/{id}` | `requests.read` · `requests.assign` | R | `{name, description?, frequency: daily\|weekdays\|monthly, weekdays[0..6], month_day 1–28, time_from, time_to > time_from, location?, assignee, staff_member_id? (K29), photo_required, checklist_template_id?, is_active}` |
+| GET · POST | `/sites/{slug}/tasks?date=&staff_member_id=` · `/tasks/{template_id}/complete` | `requests.read` | R | günün görevleri `[{template, done, status: upcoming\|due\|late\|done\|failed}]`; kapatma `{date?, status: done\|failed, reason?, note?, photo?}` → 201; 404 "Bu gün için görev yok", 409 `already_done`, 422 `photo_required` / `fields.reason`, ileri tarih 409 `future_task` |
+| GET | `/sites/{slug}/tasks/report` | `requests.read` | R | son 7 gün `{from, to, rows: [{template_id, name, assignee, expected, done, failed, rate}], rate}` |
+| GET · POST | `/sites/{slug}/me/tasks?date=` · `/me/tasks/{template_id}/complete` | personel kartı (K29) | R | yalnız kendi kartına atanmış görevler; kartı yoksa 403 |
+| GET | `/sites/{slug}/asset-inspection-templates` | `inventory.read` | R | yasal muayene şablonları (kategori, önerilen periyot) |
+| GET · POST · PATCH | `/sites/{slug}/technical-assets` · `/{id}` | `inventory.read` · `inventory.manage` | R | **K28: mali demirbaştan (`/assets`) ayrı.** `{category, name, location?, brand?, model?, serial_no?, installed_on?, warranty_until?, contract_id?, service_company?, status: working\|faulty\|out_of_service\|nonconforming, note?, inspections?: [...]}` → `TV-0001`, `next_inspection`; ayrıntı `{asset, inspections, records, plans, documents}` |
+| POST · PATCH | `/sites/{slug}/technical-assets/{id}/inspection-schedules` · `/asset-inspection-schedules/{id}` | `inventory.manage` | R | `{template_key?, name?, period_months 1–120, last_inspected_on? \| next_due_on?, is_active?}`; sonraki tarih = son muayene + periyot |
+| GET | `/sites/{slug}/asset-inspections/calendar?within_days=` | `inventory.read` | R | yaklaşan önce; `warning: "60"\|"30"\|"7"\|"overdue"` |
+| POST | `/sites/{slug}/asset-inspection-schedules/{id}/records` | `inventory.manage` | R | **multipart** `inspected_on, result: pass\|fail, inspector?, note?, cost?, report (zorunlu)`; rapor belge arşivine bağlanır; olumsuz → yüksek öncelikli düzeltme talebi + varlık `nonconforming`. Kayıt değişmez |
+| GET · POST · PATCH | `/sites/{slug}/maintenance-plans` · `/{id}` | `inventory.read` · `inventory.manage` | R | `{asset_id, title, description?, period_unit: week\|month, period_count 1–60, next_due_on, responsible?, contract_id?, checklist_template_id?, is_active}` |
+| POST | `/sites/{slug}/maintenance-plans/{id}/runs` | `inventory.manage` | R | sıradaki bakımın iş emrini şimdi aç (409 `run_exists` / `plan_inactive`) |
+| GET · POST | `/sites/{slug}/maintenance-runs?status=&asset_id=` · `/{id}/complete` | `inventory.read` · `inventory.manage` | R | kapatma `{status: done\|skipped, done_on?, cost?, note?, issue_found, issue_description?}` — sorun → arıza talebi + varlık `faulty`; sonraki tarih hesaplanır |
+| GET | `/sites/{slug}/technical-assets/{id}/timeline` | `inventory.read` | R | `{events: [{date, at, kind, title, detail, cost, request_id, request_number, request_status, document_id}], annual_costs: [{year, total}]}` |
+| POST · GET | `/sites/{slug}/subject-documents` · `?subject_type=&subject_id=` · `/{id}/download` | kaydın izni (sigorta: `expenses.*`, varlık: `inventory.*`) | R | **multipart** `subject_type: insurance_policies\|insurance_claims\|technical_assets, subject_id, title?, file` → belge arşivine (`documents.subject_type/subject_id`, gizlilik "yönetim") yazılır; belge modülü kapalı olsa da kayıttan indirilir |
+| GET | `/sites/{slug}/operation-photos/{id}` | sayaç: `units.manage` · denetim: `requests.assign` · görev: `requests.read` | R | saha fotoğrafı; bağlı olmadığı kayıttan 404 |
+
+Zamanlanmış işler: `run-operations-jobs` (günde bir, gece) — yasal muayene 60/30/7 gün ve
+gecikme uyarısı (`inventory.manage` sahiplerine), planı gelen bakımın iş emri, poliçe 60/30 gün ve
+bitiş uyarısı (`expenses.manage`), dünün görev özeti (`requests.assign`); `run-key-reminders`
+(saatlik) — iade zamanı geçen anahtar. Hepsi tekrar güvenli (bildirim tekil anahtarı). **K14:**
+sayaç okumaları tahakkuk motoruna (`by_meter_consumption`) henüz beslenmez.
+
 ### 2.20a İnsan kaynakları (servis istekleri 36–39, Yazılım Dokümanı IK-02..05, K29)
 Modül `staff`. Saatler `"SS:DD"`, saat toplamları **metin** (`"6.67"`), dakikalar tam sayı.
 
@@ -473,7 +518,7 @@ Saklama süresi (K8) bilgi amaçlıdır, otomatik silme yapılmaz. Geçerlilik u
 `run-document-expiry`: 60 ve 30 gün kala ve bitince belge yöneticilerine (`documents.manage`;
 gizlide ayrıca `documents.confidential`) uygulama içi bildirim (`operations`, `document.expiring`
 · `document.expired`, `link_entity: documents`); aynı uyarı bir kez. Belgeyi başka kayda bağlamak
-için şemada `subject_type/subject_id` var (bugün uçta yok; modüller servis üzerinden bağlar).
+için şemada `subject_type/subject_id` var; poliçe, hasar dosyası, teknik varlık ve muayene raporu bunu kullanır (§2.20b `subject-documents`).
 "Okudum" onayı (ILT-01, istek 71) sonraki adım.
 
 ---
