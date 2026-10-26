@@ -150,6 +150,14 @@ AUDITED_TABLES = frozenset(
         "incidents",
         "lost_items",
         "request_departments",
+        # güvenlik, devriye, otopark (ayar ve kurulum; ziyaretçi kararları ayrıca `record` ile,
+        # kişisel veri olmadan — saklama süresi denetimden kısa)
+        "gates",
+        "security_settings",
+        "patrol_points",
+        "patrol_plans",
+        "parking_spaces",
+        "parking_allocations",
         # yönetim (anket oyları gizli: poll_votes yazılmaz)
         "meetings",
         "meeting_agenda_items",

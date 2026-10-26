@@ -31,6 +31,7 @@ from site_yonetim.services import (
     rate_limit,
     reconciliation,
     recurring_expenses,
+    security_jobs,
     staff,
 )
 from site_yonetim.services.charging import BUSINESS_TZ
@@ -178,6 +179,36 @@ async def _run_approval_jobs() -> int:
     return 0
 
 
+async def _run_security_daily() -> int:
+    """Uzun bekleyen kargo hatırlatması; `auto_anonymize` açık sitelerde saklama süresi dolan
+    ziyaretçi/plaka kayıtlarını anonimleştirir (varsayılan kapalı, K8). Günde bir, 03:00."""
+    engine = create_engine_from_settings(get_settings())
+    try:
+        results = await security_jobs.run_daily(
+            create_session_factory(engine), now=datetime.now(UTC)
+        )
+    finally:
+        await engine.dispose()
+    for r in results:
+        print(f"{r.site_id}: hatırlatma {r.reminded}, anonimleştirilen {r.anonymized}")
+    print(f"{len(results)} sitede güvenlik gece işi çalıştı.")
+    return 0
+
+
+async def _run_patrol_checks() -> int:
+    """Başlamayan / süresi aşan devriye bildirimi (5 dakikada bir)."""
+    engine = create_engine_from_settings(get_settings())
+    try:
+        results = await security_jobs.run_patrol_checks(
+            create_session_factory(engine), now=datetime.now(UTC)
+        )
+    finally:
+        await engine.dispose()
+    for site_id, not_started, overdue in results:
+        print(f"{site_id}: başlamayan {not_started}, süresi aşan {overdue}")
+    return 0
+
+
 async def _run_staff_jobs() -> int:
     """K29 / IK-01 adım 4: ayrılış tarihi geçen personelin site erişimini kapatır (gece)."""
     engine = create_engine_from_settings(get_settings())
@@ -218,6 +249,12 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("run-charge-schedules", help="Otomatik aylık tahakkuku çalıştır (günde bir)")
     sub.add_parser("run-recurring-expenses", help="Tekrarlanan giderleri yaz (günde bir)")
     sub.add_parser("run-approval-jobs", help="Onay hatırlatma ve eskalasyonu (saatlik)")
+    sub.add_parser(
+        "run-security-daily", help="Uzun bekleyen kargo + saklama anonimleştirme (günde bir)"
+    )
+    sub.add_parser(
+        "run-patrol-checks", help="Başlamayan/geciken devriye bildirimi (5 dakikada bir)"
+    )
     sub.add_parser("run-staff-jobs", help="Ayrılan personelin site erişimini kapat (gece)")
     sub.add_parser("run-document-expiry", help="Belge geçerlilik uyarısı (günde bir)")
     reconcile = sub.add_parser("reconcile", help="Özet bakiyeleri defterle karşılaştır")
@@ -230,6 +267,10 @@ def main(argv: list[str] | None = None) -> int:
         return _purge_imports()
     if args.command == "purge-login-throttle":
         return asyncio.run(_purge_login_throttle())
+    if args.command == "run-security-daily":
+        return asyncio.run(_run_security_daily())
+    if args.command == "run-patrol-checks":
+        return asyncio.run(_run_patrol_checks())
     if args.command == "run-approval-jobs":
         return asyncio.run(_run_approval_jobs())
     if args.command == "run-staff-jobs":

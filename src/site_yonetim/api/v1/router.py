@@ -17,6 +17,7 @@ from site_yonetim.api.v1 import (
     departments,
     documents,
     expenses,
+    gatehouse,
     health,
     imports,
     incidents,
@@ -26,7 +27,10 @@ from site_yonetim.api.v1 import (
     meetings,
     members,
     notifications,
+    parking,
+    patrol,
     payments,
+    plates,
     platform,
     polls,
     portfolio,
@@ -37,12 +41,14 @@ from site_yonetim.api.v1 import (
     resident,
     security,
     sessions,
+    shift_log,
     shifts,
     sites,
     staff,
     staff_self,
     structure,
     timesheets,
+    visits,
 )
 
 API_V1_PREFIX = "/api/v1"
@@ -57,6 +63,13 @@ api_router.include_router(sites.router)
 api_router.include_router(platform.router)
 api_router.include_router(security.router)  # /units/lookup, /units/{id}'den önce
 api_router.include_router(incidents.router)
+# Güvenlik, devriye, otopark (servis istekleri 40–46, K30); /units/{id}/… yapıdan önce
+api_router.include_router(gatehouse.router)
+api_router.include_router(visits.router)
+api_router.include_router(plates.router)
+api_router.include_router(shift_log.router)
+api_router.include_router(patrol.router)
+api_router.include_router(parking.router)
 api_router.include_router(structure.router)
 api_router.include_router(budget.router)
 api_router.include_router(charges.router)

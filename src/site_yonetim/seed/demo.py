@@ -37,6 +37,8 @@ from site_yonetim.domain.operations import (
     RequestPriority,
     RequestStatus,
 )
+from site_yonetim.domain.parking import check_space
+from site_yonetim.domain.patrol import check_plan, check_point
 from site_yonetim.domain.security import VisitorKind
 from site_yonetim.domain.staffing import week_start
 from site_yonetim.domain.structure import AccountKind, PartyRole
@@ -103,6 +105,9 @@ from site_yonetim.services import (
     charging,
     documents,
     expenses,
+    gatehouse,
+    parking,
+    patrol,
     payments,
     requests,
     security,
@@ -218,6 +223,7 @@ async def _seed_demo(
                 await _seed_finance(session, spec, today)
                 await _seed_operations(session, spec, today)
                 await _seed_gate(session, spec, today)
+                await _seed_security_setup(session, spec, today)
                 if ModuleKey.DOCUMENTS in await available_modules(session, site):
                     await _seed_documents(session, store, today)
                 session.add_all(
@@ -576,6 +582,48 @@ async def _seed_gate(session: AsyncSession, spec: SiteSpec, today: date) -> None
                                 kind=VisitorKind.CARGO, expected_on=today + timedelta(days=1)),
             now=morning, today=today, recorded_by="Demo verisi",
         )  # fmt: skip
+
+
+async def _seed_security_setup(session: AsyncSession, spec: SiteSpec, today: date) -> None:
+    """Kapılar, devriye noktaları ve tur planı, park yerleri ve tahsisleri (servis istekleri
+    40, 46; K30) — ekranlar boş görünmesin."""
+    if ModuleKey.VISITORS not in spec.extra_modules:
+        return
+    for name, kind in (("Ana kapı", "vehicle"), ("Yaya kapısı", "pedestrian")):
+        await gatehouse.save_gate(session, None, gatehouse.GateInput(name, kind, [], True, True))
+    points = []
+    for name, area in (
+        ("Ana kapı önü", "Giriş"),
+        ("Otopark B girişi", "Otopark"),
+        ("Havuz", "Sosyal alan"),
+        ("Jeneratör odası", "Teknik"),
+    ):
+        form = check_point(name=name, location=None, area=area, tag="qr", taken=set())
+        points.append(await patrol.save_point(session, None, form, is_active=True))
+    plan = check_plan(
+        name="Gece turu",
+        point_ids=[str(p.id) for p in points],
+        ordered=True,
+        start_times=["22:00", "01:00", "04:00"],
+        allowed_minutes=30,
+        assignee="Güvenlik",
+        active_points={str(p.id) for p in points},
+    )
+    await patrol.save_plan(session, None, plan, is_active=True)
+    units = list(await session.scalars(select(Unit.id).order_by(Unit.id).limit(6)))
+    for index in range(1, 9):
+        kind = "disabled" if index == 1 else "ev" if index == 2 else "standard"
+        space = await parking.save_space(
+            session, None,
+            check_space(code=f"P-{index:02d}", kind=kind, location="Kapalı otopark -1",
+                        is_paid=False, note=None, taken=set()),
+            is_active=True,
+        )  # fmt: skip
+        if index <= len(units):
+            await parking.allocate(
+                session, space, unit_id=units[index - 1], start=today.replace(day=1), end=None,
+                note=None, actor="Demo verisi",
+            )  # fmt: skip
 
 
 async def _seed_resident(
