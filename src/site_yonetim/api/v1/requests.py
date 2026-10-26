@@ -364,6 +364,7 @@ async def list_requests(
     sla_breached: Annotated[
         bool | None, Query(description="true → süresi geçmiş açık talepler")
     ] = None,
+    unit_id: Annotated[uuid.UUID | None, Query(description="bölüm kartı süzgeci")] = None,
 ) -> Page[RequestOut]:
     query = svc.list_query(
         status=status_filter,
@@ -373,6 +374,7 @@ async def list_requests(
         department_id=department_id,
         sla_breached=sla_breached,
         now=now,
+        unit_id=unit_id,
     )
     total = await ctx.session.scalar(select(func.count()).select_from(query.subquery())) or 0
     rows = list(await ctx.session.scalars(query.offset(paging.offset).limit(paging.page_size)))

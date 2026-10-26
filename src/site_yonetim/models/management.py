@@ -10,7 +10,17 @@ import datetime as dt
 import uuid
 from decimal import Decimal
 
-from sqlalchemy import CheckConstraint, Date, DateTime, Index, Numeric, Text, UniqueConstraint
+from sqlalchemy import (
+    CheckConstraint,
+    Date,
+    DateTime,
+    ForeignKey,
+    Index,
+    Numeric,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from site_yonetim.db.base import Base, TenantMixin, enum_check, tenant_fk, tenant_table_args
@@ -229,6 +239,21 @@ class StaffMember(TenantMixin, Base):
             "employer <> 'contractor' OR contractor_name IS NOT NULL", name="contractor_name"
         ),
         CheckConstraint("end_date IS NULL OR end_date >= start_date", name="dates"),
+        # IK-01: bordro sicil no site içinde tekil; bir giriş hesabı tek personel kartına (K29)
+        Index(
+            "uq_staff_members_site_payroll_no",
+            "site_id",
+            "payroll_no",
+            unique=True,
+            postgresql_where=text("payroll_no IS NOT NULL"),
+        ),
+        Index(
+            "uq_staff_members_site_user",
+            "site_id",
+            "user_id",
+            unique=True,
+            postgresql_where=text("user_id IS NOT NULL"),
+        ),
     )
 
     full_name: Mapped[str] = mapped_column(Text)
@@ -239,3 +264,8 @@ class StaffMember(TenantMixin, Base):
     start_date: Mapped[dt.date] = mapped_column(Date)
     end_date: Mapped[dt.date | None] = mapped_column(Date)
     shift: Mapped[str | None] = mapped_column(Text)
+    # IK-01: bordro sistemindeki sicil (T.C. kimlik no tutulmaz). K29: bağlı giriş hesabı —
+    # ayrılınca site üyeliği pasifleşir (`access_closed_at`).
+    payroll_no: Mapped[str | None] = mapped_column(Text)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
+    access_closed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))

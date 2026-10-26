@@ -55,8 +55,12 @@ async def provision_site(
     district: str | None = None,
     iban: str | None = None,
     bank_name: str | None = None,
+    lifecycle_status: str = "live",
 ) -> Site:
-    """Siteyi ve varsayılan kurulumunu yazar (commit çağırana aittir)."""
+    """Siteyi ve varsayılan kurulumunu yazar (commit çağırana aittir).
+
+    `lifecycle_status`: platform panelinden açılan site `setup` (YAP-01: kurulumda, sakin daveti
+    ve herkese açık kayıt kapalı); demo ve test kurulumları doğrudan `live`."""
     name = " ".join(name.split())
     if not SITE_NAME_MIN <= len(name) <= SITE_NAME_MAX:
         raise ProvisioningError(
@@ -90,6 +94,7 @@ async def provision_site(
         district=district,
         iban=iban,
         bank_name=bank_name,
+        lifecycle_status=lifecycle_status,
     )
     session.add(site)
     await session.flush()

@@ -25,6 +25,7 @@ from site_yonetim.models.cash import (
     Refund,
     StoredFile,
 )
+from site_yonetim.models.documents import Document, DocumentAccessLog, DocumentVersion
 from site_yonetim.models.finance import (
     AccountBalance,
     AllocationComponent,
@@ -47,6 +48,18 @@ from site_yonetim.models.finance import (
     Period,
     SiteFinanceSummary,
     UnitWeight,
+)
+from site_yonetim.models.gatehouse import (
+    Gate,
+    GateLog,
+    ParcelDelegate,
+    ParkingViolation,
+    SecuritySettings,
+    ShiftHandoverAck,
+    ShiftLogAddendum,
+    ShiftLogEntry,
+    VisitorInvite,
+    VisitRequest,
 )
 from site_yonetim.models.identity import (
     AuthEvent,
@@ -81,7 +94,18 @@ from site_yonetim.models.operations import (
     RequestDepartment,
     RequestEvent,
 )
-from site_yonetim.models.people import LedgerAccount, Person, UnitParty
+from site_yonetim.models.parking import ParkingAllocation, ParkingSpace
+from site_yonetim.models.patrol import PatrolPlan, PatrolPoint, PatrolRun, PatrolScan
+from site_yonetim.models.people import (
+    CustomField,
+    CustomFieldValue,
+    HouseholdMember,
+    Invitation,
+    LedgerAccount,
+    Person,
+    UnitParty,
+    Vehicle,
+)
 from site_yonetim.models.platform import Organization, Plan, PropertyKind, Site
 from site_yonetim.models.security import Incident, LostItem, Package, Visitor
 from site_yonetim.models.service_desk import (
@@ -97,7 +121,27 @@ from site_yonetim.models.service_desk import (
     ServiceQuoteLine,
     ServiceTariff,
 )
-from site_yonetim.models.structure import Block, Unit, UnitType
+from site_yonetim.models.staffing import (
+    AttendanceEvent,
+    AttendanceSettings,
+    LeaveRequest,
+    ShiftAssignment,
+    ShiftTemplate,
+    ShiftWeek,
+    TimesheetDay,
+    TimesheetExport,
+    TimesheetFix,
+    TimesheetLine,
+)
+from site_yonetim.models.structure import (
+    Block,
+    CommonArea,
+    ImportBatch,
+    StructureSettings,
+    Unit,
+    UnitAttributeChange,
+    UnitType,
+)
 
 __all__ = [
     "AccountBalance",
@@ -112,6 +156,8 @@ __all__ = [
     "ApprovalRule",
     "ApprovalRuleVersion",
     "Asset",
+    "AttendanceEvent",
+    "AttendanceSettings",
     "AuditLog",
     "AuthEvent",
     "AuthEventKind",
@@ -131,12 +177,24 @@ __all__ = [
     "ChargeScheduleRun",
     "ChargeType",
     "ClearanceCertificate",
+    "CommonArea",
     "Contract",
+    "CustomField",
+    "CustomFieldValue",
+    "Document",
+    "DocumentAccessLog",
+    "DocumentVersion",
     "Expense",
     "ExpenseCategory",
+    "Gate",
+    "GateLog",
+    "HouseholdMember",
     "IdempotencyKey",
+    "ImportBatch",
     "Incident",
+    "Invitation",
     "LateFeePolicy",
+    "LeaveRequest",
     "LedgerAccount",
     "LedgerEntry",
     "LoginThrottle",
@@ -149,6 +207,14 @@ __all__ = [
     "OrganizationMembership",
     "Outage",
     "Package",
+    "ParcelDelegate",
+    "ParkingAllocation",
+    "ParkingSpace",
+    "ParkingViolation",
+    "PatrolPlan",
+    "PatrolPoint",
+    "PatrolRun",
+    "PatrolScan",
     "Payment",
     "PaymentAllocation",
     "Period",
@@ -175,9 +241,16 @@ __all__ = [
     "RequestFeedback",
     "RequestInternalNote",
     "RequestSettings",
+    "SecuritySettings",
     "ServiceQuote",
     "ServiceQuoteLine",
     "ServiceTariff",
+    "ShiftAssignment",
+    "ShiftHandoverAck",
+    "ShiftLogAddendum",
+    "ShiftLogEntry",
+    "ShiftTemplate",
+    "ShiftWeek",
     "Site",
     "SiteFinanceSummary",
     "SiteMembership",
@@ -186,11 +259,20 @@ __all__ = [
     "StockItem",
     "StockMove",
     "StoredFile",
+    "StructureSettings",
+    "TimesheetDay",
+    "TimesheetExport",
+    "TimesheetFix",
+    "TimesheetLine",
     "Unit",
+    "UnitAttributeChange",
     "UnitParty",
     "UnitType",
     "UnitUsage",
     "UnitWeight",
     "User",
+    "Vehicle",
+    "VisitRequest",
     "Visitor",
+    "VisitorInvite",
 ]

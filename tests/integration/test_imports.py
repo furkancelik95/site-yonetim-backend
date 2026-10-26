@@ -199,7 +199,7 @@ async def test_preview_writes_nothing_then_confirm_writes_all(
     assert first["owner"] == {
         "first_name": "Ayşe",
         "last_name": "YILMAZ",
-        "phone": "+905321234567",
+        "phone": "+90 532 *** ** 67",
         "email": None,
     }
     assert body["rows"][1]["tenant"]["last_name"] == "DEMİR"

@@ -96,7 +96,7 @@ def _enum_checks(
 
 
 revision: str = "0031"
-down_revision: str | None = "0024"
+down_revision: str | None = "0026"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

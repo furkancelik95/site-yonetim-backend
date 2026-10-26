@@ -2,6 +2,7 @@
 
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 
 import httpx2
 import pytest
@@ -12,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from site_yonetim import cli
 from site_yonetim.api.deps import get_today
+from site_yonetim.api.v1.expenses import get_file_store
 from site_yonetim.core.config import Settings, get_settings
 from site_yonetim.db.tenancy import all_sites_scope, site_scope
 from site_yonetim.main import create_app
@@ -49,6 +51,7 @@ from site_yonetim.models import (
 )
 from site_yonetim.seed.demo import DemoSeedRefusedError, seed_demo
 from site_yonetim.seed.demo_data import DEMO_PASSWORD, SITES, occupancy_for
+from site_yonetim.services.files import FileStore
 from site_yonetim.services.provisioning import ProvisioningError, provision_site
 from tests.conftest import SettingsFactory
 from tests.integration.conftest import DatabaseUrls, login_headers
@@ -68,8 +71,10 @@ def seed_day(api_app: FastAPI) -> date:
 
 
 @pytest.fixture
-def dev_settings(make_settings: SettingsFactory) -> Settings:
-    return make_settings(environment="development", seed_demo_data=True)
+def dev_settings(make_settings: SettingsFactory, tmp_path: Path) -> Settings:
+    return make_settings(
+        environment="development", seed_demo_data=True, file_storage_root=tmp_path / "files"
+    )
 
 
 async def _count(factory: Factory, model: type[object]) -> int:
@@ -202,7 +207,9 @@ def test_komut_satiri_yukler_sonra_atlar(
     capsys: pytest.CaptureFixture[str],
     database_urls: DatabaseUrls,
     admin_engine: object,
+    tmp_path: Path,
 ) -> None:
+    monkeypatch.setenv("FILE_STORAGE_ROOT", str(tmp_path))
     monkeypatch.setenv("ENVIRONMENT", "development")
     monkeypatch.setenv("SEED_DEMO_DATA", "true")
     monkeypatch.setenv("DATABASE_URL", database_urls.app)
@@ -482,3 +489,35 @@ async def test_demo_kapi_kayitlari(
     with site_scope(mimoza):  # type: ignore[arg-type]
         async with session_factory() as session:
             assert await session.scalar(select(func.count()).select_from(Package)) == 0
+
+
+async def test_demo_belgeler(
+    dev_settings: Settings,
+    session_factory: Factory,
+    admin_engine: object,
+    api: httpx2.AsyncClient,
+    api_app: FastAPI,
+    seed_day: date,
+) -> None:
+    """Servis isteği 78: ekran boş görünmesin — sürümlü plan, süresi yaklaşan/dolan belgeler,
+    gizli belge ve sakinin bölümüne özel belge; dosyalar geçerli küçük PDF."""
+    await seed_demo(dev_settings, session_factory, today=SEED_DAY)
+    api_app.dependency_overrides[get_file_store] = lambda: FileStore(dev_settings.file_storage_root)
+    base = "/api/v1/sites/aksu-konaklari"
+    manager = await login_headers(api, "yonetici@demo.local", DEMO_PASSWORD)
+    listed = (await api.get(f"{base}/documents", headers=manager)).json()
+    assert listed["total"] == 10
+    by_title = {d["title"]: d for d in listed["items"]}
+    assert by_title["Yönetim planı"]["version"] == 2
+    assert {d["warning"] for d in listed["items"]} >= {"60", "30", "expired"}
+    assert by_title["Hukuk görüşü — icra takibi"]["confidentiality"] == "secret"
+    plan = by_title["Yönetim planı"]
+    pdf = await api.get(f"{base}/documents/{plan['id']}/versions/1/download", headers=manager)
+    assert pdf.content.startswith(b"%PDF-1.4")
+    assert pdf.content.rstrip().endswith(b"%%EOF")
+
+    resident = await login_headers(api, "sakin@demo.local", DEMO_PASSWORD)
+    mine = (await api.get(f"{base}/resident/documents", headers=resident)).json()["items"]
+    titles = {d["title"] for d in mine}
+    assert {"Yönetim planı", "Site kuralları", "Tadilat izin belgesi"} <= titles
+    assert not titles & {"Bina sigorta poliçesi", "Hukuk görüşü — icra takibi"}

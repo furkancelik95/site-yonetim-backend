@@ -46,6 +46,7 @@ class AuditAction(StrEnum):
     IMPORT = "import"
     DOWNLOAD = "download"
     EXPORT = "export"  # dışa aktarma (Excel) — Yazılım Dokümanı M-24, PLT-07
+    CONTACT_VIEW = "contact_view"  # maskeli kişisel verinin açılması (YAP-03 S2, KVKK)
 
 
 class ActorType(StrEnum):
@@ -159,6 +160,14 @@ AUDITED_TABLES = frozenset(
         "service_quotes",
         "permit_settings",
         "permits",
+        # güvenlik, devriye, otopark (ayar ve kurulum; ziyaretçi kararları ayrıca `record` ile,
+        # kişisel veri olmadan — saklama süresi denetimden kısa)
+        "gates",
+        "security_settings",
+        "patrol_points",
+        "patrol_plans",
+        "parking_spaces",
+        "parking_allocations",
         # yönetim (anket oyları gizli: poll_votes yazılmaz)
         "meetings",
         "meeting_agenda_items",
@@ -168,6 +177,15 @@ AUDITED_TABLES = frozenset(
         "stock_items",
         "stock_moves",
         "staff_members",
+        # insan kaynakları (IK-02..05): izin türü/açıklaması maskeli (sağlık verisi olabilir)
+        "shift_templates",
+        "shift_assignments",
+        "shift_weeks",
+        "leave_requests",
+        "timesheet_fixes",
+        "timesheet_days",
+        "timesheet_exports",
+        "attendance_settings",
         # ayarlar
         "charge_types",
         "allocation_rules",
@@ -181,24 +199,36 @@ AUDITED_TABLES = frozenset(
         "persons",
         "unit_parties",
         "registration_links",
+        "common_areas",
+        "unit_attribute_changes",
+        "structure_settings",
+        "household_members",
+        "vehicles",
+        "invitations",
+        "custom_fields",
+        "custom_field_values",
         # onay mekanizması (kararlar değişmez; vekâleten karar `delegate` aktörüyle)
         "approval_rules",
         "approval_rule_versions",
         "approval_requests",
         "approval_decisions",
         "approval_delegations",
+        # belge arşivi (gizli belge açılışı ayrıca document_access_logs'ta)
+        "documents",
+        "document_versions",
         # yetki / üyelik
         "site_memberships",
     }
 )
-_SKIPPED_COLUMNS = frozenset({"id", "site_id", "created_at", "updated_at"})
+# `token_hash`: davet belirtecinin özeti bile kayda girmez.
+_SKIPPED_COLUMNS = frozenset({"id", "site_id", "created_at", "updated_at", "token_hash"})
 _PENDING = "audit_pending"
 
 
 def _json(value: Any) -> Any:
     if isinstance(value, Decimal):
         return format(value, "f")
-    if isinstance(value, (dt.date, dt.datetime)):
+    if isinstance(value, (dt.date, dt.datetime, dt.time)):
         return value.isoformat()
     if isinstance(value, uuid.UUID):
         return str(value)
