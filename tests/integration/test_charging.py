@@ -40,10 +40,13 @@ async def test_3_1_tahakkuk_kaydedilince_borc_defterde_olusur(world: World) -> N
             entry = await session.scalar(select(LedgerEntry))
             summary = await session.scalar(select(AccountBalance))
     assert entry is not None
-    assert (entry.debit, entry.due_date) == (Decimal("1000.00"), date(2026, 6, 15))
+    assert (entry.debit, entry.due_date) == (
+        Decimal("1000.00"),
+        date(2026, 6, 10),
+    )  # K25: ayın 10'u
     assert entry.description == "06/2026 tahakkuku — Aidat"
     assert summary is not None
-    assert summary.oldest_open_due_date == date(2026, 6, 15)
+    assert summary.oldest_open_due_date == date(2026, 6, 10)
 
 
 async def test_3_2_ayni_donem_ikinci_kez_kesilemez(world: World) -> None:
@@ -108,7 +111,7 @@ async def test_3_10_ters_kayittan_sonra_siradaki_donem_ayni_ay(world: World) -> 
     preview = (await world.get("/charge-runs/preview")).json()
     assert preview["period"] == "09/2026"
     assert preview["charge_date"] == "2026-09-01"
-    assert preview["due_date"] == "2026-09-15"
+    assert preview["due_date"] == "2026-09-10"
     assert preview["already_charged"] is False
     assert (await post_run(world, "2026-09-01")).status_code == 201  # yeniden kesilebilir
 
@@ -135,6 +138,7 @@ async def test_preview_writes_nothing(world: World) -> None:
             "name": "Aidat",
             "amount": "1000.00",
             "distributed": "1000.00",
+            "exempted": "0.00",
         }
     ]
     charge = body["charges"]["items"][0]

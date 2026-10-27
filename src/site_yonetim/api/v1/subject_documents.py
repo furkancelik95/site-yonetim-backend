@@ -32,6 +32,7 @@ from site_yonetim.models import (
     Document,
     InsuranceClaim,
     InsurancePolicy,
+    Meeting,
     MeterReading,
     TaskCompletion,
     TechnicalAsset,
@@ -95,6 +96,9 @@ async def _default_title(ctx: SiteContext, subject_type: str, subject_id: uuid.U
     if subject_type == "technical_assets":
         asset = await session.get(TechnicalAsset, subject_id)
         return f"{asset.code} {asset.name}" if asset else None
+    if subject_type == "meetings":
+        meeting = await session.get(Meeting, subject_id)
+        return f"Toplantı {meeting.number} — {meeting.title}" if meeting else None
     return None  # pragma: no cover - `_spec` engeller
 
 
@@ -109,7 +113,10 @@ async def upload_subject_document(
     store: StoreDep,
     subject_type: Annotated[
         str,
-        Form(max_length=40, description="insurance_policies · insurance_claims · technical_assets"),
+        Form(
+            max_length=40,
+            description="insurance_policies · insurance_claims · technical_assets · meetings",
+        ),
     ],
     subject_id: Annotated[uuid.UUID, Form()],
     title: Annotated[str | None, Form(max_length=200, description="boş: dosya adı")] = None,

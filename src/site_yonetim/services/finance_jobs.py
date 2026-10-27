@@ -3,6 +3,9 @@
 1. Süresi dolan süreli açmaları yeniden kilitler (FIN-13).
 2. Borç takibi kademe kayıtları (FIN-12; gönderim K5'e bağlı — yalnız kayıt + yöneticiye görev).
 3. Bozulan ödeme planlarını işaretler ve finans yetkililerine bir kez bildirir (FIN-12).
+4. Gecikme tazminatı açıksa (K2) önceki ayın ay sonu gecikme kaydını yazar — dönem başına bir kez
+   (FIN-03, docs/04 §6; `services/late_fees.py`).
+5. Bütçe sapma uyarısı: kategori %90 / %100 eşiği (FIN-17; `services/annual_budgets.py`).
 Tekrar güvenli: aynı kademe/bildirim ikinci kez yazılmaz; bir sitedeki hata diğerini durdurmaz.
 """
 
@@ -17,7 +20,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from site_yonetim.db.tenancy import all_sites_scope, site_scope
 from site_yonetim.models import Site
 from site_yonetim.models.audit import Actor, ActorType, set_actor
-from site_yonetim.services import debt_tracking, payment_plans, periods
+from site_yonetim.services import (
+    annual_budgets,
+    debt_tracking,
+    late_fees,
+    payment_plans,
+    periods,
+)
 
 logger = logging.getLogger(__name__)
 JOB_ACTOR = "Finans işi"
@@ -28,13 +37,17 @@ class SiteResult:
     relocked: int
     reminders: int
     broken_plans: int
+    late_fee_accounts: int = 0
+    budget_alerts: int = 0
 
 
 async def run_site(session: AsyncSession, site: Site, *, now: datetime, today: date) -> SiteResult:
     relocked = await periods.relock_expired(session, now)
     reminders = await debt_tracking.run_stages(session, site, today)
     broken = await payment_plans.mark_broken(session, site, today, now)
-    return SiteResult(relocked, reminders, broken)
+    late = await late_fees.run_month_end(session, today, now)
+    alerts = await annual_budgets.run_alerts(session, site, today)
+    return SiteResult(relocked, reminders, broken, late.account_count if late else 0, alerts)
 
 
 async def run_all(

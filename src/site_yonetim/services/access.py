@@ -5,6 +5,8 @@ bilinçli `all_sites_scope()` kullanımı buradadır ve sorgu **yalnız o kullan
 (ve o sitelerin rol tanımlarıyla) sınırlıdır. İstek oturumu bu kapsama sabitlenmesin diye kendi
 kısa oturumunu açar.
 
+Platform yöneticisi: yalnız onaylı, süresi dolmamış destek oturumları (PYN-04, K12) — salt okunur.
+
 Her istekte o anda etkin rol atamaları okunur: süresi dolan atama bir sonraki istekte yetki
 vermez, kaldırılan rol bir sonraki istekte düşer (PLT-09).
 """
@@ -24,10 +26,12 @@ from site_yonetim.domain.access import (
     RoleScope,
     SiteRef,
     SiteRole,
+    SupportGrant,
     UserAccess,
     resolve_access,
 )
 from site_yonetim.domain.roles import RoleCatalog, build_catalog
+from site_yonetim.domain.support import SUPPORT_SESSION_PERMISSIONS
 from site_yonetim.models import OrganizationMembership as OrganizationMembershipRow
 from site_yonetim.models import (
     Site,
@@ -38,6 +42,7 @@ from site_yonetim.models import (
     User,
 )
 from site_yonetim.services.roles import active_at, stored
+from site_yonetim.services.support import granted_sessions
 
 
 def _ref(site: Site) -> SiteRef:
@@ -70,6 +75,19 @@ async def load_user_access(
     explicit: list[ExplicitMembership] = []
     organizations: list[OrganizationMembership] = []
     catalogs: dict[uuid.UUID, RoleCatalog] = {}
+    support: list[SupportGrant] = []
+
+    if user.is_active and user.is_platform_admin:
+        # PYN-04, K12: platform ekibi yalnız kendi açtığı, tesis yöneticisinin onayladığı ve
+        # süresi dolmamış destek oturumunun sitesine salt okunur erişir. Süre dolunca ya da
+        # yönetici bitirince bir sonraki istekte erişim kapanır (zamanlanmış işi beklemez).
+        async with factory() as session:
+            with all_sites_scope():
+                granted = await granted_sessions(session, user.id, moment)
+        support = [
+            SupportGrant(_ref(g.site), g.session_id, g.ends_at, SUPPORT_SESSION_PERMISSIONS)
+            for g in granted
+        ]
 
     if user.is_active and not user.is_platform_admin:
         async with factory() as session:
@@ -166,4 +184,5 @@ async def load_user_access(
         explicit=explicit,
         organizations=organizations,
         site_level=site_level,
+        support=support,
     )

@@ -55,6 +55,8 @@ class FinanceParamsOut(BaseModel):
     late_fee_monthly_rate_percent: Money = Field(description="aylık oran (%), en fazla 5,00")
     late_fee_method: LateFeeMethod
     late_fee_grace_days: int
+    late_fee_cap_percent: int = Field(description="tavan: ana borcun %X'i (0 = yok)")
+    late_fee_minimum_amount: Money = Field(description="bu tutarın altındaki gecikme yazılmaz")
     allocation_order: AllocationOrder = Field(description="K24 mahsup sırası")
     debtor_restriction_enabled: bool = Field(
         description="K11 borçlu hizmet kısıtı (varsayılan kapalı)"
@@ -80,6 +82,8 @@ class FinanceParamsIn(BaseModel):
     late_fee_monthly_rate_percent: Money | None = None
     late_fee_method: str | None = None
     late_fee_grace_days: int | None = None
+    late_fee_cap_percent: int | None = None
+    late_fee_minimum_amount: Money | None = None
     allocation_order: str | None = None
     debtor_restriction_enabled: bool | None = None
     debtor_restriction_min_amount: Money | None = None
@@ -152,7 +156,11 @@ class FinanceParamVersionIn(BaseModel):
 
 def _changes(values: FinanceParamsIn) -> dict[str, object]:
     raw = values.model_dump(exclude_unset=True, exclude_none=True)
-    for key in ("late_fee_monthly_rate_percent", "debtor_restriction_min_amount"):
+    for key in (
+        "late_fee_monthly_rate_percent",
+        "late_fee_minimum_amount",
+        "debtor_restriction_min_amount",
+    ):
         if key in raw:
             raw[key] = str(raw[key])
     return raw

@@ -62,12 +62,17 @@ class Permission(StrEnum):
     DOCUMENTS_READ = "documents.read"  # gizli dışındaki belgeler (sakin kendi ucunu kullanır)
     DOCUMENTS_MANAGE = "documents.manage"  # yükleme ve yeni sürüm
     DOCUMENTS_CONFIDENTIAL = "documents.confidential"  # gizli belgeler; her açılış kayda geçer
+    # KVKK (RAP-04; servis isteği 80): başvuru yanıtı, aydınlatma metni, saklama, veri envanteri
+    PRIVACY_MANAGE = "privacy.manage"
     # Bildirim gönderimi (PLT-05, ILT-05): SMS hesabı, kota, sessiz saat, teslim kayıtları
     NOTIFICATIONS_MANAGE = "notifications.manage"
     # Planlı rapor gönderimi (RAP-05)
     REPORTS_SCHEDULE = "reports.schedule"
     TRANSPARENCY_MANAGE = "transparency.manage"  # şeffaflık raporu hazırlama (RAP-02)
     TRANSPARENCY_PUBLISH = "transparency.publish"  # onay kuralı yoksa doğrudan yayın
+    # Sakin olarak görüntüle (PLT-12): hiçbir rol şablonunda varsayılan açık değildir; siteye özel
+    # rolle verilir. Platform destek ekibi yalnız müşteri onaylı destek oturumunda kullanır.
+    SUPPORT_VIEW_AS_RESIDENT = "support.view_as_resident"
 
 
 class SiteRole(StrEnum):
@@ -112,7 +117,7 @@ ROLE_PERMISSIONS: dict[SiteRole, frozenset[Permission]] = {
             P.POLLS_MANAGE, P.CONTRACTS_MANAGE, P.INVENTORY_READ, P.INVENTORY_MANAGE,
             P.STAFF_MANAGE, P.APPROVAL_RULES_READ, P.APPROVAL_RULES_MANAGE, P.PEOPLE_CONTACT,
             P.DOCUMENTS_READ, P.DOCUMENTS_MANAGE, P.DOCUMENTS_CONFIDENTIAL,
-            P.NOTIFICATIONS_MANAGE, P.REPORTS_SCHEDULE,
+            P.NOTIFICATIONS_MANAGE, P.REPORTS_SCHEDULE, P.PRIVACY_MANAGE,
             P.TRANSPARENCY_MANAGE, P.TRANSPARENCY_PUBLISH,
         }
     ),
@@ -216,6 +221,14 @@ ORGANIZATION_ROLE_TO_SITE_ROLE: dict[OrganizationRole, SiteRole] = {
 # --- Erişim çözümleme -------------------------------------------------------
 
 
+class AccessMode(StrEnum):
+    """Sitedeki erişimin kaynağı (PYN-04, PLT-12)."""
+
+    MEMBER = "member"  # üyelik ya da şirket rolü
+    SUPPORT_SESSION = "support_session"  # müşteri onaylı destek oturumu — salt okunur
+    VIEW_AS = "view_as"  # sakin olarak görüntüleme — salt okunur
+
+
 class RoleScope(StrEnum):
     SITE = "site"  # tesis geneli
     BLOCK = "block"  # yalnız bir blok
@@ -314,6 +327,14 @@ class SiteAccess:
     organization_id: uuid.UUID | None
     organization_role: OrganizationRole | None
     scoped: Mapping[Permission, frozenset[uuid.UUID]] = field(default_factory=dict)
+    # Destek oturumu / sakin olarak görüntüleme: salt okunur; yazma isteği 403 (api/deps.py)
+    mode: AccessMode = AccessMode.MEMBER
+    session_id: uuid.UUID | None = None
+    ends_at: datetime | None = None
+
+    @property
+    def read_only(self) -> bool:
+        return self.mode is not AccessMode.MEMBER
 
     @property
     def role(self) -> str:
@@ -364,6 +385,44 @@ def _organization_role(value: str) -> OrganizationRole | None:
         return None
 
 
+@dataclass(frozen=True, slots=True)
+class SupportGrant:
+    """Platform kullanıcısının onaylı, süresi dolmamış destek oturumu (PYN-04)."""
+
+    site: SiteRef
+    session_id: uuid.UUID
+    ends_at: datetime
+    permissions: frozenset[Permission]
+
+
+SUPPORT_ROLE_KEY = "support-session"
+SUPPORT_ROLE_NAME = "Destek oturumu (salt okunur)"
+
+
+def support_access(grant: SupportGrant) -> SiteAccess:
+    role = RoleGrant(
+        key=SUPPORT_ROLE_KEY,
+        name=SUPPORT_ROLE_NAME,
+        level=LEVEL_MAX,
+        permissions=grant.permissions,
+        ends_at=grant.ends_at,
+    )
+    return SiteAccess(
+        site_id=grant.site.id,
+        name=grant.site.name,
+        slug=grant.site.slug,
+        roles=(role,),
+        permissions=grant.permissions,
+        person_id=None,
+        is_derived=True,
+        organization_id=grant.site.organization_id,
+        organization_role=None,
+        mode=AccessMode.SUPPORT_SESSION,
+        session_id=grant.session_id,
+        ends_at=grant.ends_at,
+    )
+
+
 # (site, şablon) → sitenin bu şablon için belirlediği düzey (yoksa None → varsayılan)
 LevelLookup = Callable[[uuid.UUID, SiteRole], int | None]
 
@@ -378,11 +437,13 @@ def resolve_access(
     explicit: Iterable[ExplicitMembership],
     organizations: Iterable[OrganizationMembership],
     site_level: LevelLookup | None = None,
+    support: Iterable[SupportGrant] = (),
 ) -> UserAccess:
     """Kullanıcının sitelerdeki erişimini tek seferde çözer (docs/05 §4, PLT-02).
 
     - Pasif kullanıcı hiçbir siteye erişemez.
-    - Platform yöneticisinin site üyeliği yoktur; kayıtta olsa bile yok sayılır (§5).
+    - Platform yöneticisinin site üyeliği yoktur; kayıtta olsa bile yok sayılır (§5). Yalnız
+      müşteri onaylı, süresi dolmamış destek oturumu salt okunur erişim verir (`support`, K12).
     - Şirket üyeliği, şirketin bütün sitelerine eşlenmiş rolle erişim verir.
     - Açık site üyeliği türetilmişi ezer. **Pasif açık üyelik** erişim vermez ve o sitede
       türetilmiş erişimi de kapatır — bir sitedeki erişimi kaldırmanın güvenilir yolu.
@@ -392,8 +453,17 @@ def resolve_access(
     """
     user_kind = UserKind(kind)
     base = UserAccess(user_id, full_name, user_kind, is_platform_admin)
-    if not is_active or is_platform_admin:
+    if not is_active:
         return base
+    if is_platform_admin:
+        # Platform ekibi müşteri verisini yalnız onaylı, süreli destek oturumunda görür (K12).
+        granted = tuple(
+            sorted(
+                (support_access(g) for g in support),
+                key=lambda s: (s.name.casefold(), s.slug),
+            )
+        )
+        return UserAccess(user_id, full_name, user_kind, is_platform_admin, granted)
 
     by_site: dict[uuid.UUID, SiteAccess] = {}
     for org in organizations:

@@ -7,10 +7,14 @@ from site_yonetim.api.v1 import (
     ad_hoc_charges,
     announcements,
     approvals,
+    assembly,
     audit,
+    audit_packages,
     auth,
     bank_imports,
+    billing_rules,
     budget,
+    budgets,
     cash,
     cash_days,
     certificates,
@@ -18,6 +22,7 @@ from site_yonetim.api.v1 import (
     charges,
     checklists,
     communication,
+    contract_performance,
     contracts,
     custom_fields,
     dashboard,
@@ -32,6 +37,7 @@ from site_yonetim.api.v1 import (
     import_history,
     imports,
     incidents,
+    index_values,
     insurance,
     inventory,
     invitations,
@@ -49,12 +55,17 @@ from site_yonetim.api.v1 import (
     payments,
     plates,
     platform,
+    platform_support,
     polls,
     portfolio,
+    privacy,
+    purchasing,
     recurring_expenses,
     registrations,
+    report_catalog,
     reports,
     requests,
+    reservations,
     resident,
     routine_tasks,
     scheduled_reports,
@@ -70,6 +81,7 @@ from site_yonetim.api.v1 import (
     structure,
     structure_defs,
     subject_documents,
+    support,
     technical_assets,
     timesheets,
     transparency,
@@ -83,6 +95,8 @@ api_router = APIRouter(prefix=API_V1_PREFIX)
 api_router.include_router(health.router)
 api_router.include_router(auth.router)
 api_router.include_router(me.router)
+api_router.include_router(privacy.me_router)  # /me/consents — onay beklerken de çalışır
+api_router.include_router(privacy.public_router)
 api_router.include_router(members.catalog_router)
 api_router.include_router(sessions.router)
 api_router.include_router(account_security.router)
@@ -92,6 +106,9 @@ api_router.include_router(scheduled_reports.router)
 api_router.include_router(notifications.me_router)
 api_router.include_router(sites.router)
 api_router.include_router(platform.router)
+api_router.include_router(platform_support.router)
+api_router.include_router(platform_support.knowledge_router)
+api_router.include_router(support.router)
 api_router.include_router(security.router)  # /units/lookup, /units/{id}'den önce
 api_router.include_router(incidents.router)
 # Güvenlik, devriye, otopark (servis istekleri 40–46, K30); /units/{id}/… yapıdan önce
@@ -106,6 +123,8 @@ api_router.include_router(structure_defs.router)
 api_router.include_router(vehicles.router)
 api_router.include_router(custom_fields.router)
 api_router.include_router(budget.router)
+api_router.include_router(budgets.router)
+api_router.include_router(billing_rules.router)
 api_router.include_router(charges.router)
 api_router.include_router(fiscal_periods.router)
 api_router.include_router(finance_params.router)
@@ -123,6 +142,9 @@ api_router.include_router(payment_plans.router)
 api_router.include_router(requests.router)
 api_router.include_router(departments.router)
 api_router.include_router(service_desk.router)
+# Rezervasyon (servis istekleri 59–61)
+api_router.include_router(reservations.router)
+api_router.include_router(reservations.resident_router)
 api_router.include_router(announcements.router)
 api_router.include_router(announcements.scheduled_router)
 api_router.include_router(announcements.resident_router)
@@ -135,6 +157,10 @@ api_router.include_router(cash.router)
 api_router.include_router(recurring_expenses.router)
 api_router.include_router(expenses.router)
 api_router.include_router(reports.router)
+# Rapor kataloğu (SR 79): /reports/{key}/export.xlsx, /reports/income-expense/…'ten sonra
+api_router.include_router(report_catalog.router)
+api_router.include_router(audit_packages.router)
+api_router.include_router(privacy.router)
 api_router.include_router(dashboard.router)
 api_router.include_router(resident.router)
 api_router.include_router(polls.resident_router)
@@ -148,9 +174,14 @@ api_router.include_router(invitations.router)
 api_router.include_router(invitations.public_router)
 api_router.include_router(setup.router)
 api_router.include_router(meetings.router)
+api_router.include_router(assembly.router)
 api_router.include_router(polls.router)
 api_router.include_router(contracts.router)
+api_router.include_router(contract_performance.router)
+api_router.include_router(index_values.router)
 api_router.include_router(inventory.router)
+api_router.include_router(purchasing.router)
+api_router.include_router(purchasing.public_router)
 api_router.include_router(keys.router)
 api_router.include_router(checklists.router)
 api_router.include_router(insurance.router)

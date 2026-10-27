@@ -23,6 +23,7 @@ from site_yonetim.domain.members import FormFieldError
 from site_yonetim.domain.modules import ModuleKey
 from site_yonetim.domain.operations import OperationRuleError
 from site_yonetim.models import Meeting
+from site_yonetim.services import assembly as assembly_svc
 from site_yonetim.services import meetings as svc
 
 router = APIRouter(prefix="/sites/{slug}/meetings", tags=["toplantı"])
@@ -191,6 +192,13 @@ async def record_decisions(
     meeting_id: uuid.UUID, body: DecisionsIn, ctx: Manager, now: NowDep
 ) -> Written[MeetingOut]:
     meeting = await _found(ctx, meeting_id, lock=True)
+    if await assembly_svc.assembly_started(ctx.session, meeting.id):
+        raise ApiError(
+            HTTPStatus.CONFLICT,
+            "assembly_in_progress",
+            "Bu genel kurulun hazirunu ya da oylaması başladı; kararlar tutanak kesinleşince "
+            "genel kurul ekranından yazılır.",
+        )
     try:
         await svc.decide(
             ctx.session,

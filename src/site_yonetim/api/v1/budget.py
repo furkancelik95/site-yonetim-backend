@@ -9,14 +9,14 @@ from datetime import date
 from decimal import Decimal
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Response, status
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func, select
 
-from site_yonetim.api.deps import SiteContext, TodayDep
+from site_yonetim.api.deps import CurrentUserDep, NowDep, SiteContext, TodayDep
 from site_yonetim.api.schemas import Money, Page, PageParams, Written
 from site_yonetim.api.v1.finance_common import BudgetManage, FinanceRead, finance_error
-from site_yonetim.core.errors import NotFoundError
+from site_yonetim.core.errors import ApiError, NotFoundError
 from site_yonetim.domain.charging.periods import period_amount
 from site_yonetim.domain.finance import (
     AllocationKind,
@@ -38,7 +38,9 @@ from site_yonetim.models import (
     ChargeType,
     UnitUsage,
 )
+from site_yonetim.services import annual_budgets
 from site_yonetim.services import budget as svc
+from site_yonetim.services.approvals import ApprovalError, Person
 
 router = APIRouter(prefix="/sites/{slug}", tags=["işletme projesi"])
 Paging = Annotated[PageParams, Depends()]
@@ -137,6 +139,9 @@ class BudgetPlanOut(BaseModel):
     finalized_on: date | None
     total_annual_amount: Money
     item_count: int
+    finalize_request_id: uuid.UUID | None = Field(
+        default=None, description="'Bütçe' onayına giden kesinleştirme talebi (D-16)"
+    )
 
     @classmethod
     def of(cls, plan: BudgetPlan, total: tuple[Decimal, int] | None = None) -> BudgetPlanOut:
@@ -151,6 +156,7 @@ class BudgetPlanOut(BaseModel):
             finalized_on=plan.finalized_on,
             total_annual_amount=amount,
             item_count=count,
+            finalize_request_id=plan.finalize_request_id,
         )
 
 
@@ -161,7 +167,10 @@ class BudgetItemOut(BaseModel):
     charge_type_id: uuid.UUID
     allocation_rule_id: uuid.UUID
     annual_amount: Money
-    period_amount: Money = Field(description="bir kesimdeki tutar (aylıkta yıllık/12)")
+    period_amount: Money = Field(
+        description="ilk kesimdeki tutar: yıllık tutar dönemlere `distribute` ile bölünür, kuruş "
+        "farkı ilk dönemlere (yıllık toplam korunur, D-5)"
+    )
     frequency: Frequency
     scope_kind: ScopeKind
     scope_block_ids: list[uuid.UUID]
@@ -377,15 +386,42 @@ async def notify_plan(
     )
 
 
-@router.post("/budget-plans/{plan_id}/finalize", summary="Kesinleştir")
+@router.post(
+    "/budget-plans/{plan_id}/finalize",
+    summary="Kesinleştir ('Bütçe' onay kuralı varsa onaya gider: 202)",
+    responses={202: {"description": "Onaya gönderildi"}},
+)
 async def finalize_plan(
-    plan_id: uuid.UUID, ctx: BudgetManage, today: TodayDep
+    plan_id: uuid.UUID,
+    ctx: BudgetManage,
+    today: TodayDep,
+    now: NowDep,
+    current: CurrentUserDep,
+    response: Response,
 ) -> Written[BudgetPlanDetail]:
     plan = await _plan(ctx, plan_id)
     try:
+        request = await annual_budgets.request_plan_finalize(
+            ctx.session,
+            ctx.site,
+            plan,
+            actor=Person(current.user.id, current.user.full_name),
+            today=today,
+            now=now,
+        )
+        if request is not None:
+            await ctx.session.commit()
+            response.status_code = status.HTTP_202_ACCEPTED
+            return Written(
+                data=await _detail(ctx, plan),
+                message=f"{plan.fiscal_year} işletme projesinin kesinleştirmesi 'Bütçe' onayına "
+                f"gönderildi (talep #{request.number}).",
+            )
         previous = await svc.finalize(ctx.session, plan, today)
     except FinanceRuleError as exc:
         raise finance_error(exc) from exc
+    except ApprovalError as exc:
+        raise ApiError(exc.status, exc.code, exc.message) from exc
     await ctx.session.commit()
     message = f"{plan.fiscal_year} işletme projesi kesinleşti; tahakkuklar bu projeden kesilecek."
     if previous:

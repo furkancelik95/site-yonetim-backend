@@ -45,6 +45,7 @@ from site_yonetim.models import (
 from site_yonetim.models.audit import AuditAction, record
 from site_yonetim.services import approvals as approvals_svc
 from site_yonetim.services import delivery, structure
+from site_yonetim.services import privacy as privacy_svc
 from site_yonetim.services.approvals import ExecutionError
 from site_yonetim.services.approvals import Person as ApprovalPerson
 
@@ -288,6 +289,8 @@ async def _login(session: AsyncSession, r: Registration, person: Person) -> str:
     if person.user_id is None:
         person.user_id = user.id
     await session.flush()
+    # Başvurudaki bilgilendirme onayı ve açık rıza hesaba bağlanır (P6).
+    await privacy_svc.link_registration(session, user.id, r)
     return login
 
 

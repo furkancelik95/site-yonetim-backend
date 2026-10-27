@@ -1,5 +1,5 @@
-"""Kayda bağlı belge — poliçe, hasar dosyası, teknik varlık ve muayene raporu belgeleri belge
-arşivine (`documents`, RAP-03) yazılır ve `subject_type/subject_id` ile kayda bağlanır.
+"""Kayda bağlı belge — poliçe, hasar dosyası, teknik varlık, muayene raporu ve toplantı belgeleri
+belge arşivine (`documents`, RAP-03) yazılır ve `subject_type/subject_id` ile kayda bağlanır.
 
 - Belge "yalnız yönetim" gizliliğinde, tüm site kapsamında açılır; ad kaydın kimliğini taşır
   (aynı ad → aynı belgenin yeni sürümü). Ad başka kayda bağlı bir belgeyle çakışırsa reddedilir.
@@ -50,6 +50,10 @@ SUBJECTS: dict[str, SubjectSpec] = {
     ),
     "asset_inspection_records": SubjectSpec(
         Permission.INVENTORY_READ, Permission.INVENTORY_MANAGE, DocumentKind.OTHER
+    ),
+    # Genel kurul: imzalı tutanak ve toplantı ekleri (TOP-04)
+    "meetings": SubjectSpec(
+        Permission.MEETINGS_READ, Permission.MEETINGS_MANAGE, DocumentKind.MINUTES
     ),
 }
 

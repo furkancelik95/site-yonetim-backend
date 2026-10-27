@@ -35,10 +35,18 @@ async def _purchase(session: Any, request: ApprovalRequest) -> None:
 
 @pytest.fixture(autouse=True)
 def purchase_executor() -> Any:
+    """Satın alma modülünün gerçek yürütücüsü/kapatıcısı test süresince sahtesiyle değişir ve
+    sonra geri konur (diğer test modülleri gerçeğini kullanır)."""
     EXECUTED.clear()
+    executor = svc._EXECUTORS.get(ActionType.PURCHASE_REQUEST)
+    closer = svc._CLOSERS.pop(ActionType.PURCHASE_REQUEST, None)
     svc.register_executor(ActionType.PURCHASE_REQUEST, _purchase)
     yield
     svc._EXECUTORS.pop(ActionType.PURCHASE_REQUEST, None)
+    if executor is not None:
+        svc.register_executor(ActionType.PURCHASE_REQUEST, executor)
+    if closer is not None:
+        svc.register_closer(ActionType.PURCHASE_REQUEST, closer)
 
 
 @dataclass

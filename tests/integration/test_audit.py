@@ -67,8 +67,10 @@ async def test_tahsilat_kim_ne_zaman_kaydedilir(world: World) -> None:
     assert isinstance(after, dict)
     assert (after["amount"], after["method"], after["date"]) == ("400.00", "cash", "2026-06-18")
     assert row["before"] is None
-    # koşu tek satırdır; ürettiği borç satırları (türetilmiş, değişmez) ayrıca yazılmaz
-    assert len(await items(world, entity="charge_runs")) == 1
+    # koşu: taslak oluşur ve kesinleşir (FIN-05) — iki satır; ürettiği borç satırları
+    # (türetilmiş, değişmez) ayrıca yazılmaz
+    runs = await items(world, entity="charge_runs")
+    assert sorted(r["action"] for r in runs) == ["create", "update"]
     assert await items(world, entity="charges") == []
     assert await items(world, entity="ledger_entries") == []
 

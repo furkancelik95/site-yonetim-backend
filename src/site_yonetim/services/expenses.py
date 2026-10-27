@@ -33,7 +33,15 @@ from site_yonetim.domain.cash import (
 from site_yonetim.domain.charging.periods import YearMonth
 from site_yonetim.domain.files import check_document
 from site_yonetim.domain.finance import FinanceRuleError
-from site_yonetim.models import Expense, ExpenseCategory, Period, StoredFile
+from site_yonetim.models import (
+    Expense,
+    ExpenseCategory,
+    Period,
+    PurchaseQuote,
+    PurchaseReceipt,
+    StoredFile,
+    VendorInvoice,
+)
 from site_yonetim.services import cash, period_lock
 from site_yonetim.services.files import FileStore
 
@@ -62,6 +70,8 @@ class NewExpense:
     paid: bool = False
     paid_on: date | None = None
     cash_account_id: uuid.UUID | None = None
+    # Daha önce kaydedilmiş belge (ör. tedarikçi faturası görüntüsü — satın alma "ödendi")
+    stored_file_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,7 +113,7 @@ async def create(
         file_name, file_kind = check_document(document.name, document.data)
     period = await _period(session, data.day)
 
-    stored_file_id = None
+    stored_file_id = data.stored_file_id
     written = None
     if document is not None and file_kind is not None and file_name is not None and store:
         scope = current_scope()
@@ -324,6 +334,14 @@ async def stored_file(session: AsyncSession, file_id: uuid.UUID) -> StoredFile |
 
 
 async def is_expense_document(session: AsyncSession, file_id: uuid.UUID) -> bool:
-    return (
-        await session.scalar(select(Expense.id).where(Expense.stored_file_id == file_id).limit(1))
-    ) is not None
+    """Belge bir gidere ya da satın alma kaydına (teklif, kabul, tedarikçi faturası) bağlı mı?
+    İkisi de `expenses.read` ile okunur."""
+    for column in (
+        Expense.stored_file_id,
+        PurchaseQuote.stored_file_id,
+        PurchaseReceipt.stored_file_id,
+        VendorInvoice.stored_file_id,
+    ):
+        if await session.scalar(select(column).where(column == file_id).limit(1)) is not None:
+            return True
+    return False
