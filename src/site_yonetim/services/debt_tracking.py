@@ -26,7 +26,7 @@ from site_yonetim.domain.debt_tracking import (
     BUCKET_LABELS,
     ActionKind,
     AgingBucket,
-    Channel,
+    CollectionChannel,
     LetterStatus,
     PlanStatus,
     ReminderStage,
@@ -204,9 +204,9 @@ async def timeline(session: AsyncSession, account_id: uuid.UUID, today: date) ->
 # --- Elle kayıt ---------------------------------------------------------------------------
 
 
-def action_message(kind: ActionKind, channel: Channel | None) -> str:
+def action_message(kind: ActionKind, channel: CollectionChannel | None) -> str:
     if kind is ActionKind.REMINDER:
-        via = "SMS" if channel is Channel.SMS else "uygulama bildirimi"
+        via = "SMS" if channel is CollectionChannel.SMS else "uygulama bildirimi"
         return f"Hatırlatma ({via}) kaydedildi. {NOT_SENT}"
     return "Arama notu kaydedildi." if kind is ActionKind.CALL else "Not kaydedildi."
 
@@ -238,7 +238,7 @@ async def add_action(
 async def bulk_reminders(
     session: AsyncSession, account_ids: list[uuid.UUID], *, channel: str | None, actor: Person
 ) -> int:
-    via = Channel.SMS if channel == Channel.SMS.value else Channel.APP
+    via = CollectionChannel.SMS if channel == CollectionChannel.SMS.value else CollectionChannel.APP
     found = list(
         await session.scalars(select(LedgerAccount.id).where(LedgerAccount.id.in_(account_ids)))
     )
@@ -375,9 +375,17 @@ approvals_svc.register_closer(ActionType.DEMAND_LETTER, _close_letter)
 # --- Kademe işi ---------------------------------------------------------------------------
 
 _STAGE_ACTION = {
-    ReminderStage.APP: (ActionKind.REMINDER, Channel.APP, "Kademe 1 — uygulama bildirimi"),
-    ReminderStage.SMS: (ActionKind.REMINDER, Channel.SMS, "Kademe 2 — SMS hatırlatması"),
-    ReminderStage.CALL: (ActionKind.CALL, Channel.PHONE, "Kademe 3 — yönetici araması (görev)"),
+    ReminderStage.APP: (
+        ActionKind.REMINDER,
+        CollectionChannel.APP,
+        "Kademe 1 — uygulama bildirimi",
+    ),
+    ReminderStage.SMS: (ActionKind.REMINDER, CollectionChannel.SMS, "Kademe 2 — SMS hatırlatması"),
+    ReminderStage.CALL: (
+        ActionKind.CALL,
+        CollectionChannel.PHONE,
+        "Kademe 3 — yönetici araması (görev)",
+    ),
     ReminderStage.DEMAND_LETTER: (ActionKind.NOTE, None, "İhtarname hazırlığı kademesi"),
 }
 
