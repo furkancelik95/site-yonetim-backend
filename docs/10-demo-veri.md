@@ -81,6 +81,11 @@ Toplam **84 bağımsız bölüm**. Oranlar bilinçli farklı: panoda sağlıklı
   raporu, süresi dolmuş asansör etiketi (ilk blok), temizlik sözleşmesi, mali tablolar, bir gizli
   belge; demo sakinin bölümüne özel "Tadilat izin belgesi". İçerik küçük geçerli PDF (`demo_pdf`),
   `FILE_STORAGE_ROOT` altına yazılır.
+- **Satın alma** (yalnız Aksu Konakları; servis istekleri 62–67): 4 tedarikçi (biri pasif), açık
+  talep (teklifsiz), teklifli talep (personel teklifi + açık tedarikçi linki), sipariş + tam kabul
+  ("LED ampul 9W" stoğuna 40 adet girer) + **eşleşen fatura** (ödenecekler listesinde), kısmi kabul
+  + **fark çıkan fatura** (fark onayı bekliyor, muhasebe girdi — yönetici karar verebilir). Talebi
+  teknik görevli açar, yönetici onaylar, siparişi ve faturayı muhasebe girer.
 
 ## 2. Demo hesapları
 

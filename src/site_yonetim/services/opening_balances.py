@@ -19,10 +19,10 @@ from enum import StrEnum
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from site_yonetim.domain.finance import FinanceRuleError, LedgerSource, PeriodStatus
+from site_yonetim.domain.finance import FinanceRuleError, LedgerSource
 from site_yonetim.domain.money import ZERO, round_money
-from site_yonetim.models import LedgerAccount, LedgerEntry, Period
-from site_yonetim.services import ledger
+from site_yonetim.models import LedgerAccount, LedgerEntry
+from site_yonetim.services import ledger, period_lock
 
 DESCRIPTION = "Devir bakiye"
 
@@ -59,19 +59,7 @@ async def record(
         raise FinanceRuleError(
             "account_closed", "Bu cari hesap kapatılmış; devir bakiye yazılamaz.", conflict=True
         )
-    closed = await session.scalar(
-        select(Period.id).where(
-            Period.year == day.year,
-            Period.month == day.month,
-            Period.status == PeriodStatus.CLOSED.value,
-        )
-    )
-    if closed is not None:
-        raise FinanceRuleError(
-            "period_closed",
-            f"{day:%m/%Y} dönemi kapalı; bu tarihe devir bakiye yazılamaz.",
-            conflict=True,
-        )
+    await period_lock.ensure_writable(session, day)
     await ledger.lock_accounts(session, [account.id])
     exists = await session.scalar(
         select(LedgerEntry.id).where(

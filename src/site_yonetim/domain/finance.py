@@ -17,8 +17,13 @@ class FinanceRuleError(Exception):
 
 
 class PeriodStatus(StrEnum):
+    """Dönem kapanışı (FIN-13): Açık → Kapanışta → Kilitli; Kilitli → (istisnai) Süreli açık →
+    Kilitli. Kapanışta ve kilitli dönemde finansal kayıt yazılamaz (`services/periods.py`)."""
+
     OPEN = "open"
-    CLOSED = "closed"  # kapalı döneme kayıt yazılamaz
+    CLOSING = "closing"  # kontrol listesi geçti; yeni işlemler sonraki döneme
+    LOCKED = "locked"  # hiçbir finansal kayıt eklenemez/değişmez
+    TEMP_OPEN = "temp_open"  # onaylı, süreli açma — süre bitince kendiliğinden kilitlenir
 
 
 class ExpenseCategoryKind(StrEnum):
@@ -78,13 +83,26 @@ class ScopeKind(StrEnum):
 
 
 class ChargeRunStatus(StrEnum):
-    DRAFT = "draft"
+    """FIN-05 dönem durum modeli: Taslak → Onay bekliyor → Onaylandı → Kesinleşti (`posted`).
+    Kesinleşmiş koşu yalnız ters kayıtla düzeltilir (`reversed`)."""
+
+    DRAFT = "draft"  # taslak: önizleme anlık görüntüsü saklanır, deftere yazılmaz
+    APPROVAL_PENDING = "approval_pending"  # "Tahakkuk" onay kuralında
+    APPROVED = "approved"  # onaylandı; tahakkuk tarihinde kesinleşir
+    REJECTED = "rejected"  # onay reddedildi / geri çekildi — taslak düzeltilip yeniden gönderilir
+    CANCELLED = "cancelled"  # taslaktan vazgeçildi
     POSTED = "posted"
     REVERSED = "reversed"
 
 
+OPEN_DRAFT_STATUSES = frozenset(
+    {ChargeRunStatus.DRAFT, ChargeRunStatus.APPROVAL_PENDING, ChargeRunStatus.APPROVED}
+)
+
+
 class ScheduleRunStatus(StrEnum):
     POSTED = "posted"  # tahakkuk kesildi
+    DRAFTED = "drafted"  # taslak hazırlandı ve "Tahakkuk" onayına gönderildi (FIN-05)
     SKIPPED = "skipped"  # dönem zaten kesilmiş / proje yok / önizlemede uyarı
     FAILED = "failed"  # beklenmeyen hata — ertesi gün yeniden denenir
 
@@ -98,5 +116,7 @@ class LedgerSource(StrEnum):
     ADVANCE = "advance"
     OPENING = "opening"  # devir bakiye: sisteme geçişte önceki yönetimden kalan (hesap başına bir)
     REFUND = "refund"  # alacaklı bakiyenin sakine geri ödenmesi — açık borç sayılmaz
+    AD_HOC_CHARGE = "ad_hoc_charge"  # dönem dışı ücret (FIN-06)
+    PAYMENT_PLAN = "payment_plan"  # ödeme planı: yapılandırma alacağı + taksit borçları (FIN-12)
     SERVICE = "service"  # ücretli hizmet (HIZ-04): sakinin onayladığı teklif
     DEPOSIT = "deposit"  # tadilat depozitosu (HIZ-05); iadesi ters kayıt

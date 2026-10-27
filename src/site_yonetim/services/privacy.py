@@ -16,7 +16,7 @@ from sqlalchemy import Select, and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from site_yonetim.db.tenancy import all_sites_scope, site_scope
-from site_yonetim.domain.access import ROLE_PERMISSIONS, Permission
+from site_yonetim.domain.access import Permission
 from site_yonetim.domain.notifications import NotificationCategory
 from site_yonetim.domain.privacy import (
     KIND_LABELS,
@@ -53,8 +53,8 @@ from site_yonetim.models import (
     VisitorInvite,
 )
 from site_yonetim.models.audit import Actor, set_actor
-from site_yonetim.services import members as members_svc
 from site_yonetim.services import notifications as notify_svc
+from site_yonetim.services import roles as roles_svc
 
 RECENT_ENTRIES = 100
 
@@ -389,14 +389,10 @@ async def _unit_names(session: AsyncSession, person_id: uuid.UUID, today: date) 
     return list(dict.fromkeys(f"{block}-{number}" for block, number in rows))
 
 
-async def privacy_managers(session: AsyncSession, site: Site) -> set[uuid.UUID]:
-    return {
-        m.user.id
-        for m in await members_svc.list_members(session, site)
-        if m.is_active
-        and m.user.is_active
-        and Permission.PRIVACY_MANAGE in ROLE_PERMISSIONS.get(m.role, frozenset())
-    }
+async def privacy_managers(
+    session: AsyncSession, site: Site, now: datetime | None = None
+) -> set[uuid.UUID]:
+    return await roles_svc.permission_holders(session, site, Permission.PRIVACY_MANAGE, now)
 
 
 async def create_request(

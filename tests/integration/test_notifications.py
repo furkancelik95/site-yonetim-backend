@@ -125,7 +125,11 @@ async def test_tercihler_kilitli_kanal_ve_en_az_bir(world: World) -> None:
     w = world
     url = "/api/v1/me/notification-preferences"
     current = (await w.api.get(url, headers=w.headers)).json()
-    assert (current["in_app"], current["delivery_enabled"]) == (True, False)
+    assert (current["in_app"], current["delivery_enabled"], current["test_provider"]) == (
+        True,
+        True,
+        True,
+    )
     urgent = next(c for c in current["categories"] if c["category"] == "urgent")
     assert {c["channel"]: (c["enabled"], c["locked"]) for c in urgent["channels"]} == {
         "push": (True, True),

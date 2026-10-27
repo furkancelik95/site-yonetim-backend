@@ -32,7 +32,8 @@ from site_yonetim.domain.cash import (
 )
 from site_yonetim.domain.finance import FinanceRuleError
 from site_yonetim.domain.money import ZERO
-from site_yonetim.models import CashAccount, CashBalance, CashMovement
+from site_yonetim.models import CashAccount, CashBalance, CashDay, CashMovement
+from site_yonetim.services import period_lock
 
 REFERENCE_MAX = 100
 NOTE_MAX = 500
@@ -104,6 +105,25 @@ async def active_account(session: AsyncSession, account_id: uuid.UUID | None) ->
     return account
 
 
+async def ensure_day_writable(session: AsyncSession, account_id: uuid.UUID, day: date) -> None:
+    """Kasa hareketi yazılabilir mi: dönem kilidi (FIN-13) ve kapanmış kasa günü (FIN-11).
+    Kapanan (ya da farkı onay bekleyen) güne hareket yazılamaz; düzeltme ertesi gün fişle."""
+    await period_lock.ensure_writable(session, day)
+    closed = await session.scalar(
+        select(CashDay.id).where(
+            CashDay.cash_account_id == account_id,
+            CashDay.date == day,
+            CashDay.status != "rejected",
+        )
+    )
+    if closed is not None:
+        raise FinanceRuleError(
+            "cash_day_closed",
+            "Bu kasa günü kapatıldı; hareketi bugüne girin (düzeltme ertesi gün fişle).",
+            field="date",
+        )
+
+
 async def add_movement(
     session: AsyncSession,
     account: CashAccount,
@@ -121,6 +141,7 @@ async def add_movement(
 ) -> CashMovement:
     if lock:
         await lock_accounts(session, [account.id])
+    await ensure_day_writable(session, account.id, day)
     movement = CashMovement(
         id=uuid.uuid7(),
         cash_account_id=account.id,
@@ -304,6 +325,8 @@ async def transfer(
     target = await active_account(session, to_id)
     label = clip(note, 200) or "Hesaplar arası aktarım"
     await lock_accounts(session, [source.id, target.id])
+    for account_id in (source.id, target.id):
+        await ensure_day_writable(session, account_id, day)
     out_id, in_id = uuid.uuid7(), uuid.uuid7()
     out = CashMovement(
         id=out_id, cash_account_id=source.id, date=day, outflow=amount, inflow=ZERO,
@@ -352,6 +375,7 @@ async def reverse_movement(
     )
     if not account.is_active:
         raise inactive_account_error()
+    await period_lock.ensure_writable(session, movement.date, original=True)
     return await add_movement(
         session, account, day=today, inflow=movement.outflow, outflow=movement.inflow,
         description=f"DÜZELTME — {movement.description}", source=CashSource(movement.source),

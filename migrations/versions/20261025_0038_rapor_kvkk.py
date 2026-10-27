@@ -34,7 +34,7 @@ TABLES = (
 IMMUTABLE = ("privacy_notices", "privacy_consents", "explicit_consents", "retention_runs")
 
 revision: str = "0038"
-down_revision: str | None = "0031"
+down_revision: str | None = "0034"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

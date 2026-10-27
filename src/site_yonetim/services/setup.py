@@ -15,17 +15,16 @@ from typing import Literal
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from site_yonetim.domain.access import ORGANIZATION_ROLE_TO_SITE_ROLE, SiteRole
+from site_yonetim.domain.access import Permission
 from site_yonetim.domain.invitations import SiteLifecycle
 from site_yonetim.models import (
     ApprovalRule,
     CashAccount,
     ChargeSchedule,
     ImportBatch,
-    OrganizationMembership,
     Site,
-    SiteMembership,
 )
+from site_yonetim.services import roles as roles_svc
 from site_yonetim.services.structure import structure_summary
 from site_yonetim.services.vehicles import read_settings
 
@@ -56,31 +55,9 @@ def _names(items: list[str]) -> str:
 
 
 async def _manager_count(session: AsyncSession, site: Site) -> int:
-    explicit = await session.scalar(
-        select(func.count())
-        .select_from(SiteMembership)
-        .where(SiteMembership.role == SiteRole.MANAGER.value, SiteMembership.is_active)
-    )
-    derived = 0
-    if site.organization_id is not None:
-        manager_roles = [
-            r.value
-            for r, site_role in ORGANIZATION_ROLE_TO_SITE_ROLE.items()
-            if site_role is SiteRole.MANAGER
-        ]
-        derived = (
-            await session.scalar(
-                select(func.count())
-                .select_from(OrganizationMembership)
-                .where(
-                    OrganizationMembership.organization_id == site.organization_id,
-                    OrganizationMembership.role.in_(manager_roles),
-                    OrganizationMembership.is_active,
-                )
-            )
-            or 0
-        )
-    return (explicit or 0) + derived
+    """Kullanıcı yönetme izni (`members.manage`) olan etkin kişiler: açık rol ataması ya da
+    yönetim şirketinden gelen erişim (rol adına değil izne bakılır — P18)."""
+    return len(await roles_svc.permission_holders(session, site, Permission.MEMBERS_MANAGE))
 
 
 async def checklist(session: AsyncSession, site: Site, today: date) -> list[ChecklistItem]:

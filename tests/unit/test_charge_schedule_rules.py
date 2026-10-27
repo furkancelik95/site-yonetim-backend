@@ -11,18 +11,23 @@ OCT_2 = date(2026, 10, 2)
 
 
 @pytest.mark.parametrize(
-    ("charge_day", "due_days", "field"),
-    [(0, 14, "charge_day"), (29, 14, "charge_day"), (1, -1, "due_days"), (1, 61, "due_days")],
+    ("charge_day", "lead_days", "field"),
+    [
+        (0, 5, "charge_day"),
+        (29, 5, "charge_day"),
+        (1, -1, "draft_lead_days"),
+        (1, 16, "draft_lead_days"),
+    ],
 )
-def test_ayar_sinirlari(charge_day: int, due_days: int, field: str) -> None:
+def test_ayar_sinirlari(charge_day: int, lead_days: int, field: str) -> None:
     with pytest.raises(FinanceRuleError) as exc:
-        check_settings(charge_day, due_days)
+        check_settings(charge_day, lead_days)
     assert exc.value.field == field
 
 
 def test_sinirlar_dahil() -> None:
     check_settings(1, 0)
-    check_settings(28, 60)
+    check_settings(28, 15)
 
 
 def test_kesim_gunu_geldiyse_ya_da_gectiyse_keser() -> None:

@@ -10,7 +10,7 @@ from typing import Any
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from site_yonetim.domain.access import ROLE_PERMISSIONS, Permission
+from site_yonetim.domain.access import Permission
 from site_yonetim.domain.gatehouse import (
     DELEGATE_LIMIT,
     ParcelMethod,
@@ -34,7 +34,7 @@ from site_yonetim.models import (
     SiteMembership,
     UnitParty,
 )
-from site_yonetim.services import members as members_svc
+from site_yonetim.services import roles as roles_svc
 from site_yonetim.services.security import unit_names
 
 # --- Ayarlar -------------------------------------------------------------------------------
@@ -210,18 +210,9 @@ async def unit_user_ids(
     return set(rows)
 
 
-MANAGER_ROLES = frozenset(
-    r for r, perms in ROLE_PERMISSIONS.items() if Permission.MODULES_MANAGE in perms
-)
-
-
 async def manager_user_ids(session: AsyncSession, site: Site) -> set[uuid.UUID]:
-    """Site yöneticileri (modül yönetme izni olan roller): açık ve şirketten gelen üyelikler."""
-    return {
-        m.user.id
-        for m in await members_svc.list_members(session, site)
-        if m.is_active and m.user.is_active and m.role in MANAGER_ROLES
-    }
+    """Site yöneticileri (modül yönetme izni olanlar): açık ve şirketten gelen üyelikler."""
+    return await roles_svc.permission_holders(session, site, Permission.MODULES_MANAGE)
 
 
 # --- Kargo teslim yetkilisi ---------------------------------------------------------------

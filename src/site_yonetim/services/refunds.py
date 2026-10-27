@@ -20,11 +20,11 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from site_yonetim.domain.cash import CashSource
-from site_yonetim.domain.finance import FinanceRuleError, LedgerSource, PeriodStatus
+from site_yonetim.domain.finance import FinanceRuleError, LedgerSource
 from site_yonetim.domain.money import EPSILON, ZERO, round_money
 from site_yonetim.domain.text import format_money_tr
-from site_yonetim.models import LedgerAccount, LedgerEntry, Period, Refund
-from site_yonetim.services import cash, ledger
+from site_yonetim.models import LedgerAccount, LedgerEntry, Refund
+from site_yonetim.services import cash, ledger, period_lock
 
 
 async def _ledger_balance(session: AsyncSession, account_id: uuid.UUID) -> Decimal:
@@ -58,17 +58,7 @@ async def record(
         raise FinanceRuleError(
             "refund_in_future", "İade tarihi ileri bir tarih olamaz.", field="date"
         )
-    closed = await session.scalar(
-        select(Period.id).where(
-            Period.year == day.year,
-            Period.month == day.month,
-            Period.status == PeriodStatus.CLOSED.value,
-        )
-    )
-    if closed is not None:
-        raise FinanceRuleError(
-            "period_closed", f"{day:%m/%Y} dönemi kapalı; bu tarihe iade yazılamaz.", conflict=True
-        )
+    await period_lock.ensure_writable(session, day)
     cash_account = await cash.active_account(session, cash_account_id)
 
     await ledger.lock_accounts(session, [account.id])

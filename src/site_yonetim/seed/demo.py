@@ -4,6 +4,7 @@
 ortam kontrolü burada, yazmadan önce yapılır. İdempotent: demo verisi varsa hiçbir şey yapmaz.
 """
 
+import base64
 import logging
 import random
 import uuid
@@ -20,6 +21,7 @@ from site_yonetim.domain.access import UserKind
 from site_yonetim.domain.cash import CashSource
 from site_yonetim.domain.charging.payments import PaymentMethod
 from site_yonetim.domain.charging.periods import YearMonth
+from site_yonetim.domain.facility import add_months
 from site_yonetim.domain.finance import (
     BudgetStatus,
     ExpenseCategoryKind,
@@ -39,6 +41,8 @@ from site_yonetim.domain.operations import (
 )
 from site_yonetim.domain.parking import check_space
 from site_yonetim.domain.patrol import check_plan, check_point
+from site_yonetim.domain.purchasing import VendorInput
+from site_yonetim.domain.roles import RESIDENT_KEY, TEMPLATE_BY_NAME
 from site_yonetim.domain.security import VisitorKind
 from site_yonetim.domain.service_desk import PermitType
 from site_yonetim.domain.staffing import week_start
@@ -60,6 +64,7 @@ from site_yonetim.models import (
     ExpenseCategory,
     HouseholdMember,
     Invitation,
+    KeyLoan,
     LedgerAccount,
     Organization,
     OrganizationMembership,
@@ -68,10 +73,14 @@ from site_yonetim.models import (
     PrivacyConsent,
     PrivacyNotice,
     PrivacyRequest,
+    PurchaseOrder,
+    PurchaseRequest,
     Request,
     ServiceTariff,
     Site,
     SiteMembership,
+    SiteRoleAssignment,
+    StaffMember,
     StructureSettings,
     Unit,
     UnitParty,
@@ -92,7 +101,10 @@ from site_yonetim.seed.demo_data import (
     DEMO_PASSWORD,
     DOCUMENTS,
     EXPENSES,
+    FACILITY_KEYS,
+    INSURANCE_POLICIES,
     LAST_MONTH_FACTOR,
+    MAINTENANCE_PLANS,
     OLDER_MONTHS_BONUS,
     ORGANIZATION_NAME,
     ORGANIZATION_PLAN,
@@ -107,12 +119,16 @@ from site_yonetim.seed.demo_data import (
     SITES,
     STAFF_CARDS,
     TARIFFS,
+    TASK_TEMPLATES,
+    TECHNICAL_ASSETS,
     UNPAID_SHARE_THIS_MONTH,
+    VENDORS,
     DocumentSpec,
     SiteSpec,
     occupancy_for,
     units_for,
 )
+from site_yonetim.seed.demo_finance_ops import seed_finance_ops
 from site_yonetim.services import (
     announcements,
     cash,
@@ -130,11 +146,23 @@ from site_yonetim.services import (
     service_desk,
 )
 from site_yonetim.services import approvals as approvals_svc
+from site_yonetim.services import checklists as checklists_svc
+from site_yonetim.services import communication as comm_svc
+from site_yonetim.services import insurance as insurance_svc
+from site_yonetim.services import inventory as inventory_svc
+from site_yonetim.services import keys as keys_svc
 from site_yonetim.services import leaves as leaves_svc
+from site_yonetim.services import meters as meters_svc
+from site_yonetim.services import purchase_orders as orders_svc
+from site_yonetim.services import purchasing as purchasing_svc
+from site_yonetim.services import routine_tasks as tasks_svc
 from site_yonetim.services import shifts as shifts_svc
 from site_yonetim.services import staff as staff_svc
+from site_yonetim.services import technical_assets as assets_svc
 from site_yonetim.services import timesheets as timesheets_svc
+from site_yonetim.services import transparency as transparency_svc
 from site_yonetim.services.charging import BUSINESS_TZ
+from site_yonetim.services.facility_common import PhotoSink
 from site_yonetim.services.files import FileStore
 from site_yonetim.services.provisioning import provision_site
 from site_yonetim.services.sites import available_modules, set_module_enabled
@@ -198,6 +226,7 @@ async def _seed_demo(
         users = {
             spec.email: User(
                 email=spec.email,
+                phone=spec.phone,
                 password_hash=password_hash,
                 full_name=spec.full_name,
                 is_platform_admin=spec.is_platform_admin,
@@ -239,16 +268,27 @@ async def _seed_demo(
                     await set_module_enabled(session, site, key, enable=True)
                 await _seed_finance(session, spec, today)
                 await _seed_operations(session, site, spec, today)
+                await _seed_communication(session, site, today)
                 await _seed_gate(session, spec, today)
                 await _seed_directory(session, spec, today)
                 await _seed_security_setup(session, spec, today)
+                first_month = YearMonth.of(today)
+                for _ in range(CHARGED_MONTHS - 1):
+                    first_month = first_month.previous()
+                await seed_finance_ops(session, site, first_month, today)
                 if ModuleKey.DOCUMENTS in await available_modules(session, site):
                     await _seed_documents(session, store, today)
-                session.add_all(
-                    SiteMembership(user_id=user_ids[account.email], role=account.site_role)
-                    for account in ACCOUNTS
-                    if account.site_slug == spec.slug
-                )
+                for account in ACCOUNTS:
+                    if account.site_slug == spec.slug and account.site_role:
+                        user_id = user_ids[account.email]
+                        session.add(SiteMembership(user_id=user_id))
+                        session.add(
+                            SiteRoleAssignment(
+                                user_id=user_id,
+                                role_key=TEMPLATE_BY_NAME[account.site_role].key,
+                                assigned_by_name="Demo verisi",
+                            )
+                        )
                 await session.flush()  # kiracı satırları kapsam kapanmadan yazılmalı
 
     async with factory() as session:
@@ -256,6 +296,8 @@ async def _seed_demo(
     if aksu is not None:
         await _seed_resident(factory, aksu, password_hash, store, today)
         await _seed_staff(factory, aksu, user_ids, today)
+        await _seed_purchasing(factory, aksu, user_ids, today)
+        await _seed_facility(factory, aksu, user_ids, store, today)
     await _seed_privacy(factory, today)
 
     logger.info("Demo verisi yüklendi: %d site, %d hesap.", len(SITES), len(ACCOUNTS) + 1)
@@ -630,6 +672,71 @@ async def _seed_requests(session: AsyncSession, site: Site, today: date) -> None
         )  # fmt: skip
 
 
+async def _seed_communication(session: AsyncSession, site: Site, today: date) -> None:
+    """ILT-01/06, RAP-02: okuma onaylı duyuru, acil bilgi kartı, geçen ayın şeffaflık raporu."""
+    now = datetime.combine(today - timedelta(days=1), time(11), BUSINESS_TZ)
+    await announcements.publish(
+        session,
+        announcements.NewAnnouncement(
+            title="Asansör yenileme çalışması — okuma onayı",
+            body="A blok asansörü 3 gün boyunca kullanılamayacak. Lütfen okuduğunuzu onaylayın.",
+            importance=Importance.IMPORTANT,
+            audience=Audience.ALL_RESIDENTS,
+            block_ids=(),
+            channels=(),
+            expires_on=None,
+            is_pinned=False,
+            requires_ack=True,
+            ack_hours=72,
+            sms_fallback=True,
+        ),
+        published_by="Site Yönetimi",
+        now=now,
+        today=today,
+    )
+    blocks = list(await session.scalars(select(Block).order_by(Block.name).limit(2)))
+    await comm_svc.publish_card(
+        session,
+        comm_svc.CardInput(
+            muster_points=[
+                {"name": "Otopark girişi", "directions": "Ana kapının karşısı, açık alan"},
+                {"name": "Çocuk parkı", "directions": "B blok arkası"},
+            ],
+            phones=[
+                {"label": "Acil çağrı", "number": "112"},
+                {"label": "Doğal gaz acil", "number": "187"},
+                {"label": "Site güvenliği", "number": "02125550000"},
+            ],
+            instructions={},
+            block_notes=[
+                {"block_id": str(b.id), "note": "Merdivenle inin; asansör kullanmayın."}
+                for b in blocks[:1]
+            ],
+        ),
+        by="Site Yönetimi",
+    )
+    last = today.replace(day=1) - timedelta(days=1)
+    report = await transparency_svc.prepare(
+        session,
+        year=last.year,
+        month=last.month,
+        scope={"include_categories": True, "include_collection": True,
+               "include_cash_balance": False},
+        note="Yönetim kurulu tarafından onaylanan aylık özet.",
+        by="Site Yönetimi",
+        today=today,
+    )  # fmt: skip
+    await transparency_svc.submit(
+        session,
+        site,
+        report,
+        requester=approvals_svc.Person(uuid.UUID(int=0), "Site Yönetimi"),
+        can_publish=True,
+        today=today,
+        now=now,
+    )
+
+
 async def _seed_gate(session: AsyncSession, spec: SiteSpec, today: date) -> None:
     """Güvenlik modülü açık sitelerde kargo ve ziyaretçi kayıtları (docs/10 §1.4)."""
     rng = random.Random(f"{SEED}:gate:{spec.slug}")  # noqa: S311  # nosec B311
@@ -737,6 +844,7 @@ async def _seed_resident(
     async with factory() as session, session.begin():
         user = User(
             email=RESIDENT.email,
+            phone=RESIDENT.phone,
             password_hash=password_hash,
             full_name=f"{person.first_name} {person.last_name}",
             kind=UserKind.RESIDENT.value,
@@ -746,8 +854,11 @@ async def _seed_resident(
         user_id = user.id
     with site_scope(site_id):
         async with factory() as session, session.begin():
+            session.add(SiteMembership(user_id=user_id, person_id=person.id))
             session.add(
-                SiteMembership(user_id=user_id, role=RESIDENT.site_role, person_id=person.id)
+                SiteRoleAssignment(
+                    user_id=user_id, role_key=RESIDENT_KEY, assigned_by_name="Demo verisi"
+                )
             )
             linked = await session.get(Person, person.id)
             if linked is not None:
@@ -999,6 +1110,479 @@ async def _seed_privacy(factory: async_sessionmaker[AsyncSession], today: date) 
                         due_on=today + timedelta(days=24),
                     )
                 )  # fmt: skip
+
+
+async def _seed_purchasing(
+    factory: async_sessionmaker[AsyncSession],
+    site_id: uuid.UUID,
+    user_ids: dict[str, uuid.UUID],
+    today: date,
+) -> None:
+    """Satın alma (servis istekleri 62–67): tedarikçiler (biri pasif); açık talep; teklifli talep
+    (personel teklifi + açık tedarikçi linki); sipariş + tam kabul (stoğa giriş) + eşleşen fatura
+    (ödenecekler listesinde); kısmi kabul + fark çıkan fatura (fark onayı bekliyor)."""
+    now = datetime.combine(today, time(10), BUSINESS_TZ)
+    technician = approvals_svc.Person(user_ids["teknik@demo.local"], "Ergün Kılıç")
+    manager = approvals_svc.Person(user_ids["yonetici@demo.local"], "Kerem Yıldırım")
+    accounting = approvals_svc.Person(user_ids["muhasebe@demo.local"], "Selin Arı")
+    with site_scope(site_id):
+        async with factory() as session, session.begin():
+            site = await session.get(Site, site_id)
+            category = await session.scalar(
+                select(ExpenseCategory.id).where(
+                    ExpenseCategory.kind == ExpenseCategoryKind.OPERATING.value
+                )
+            )
+            if site is None or category is None:  # pragma: no cover
+                return
+            vendors = [
+                await purchasing_svc.save_vendor(
+                    session,
+                    VendorInput(
+                        name,
+                        tax,
+                        None,
+                        f"satis{index}@ornek-tedarikci.com",
+                        iban,
+                        kind,
+                        status,
+                        None,
+                    ),
+                    None,
+                )
+                for index, (name, tax, kind, iban, status) in enumerate(VENDORS, start=1)
+            ]
+            bulb = await inventory_svc.create_item(
+                session, name="LED ampul 9W", unit_label="adet", min_quantity="20", location="Depo"
+            )
+
+            def item(
+                text: str, qty: str, price: str, stock: uuid.UUID | None = None
+            ) -> purchasing_svc.ItemInput:
+                return purchasing_svc.ItemInput(text, qty, "adet", Decimal(price), stock)
+
+            def offer(*prices: str) -> purchasing_svc.QuoteInput:
+                return purchasing_svc.QuoteInput(
+                    [Decimal(p) for p in prices],
+                    7,
+                    "30 gün vadeli",
+                    today + timedelta(days=30),
+                    None,
+                )
+
+            async def request(
+                title: str, reason: str, *items: purchasing_svc.ItemInput
+            ) -> PurchaseRequest:
+                return await purchasing_svc.create_request(
+                    session,
+                    purchasing_svc.RequestInput(title, reason, category, list(items)),
+                    actor=technician,
+                    today=today,
+                )
+
+            await request(
+                "Bahçe sulama hortumu",
+                "Mevcut hortumlar çatladı; yaz öncesi yenilenmeli.",
+                item("Sulama hortumu 25 m", "4", "850.00"),
+            )
+            quoted = await request(
+                "Otopark aydınlatması",
+                "Otoparkta 6 armatür yanmıyor; gece güvenlik sorunu.",
+                item("LED armatür 36W", "6", "1450.00"),
+                item("Montaj işçiliği", "1", "2500.00"),
+            )
+            await purchasing_svc.add_quote(
+                session,
+                quoted,
+                vendors[1].id,
+                offer("1390.00", "2400.00"),
+                actor=technician,
+                today=today,
+                now=now,
+            )
+            await purchasing_svc.create_link(
+                session, quoted, vendors[0].id, actor=technician, now=now
+            )
+
+            async def ordered(
+                pr: PurchaseRequest, vendor: uuid.UUID, *prices: str
+            ) -> PurchaseOrder:
+                quote = await purchasing_svc.add_quote(
+                    session, pr, vendor, offer(*prices), actor=technician, today=today, now=now
+                )
+                await purchasing_svc.select_quote(
+                    session, site, pr, quote.id, None, today=today, now=now
+                )
+                await purchasing_svc.decide(
+                    session,
+                    site,
+                    pr,
+                    "approve",
+                    None,
+                    actor=manager,
+                    can_manage=True,
+                    today=today,
+                    now=now,
+                )
+                written = await orders_svc.create_order(
+                    session, site, pr, actor=accounting, today=today, now=now
+                )
+                if written.order is None:  # pragma: no cover — demoda onay kuralı yok
+                    raise RuntimeError("Demo siparişi onaya düştü")
+                return written.order
+
+            bulbs = await ordered(
+                await request(
+                    "Ortak alan ampulleri",
+                    "Merdiven ve koridor aydınlatması için stok yenileme.",
+                    item("LED ampul 9W", "40", "85.00", bulb.id),
+                ),
+                vendors[1].id,
+                "82.50",
+            )
+            await orders_svc.receive(
+                session, bulbs, ["40"], note="İrsaliye no 4471", rating=5, actor=technician
+            )
+            await orders_svc.create_invoice(
+                session,
+                site,
+                orders_svc.InvoiceInput(
+                    bulbs.id,
+                    "BRE2026000417",
+                    today,
+                    today + timedelta(days=30),
+                    [("40", Decimal("82.50"))],
+                ),
+                actor=accounting,
+                today=today,
+                now=now,
+            )
+            pump = await ordered(
+                await request(
+                    "Hidrofor bakım kiti",
+                    "Yıllık hidrofor bakımında değişecek parçalar.",
+                    item("Mekanik salmastra seti", "2", "1800.00"),
+                ),
+                vendors[0].id,
+                "1750.00",
+            )
+            await orders_svc.receive(
+                session, pump, ["1"], note="1 set eksik geldi", rating=3, actor=technician
+            )
+            await orders_svc.create_invoice(
+                session,
+                site,
+                orders_svc.InvoiceInput(
+                    pump.id,
+                    "AKN2026000932",
+                    today,
+                    today + timedelta(days=15),
+                    [("2", Decimal("1750.00"))],
+                ),
+                actor=accounting,
+                today=today,
+                now=now,
+            )
+
+
+async def _seed_facility(
+    factory: async_sessionmaker[AsyncSession],
+    site_id: uuid.UUID,
+    user_ids: dict[str, uuid.UUID],
+    store: FileStore,
+    today: date,
+) -> None:
+    """Operasyon ekleri ve teknik varlık (servis istekleri 53–58; HIZ-06/07; K28): anahtarlar
+    (biri dışarıda, biri iadesi gecikmiş), sakinin emanet anahtarı, hazır denetim şablonları ve bir
+    denetim, poliçeler (biri 45 gün kala) ve hasar dosyası, sayaçlar ve iki dönem okuma, görevli
+    görevleri (personel kartına bağlı), stok, teknik varlıklar (yaklaşan muayeneler) ve periyodik
+    bakım planları (biri bugün iş emri açar)."""
+    now = datetime.combine(today, time(9), BUSINESS_TZ)
+    sink = PhotoSink(store)
+    technician = user_ids.get("teknik@demo.local")
+    with site_scope(site_id):
+        async with factory() as session, session.begin():
+            site = await session.get(Site, site_id)
+            if site is None:  # pragma: no cover
+                return
+            await _seed_keys(session, today, now)
+            # 55 — denetim: hazır şablonlar + bir denetim (talep açmadan)
+            await checklists_svc.ensure_defaults(session)
+            cleaning = next(
+                t
+                for t in await session.scalars(checklists_svc.templates_query())
+                if t.name == "Temizlik kalitesi"
+            )
+            await checklists_svc.inspect(
+                session,
+                sink,
+                template=cleaning,
+                location="A Blok giriş",
+                answers=[
+                    checklists_svc.AnswerData("yes", None),
+                    checklists_svc.AnswerData("no", None),
+                    checklists_svc.AnswerData("yes", DEMO_PHOTO),  # fotoğraf zorunlu madde
+                    checklists_svc.AnswerData("4", None),
+                ],
+                open_requests=False,
+                by=checklists_svc.Inspector("Ergün Kılıç", technician),
+            )
+            await _seed_insurance(session, today)
+            await _seed_meters(session, sink, today, technician)
+            await _seed_tasks(session, sink, today)
+            for name, label, minimum, quantity in (
+                ("Ampul (LED 9W)", "adet", "10", "24"),
+                ("Çamaşır suyu", "litre", "20", "12"),
+            ):
+                item = await inventory_svc.create_item(
+                    session, name=name, unit_label=label, min_quantity=minimum, location="Depo"
+                )
+                await inventory_svc.move(
+                    session, item, direction="in", quantity=quantity, note="Açılış", moved_by="Demo"
+                )
+            await _seed_technical_assets(session, site, today)
+            await session.flush()
+
+
+# Küçük, geçerli imzalı demo görseli (JPEG başlığı) — saha fotoğrafı örneği
+DEMO_PHOTO = (
+    "data:image/jpeg;base64,"
+    + base64.b64encode(bytes([0xFF, 0xD8, 0xFF, 0xE0]) + bytes(64)).decode()
+)
+
+
+async def _seed_keys(session: AsyncSession, today: date, now: datetime) -> None:
+    keys = [
+        await keys_svc.save_key(
+            session, keys_svc.KeyData(kind, code, name, area, list(roles), True), None
+        )
+        for kind, code, name, area, roles in FACILITY_KEYS
+    ]
+    await keys_svc.give(
+        session,
+        keys[0],
+        to_name="Selin Arslan",
+        to_phone=None,
+        role=None,
+        due_at=now + timedelta(days=2),
+        by="Recep Er",
+        now=now,
+    )
+    session.add(  # iadesi gecikmiş teslim (listede kırmızı)
+        KeyLoan(
+            key_id=keys[1].id,
+            to_name="Hasan Usta (bahçıvan)",
+            to_phone=None,
+            role="Görevli",
+            due_at=now - timedelta(hours=20),
+            given_by_name="Recep Er",
+        )
+    )
+    member = await session.scalar(
+        select(SiteMembership)
+        .where(
+            SiteMembership.user_id.in_(
+                select(SiteRoleAssignment.user_id).where(
+                    SiteRoleAssignment.role_key == RESIDENT_KEY
+                )
+            ),
+            SiteMembership.person_id.is_not(None),
+        )
+        .limit(1)
+    )
+    if member is None or member.person_id is None:
+        return
+    unit_id = await session.scalar(
+        select(UnitParty.unit_id).where(UnitParty.person_id == member.person_id).limit(1)
+    )
+    if unit_id is None:
+        return
+    deposit = await keys_svc.deposit(
+        session,
+        unit_id=unit_id,
+        person_id=member.person_id,
+        user_id=member.user_id,
+        by="Demo sakin",
+        authorized=[keys_svc.Authorized("Mert Yılmaz", "05321112233")],
+        valid_until=today + timedelta(days=10),
+        note="Tatildeyken çiçekler için",
+        today=today,
+    )
+    await keys_svc.receive(session, deposit, by="Recep Er", now=now)
+
+
+async def _seed_insurance(session: AsyncSession, today: date) -> None:
+    policies = [
+        await insurance_svc.save_policy(
+            session,
+            insurance_svc.PolicyData(
+                kind,
+                insurer,
+                number,
+                coverage,
+                Decimal(premium),
+                today + timedelta(days=start),
+                today + timedelta(days=end),
+                None,
+                None,
+            ),
+            None,
+        )
+        for kind, insurer, number, coverage, premium, start, end in INSURANCE_POLICIES
+    ]
+    claim = await insurance_svc.open_claim(
+        session,
+        policy=policies[0],
+        source="Talep: B Blok su kaçağı",
+        description="B Blok bodrum su baskını — depo duvarı",
+        incident_date=today - timedelta(days=12),
+        claimed=Decimal("24000.00"),
+        by="Kerem Yıldırım",
+        today=today,
+    )
+    await insurance_svc.update_claim(
+        session, claim, status="submitted", paid=None, paid_on=None, today=today
+    )
+
+
+async def _seed_meters(
+    session: AsyncSession, sink: PhotoSink, today: date, technician: uuid.UUID | None
+) -> None:
+    """İlk 6 bölümde ısı pay ölçer + bahçe sayacı; iki geçmiş dönem okuma (bu ay okunmadı)."""
+    units = list(await session.scalars(select(Unit.id).order_by(Unit.number).limit(6)))
+    meters = [
+        await meters_svc.save_meter(
+            session,
+            meters_svc.MeterData("heat", f"ISI-{i + 1:04d}", unit, None, None, "1", None, "active"),
+            None,
+        )
+        for i, unit in enumerate(units)
+    ]
+    meters.append(
+        await meters_svc.save_meter(
+            session,
+            meters_svc.MeterData(
+                "common", "BS-0001", None, "Bahçe sulama", None, "1", None, "active"
+            ),
+            None,
+        )
+    )
+    month = today.replace(day=1)
+    reader = meters_svc.Reader("Ergün Kılıç", technician)
+    for back, step in ((2, 0), (1, 1)):
+        period = f"{add_months(month, -back):%Y-%m}"
+        for index, meter in enumerate(meters):
+            value = 1000 + index * 37 + step * (120 + index * 5)
+            await meters_svc.read(
+                session,
+                sink,
+                meter,
+                meters_svc.ReadingData(period, str(value), None, None, None),
+                by=reader,
+            )
+
+
+async def _seed_tasks(session: AsyncSession, sink: PhotoSink, today: date) -> None:
+    """Görevli rutin görevleri; K29: personel kartına bağlı (teknik ve temizlik görevlisi)."""
+    cards = {c.full_name: c.id for c in await session.scalars(select(StaffMember))}
+    templates = []
+    for name, freq, days, mday, start, end, place, who, card, photo in TASK_TEMPLATES:
+        card_id = cards.get(STAFF_CARDS[card][0]) if card is not None else None
+        templates.append(
+            await tasks_svc.save_template(
+                session,
+                tasks_svc.TemplateData(
+                    name,
+                    None,
+                    freq,
+                    list(days),
+                    mday,
+                    time.fromisoformat(start),
+                    time.fromisoformat(end),
+                    place,
+                    who,
+                    card_id,
+                    photo,
+                    None,
+                    True,
+                ),
+                None,
+            )
+        )
+    await tasks_svc.complete(
+        session,
+        sink,
+        templates[1],
+        day=today - timedelta(days=1),
+        status="done",
+        reason=None,
+        note="Holler ve merdivenler",
+        photo=None,
+        by=tasks_svc.Closer("Hülya Demir", None, cards.get("Hülya Demir")),
+        today=today,
+    )
+
+
+async def _seed_technical_assets(session: AsyncSession, site: Site, today: date) -> None:
+    """K28: mali demirbaştan ayrı teknik varlıklar; muayene takvimi (biri 7, biri 30 gün kala) ve
+    bakım planları (geçmiş dönem yapıldı; hidroforun bakımı bugün → iş emri açılır)."""
+    assets = {}
+    for category, name, place, brand, serial, company, check, last in TECHNICAL_ASSETS:
+        schedules = (
+            [assets_svc.ScheduleData(check, None, None, today + timedelta(days=last), None)]
+            if check is not None and last is not None
+            else []
+        )
+        assets[name] = await assets_svc.create_asset(
+            session,
+            assets_svc.AssetData(
+                category,
+                name,
+                place,
+                brand,
+                None,
+                serial,
+                date(today.year - 6, 4, 1),
+                date(today.year + 1, 4, 1) if category == "camera" else None,
+                None,
+                company,
+                "working",
+                None,
+            ),
+            schedules,
+            today=today,
+        )
+    for asset_name, title, unit, count, due, who in MAINTENANCE_PLANS:
+        due_on = today + timedelta(days=due)
+        plan = await assets_svc.save_plan(
+            session,
+            assets_svc.PlanData(
+                assets[asset_name].id,
+                title,
+                None,
+                unit,
+                count,
+                add_months(due_on, -count) if due > 0 else due_on,
+                who,
+                None,
+                None,
+                True,
+            ),
+            None,
+        )
+        if due > 0:  # geçen dönem yapıldı → geçmiş ve maliyet; sıradaki tarih ileri kayar
+            run = await assets_svc.open_run(session, plan, requests_enabled=False, by="Demo")
+            await assets_svc.finish_run(
+                session,
+                run,
+                assets_svc.RunCompletion(
+                    "done", plan.next_due_on, Decimal("2400.00"), "Rutin bakım yapıldı", False, None
+                ),
+                requests_enabled=False,
+                by=who,
+                today=today,
+            )
+    await assets_svc.generate_due(session, site, today=today)
 
 
 def _person(first: str, last: str) -> Person:

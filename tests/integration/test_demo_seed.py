@@ -19,6 +19,7 @@ from site_yonetim.db.tenancy import all_sites_scope, site_scope
 from site_yonetim.main import create_app
 from site_yonetim.models import (
     AccountBalance,
+    AdHocCharge,
     Announcement,
     Block,
     BudgetPlan,
@@ -35,19 +36,24 @@ from site_yonetim.models import (
     Package,
     Payment,
     PaymentAllocation,
+    PaymentPlan,
     Period,
     Permit,
     Person,
     Plan,
+    PurchaseRequest,
     Request,
     RequestEvent,
     ServiceQuote,
     ServiceTariff,
     Site,
     SiteModule,
+    StockItem,
     Unit,
     UnitType,
     User,
+    Vendor,
+    VendorInvoice,
 )
 from site_yonetim.seed.demo import DemoSeedRefusedError, seed_demo
 from site_yonetim.seed.demo_data import DEMO_PASSWORD, SITES, occupancy_for
@@ -117,6 +123,18 @@ async def test_demo_verisi_yuklenir(
         "reservations", "visitors", "packages", "valet",
         "general-assembly", "surveys", "staff",
     }  # fmt: skip
+    # Satın alma (servis istekleri 62–67): açık, teklifli, siparişli talepler; eşleşen ve fark
+    # çıkan birer fatura; kabulde stoğa giren ampuller.
+    with site_scope(sites["aksu-konaklari"].id):
+        async with session_factory() as session:
+            statuses = sorted(await session.scalars(select(PurchaseRequest.status)))
+            invoices = sorted(await session.scalars(select(VendorInvoice.status)))
+            vendors = await session.scalar(select(func.count()).select_from(Vendor))
+            stock = await session.scalar(select(StockItem.quantity))
+    assert statuses == ["ordered", "ordered", "quoting", "quoting"]
+    assert invoices == ["diff_pending", "matched"]
+    assert vendors == 4
+    assert stock == Decimal("40.000")
 
 
 async def test_demo_talepleri_zaman_sirasinda(
@@ -323,10 +341,24 @@ async def test_demo_tahsilat_ve_sakin(
                 paid = await session.scalar(select(func.sum(Payment.amount)))
                 allocated = await session.scalar(select(func.sum(PaymentAllocation.amount)))
                 summary = await session.scalar(select(func.sum(AccountBalance.balance)))
+                ad_hoc = await session.scalar(
+                    select(
+                        func.coalesce(func.sum(LedgerEntry.debit - LedgerEntry.credit), 0)
+                    ).where(LedgerEntry.source == "ad_hoc_charge")
+                )
         assert charged is not None
         assert paid is not None
         assert paid == allocated  # demo tahsilatı borç tutarında: avans yok
-        assert summary == charged - paid
+        assert summary == charged - paid + ad_hoc  # dönem dışı ücretler (P03a demo)
+        with site_scope(sites[spec.slug]):
+            async with session_factory() as session:
+                locked = await session.scalar(
+                    select(func.count()).select_from(Period).where(Period.status == "locked")
+                )
+                plans = await session.scalar(select(func.count()).select_from(PaymentPlan))
+                extras = await session.scalar(select(func.count()).select_from(AdHocCharge))
+        assert (locked, extras) == (1, 4)  # en eski demo ayı kilitli; dört dönem dışı ücret
+        assert plans
         rates[spec.slug] = paid / charged
     assert rates["aksu-konaklari"] > rates["yildiz-sitesi"] > rates["mimoza-apartmani"]
 
@@ -381,18 +413,31 @@ async def test_demo_duyuru_ve_talep(
         assert extras == [1, 1, 1, 3]  # ana olay, tadilat başvurusu, teklif, tarife (SR 49–52)
         assert pending is not None
         assert pending.date() > SEED_DAY  # sakin onayı bekliyor
-        assert announcement_count == 4
+        assert announcement_count == 5  # + okuma onaylı duyuru (ILT-01)
 
     resident = await login_headers(api, "sakin@demo.local", DEMO_PASSWORD)
     listed = (await api.get("/api/v1/sites/aksu-konaklari/announcements", headers=resident)).json()
     assert [a["title"] for a in listed["items"]] == [
         "Olağan genel kurul toplantısı",
+        "Asansör yenileme çalışması — okuma onayı",
         "Planlı su kesintisi",
         "Aidat ödeme hatırlatması",
     ]
     manager = await login_headers(api, "yonetici@demo.local", DEMO_PASSWORD)
     requests_page = (await api.get("/api/v1/sites/aksu-konaklari/requests", headers=manager)).json()
-    assert requests_page["total"] == 6
+    # 6 demo talebi + bugün planı gelen hidrofor bakımının iş emri (HIZ-06)
+    assert requests_page["total"] == 7
+    base = "/api/v1/sites/aksu-konaklari"
+    assets = (await api.get(f"{base}/technical-assets", headers=manager)).json()
+    assert len(assets) == 6
+    warnings = {a["next_inspection"]["warning"] for a in assets if a["next_inspection"]}
+    assert {"7", "30"} <= warnings  # yaklaşan yasal muayeneler (K28, HIZ-07)
+    assert (await api.get(f"{base}/assets", headers=manager)).json() == []  # mali demirbaş ayrı
+    keys = (await api.get(f"{base}/keys", headers=manager)).json()
+    loans = [k for k in keys if k["loan"]]
+    assert len(loans) == 2  # biri dışarıda; gecikme gerçek saate göre (sabit demo gününde ikisi)
+    assert any(k["overdue"] for k in loans)
+    assert len((await api.get(f"{base}/maintenance-runs?status=open", headers=manager)).json()) == 1
 
 
 async def test_demo_kasa_ve_gider(

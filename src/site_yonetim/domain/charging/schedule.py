@@ -1,4 +1,7 @@
-"""Otomatik aylık tahakkuk takvimi — saf kurallar (frontend servis isteği 04).
+"""Otomatik aylık tahakkuk takvimi — saf kurallar (frontend servis isteği 04; FIN-05).
+
+"Tahakkuk" onay kuralı varsa taslak kesim gününden `draft_lead_days` (varsayılan 5) gün önce
+hazırlanıp onaya gider, onaylanınca kesim gününde kesinleşir; kural yoksa kesim gününde doğrudan.
 
 Saat parametre olarak gelir (domain saati okumaz); tarihler İstanbul yerel tarihidir.
 
@@ -14,18 +17,23 @@ from datetime import date
 from site_yonetim.domain.finance import FinanceRuleError
 
 MIN_DAY, MAX_DAY = 1, 28
-MIN_DUE, MAX_DUE = 0, 60
+MIN_LEAD, MAX_LEAD = 0, 15
 
 
-def check_settings(charge_day: int, due_days: int) -> None:
+def check_settings(charge_day: int, draft_lead_days: int) -> None:
+    """Vade artık burada değil: finans parametresi `due_day` (K25, ayın 10'u)."""
     if not MIN_DAY <= charge_day <= MAX_DAY:
         raise FinanceRuleError(
             "invalid_charge_day",
             "Gün 1–28 arasında olmalı (her ayda olsun diye).",
             field="charge_day",
         )
-    if not MIN_DUE <= due_days <= MAX_DUE:
-        raise FinanceRuleError("invalid_due_days", "Vade 0–60 gün olmalı.", field="due_days")
+    if not MIN_LEAD <= draft_lead_days <= MAX_LEAD:
+        raise FinanceRuleError(
+            "invalid_draft_lead_days",
+            "Taslak, kesimden 0–15 gün önce hazırlanabilir.",
+            field="draft_lead_days",
+        )
 
 
 def charge_date_in(year: int, month: int, charge_day: int) -> date:

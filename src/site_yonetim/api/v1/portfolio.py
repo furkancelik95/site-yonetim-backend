@@ -77,7 +77,7 @@ async def portfolio(access: UserAccessDep, factory: FactoryDep, now: NowDep) -> 
                 site_id=site.site_id,
                 name=site.name,
                 slug=site.slug,
-                role=site.role.value,
+                role=site.role,
                 units=row.units,
                 finance=SiteFinanceOut(
                     charged=finance.charged,
