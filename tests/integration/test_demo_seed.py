@@ -397,11 +397,13 @@ async def test_demo_duyuru_ve_talep(
         assert extras == [1, 1, 1, 3]  # ana olay, tadilat başvurusu, teklif, tarife (SR 49–52)
         assert pending is not None
         assert pending.date() > SEED_DAY  # sakin onayı bekliyor
-        assert announcement_count == 4
+        # Aksu: + iki genel kurul çağrısı (geçmiş ve yaklaşan; servis istekleri 75–77)
+        assert announcement_count == (6 if slug == sites["aksu-konaklari"] else 4)
 
     resident = await login_headers(api, "sakin@demo.local", DEMO_PASSWORD)
     listed = (await api.get("/api/v1/sites/aksu-konaklari/announcements", headers=resident)).json()
     assert [a["title"] for a in listed["items"]] == [
+        "Olağanüstü genel kurul toplantı çağrısı",  # malik: okuma onaylı çağrı (75), sabit
         "Olağan genel kurul toplantısı",
         "Planlı su kesintisi",
         "Aidat ödeme hatırlatması",
@@ -549,3 +551,33 @@ async def test_demo_belgeler(
     titles = {d["title"] for d in mine}
     assert {"Yönetim planı", "Site kuralları", "Tadilat izin belgesi"} <= titles
     assert not titles & {"Bina sigorta poliçesi", "Hukuk görüşü — icra takibi"}
+
+
+async def test_demo_genel_kurul(
+    api: httpx2.AsyncClient,
+    dev_settings: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+    seed_day: date,
+) -> None:
+    """Servis istekleri 75–77: geçmiş genel kurul tutanaklı ve karar defterinde; yaklaşan genel
+    kurulun çağrısı gönderilmiş."""
+    await seed_demo(dev_settings, session_factory, today=SEED_DAY)
+    manager = await login_headers(api, "yonetici@demo.local", DEMO_PASSWORD)
+    base = "/api/v1/sites/aksu-konaklari"
+    meetings = (await api.get(f"{base}/meetings", headers=manager)).json()["items"]
+    assert [(m["kind"], m["status"]) for m in meetings] == [
+        ("general_extraordinary", "planned"),
+        ("general_ordinary", "held"),
+    ]
+    upcoming, past = meetings
+    held = (await api.get(f"{base}/meetings/{past['id']}/assembly", headers=manager)).json()
+    assert held["minutes"]["finalized_at"] is not None
+    assert held["quorum"]["ok"] is True
+    results = [held["votes"][i["id"]]["result"]["accepted"] for i in past["agenda"]]
+    assert results == [True, True, True, False]  # 4/5 bariyer maddesi RET
+    book = (await api.get(f"{base}/decision-book", headers=manager)).json()
+    assert [e["no"] for e in book["items"]] == [3, 2, 1]
+    coming = (await api.get(f"{base}/meetings/{upcoming['id']}/assembly", headers=manager)).json()
+    assert coming["invitation"]["recipients"] > 0
+    assert 0 < coming["invitation"]["read"] < coming["invitation"]["recipients"]
+    assert coming["attendance"] == []

@@ -6,6 +6,7 @@ from site_yonetim.api.v1 import (
     ad_hoc_charges,
     announcements,
     approvals,
+    assembly,
     audit,
     auth,
     bank_imports,
@@ -133,6 +134,7 @@ api_router.include_router(invitations.router)
 api_router.include_router(invitations.public_router)
 api_router.include_router(setup.router)
 api_router.include_router(meetings.router)
+api_router.include_router(assembly.router)
 api_router.include_router(polls.router)
 api_router.include_router(contracts.router)
 api_router.include_router(inventory.router)

@@ -41,6 +41,23 @@ silinir ve ilgili dokümana taşınır.
 | **K31** | Anket gizliliği | Bölüm başına bir oy, kim verdiği tutulmaz | Yazılım Dokümanı ILT-03: anket bazında "anonim mi" ve "bölüm başına tek yanıt mı" seçeneği | Ürün + hukuk | Anket |
 | **K32** | Sakine gider şeffaflığı | Gerçekleşen giderler tedarikçi adı ve fatura görüntüsüyle açık | Yazılım Dokümanı RAP-02: kişi bilgisi içermeyen, onaylı özet | Ürün + hukuk | Şeffaflık |
 
+### Genel kurul paketi (P13, 27.10.2026) — hukuki parametreler (avukat/PM teyidi bekliyor)
+Kural uydurulmadı: hepsi `assembly_settings` site ayarı; varsayılan Yazılım Dokümanı §17 ve servis
+istekleri 75–77'den.
+
+| Konu | Şu anki davranış (varsayılan) | Bekleyen |
+|---|---|---|
+| Karar türlerinin oranları | Oy çokluğu (katılanların sayı + pay `>1/2`), tüm maliklerin çoğunluğu (`>1/2`), tüm maliklerin 4/5'i (`≥4/5`, sayı + pay), oy birliği (tüm malikler, kişi). Site türleri ekler/değiştirir | Avukat + yönetim planı: hangi konu hangi tür |
+| Çekimser oy | Kabul sayılmaz, tabanda kalır (fiilen ret etkisi) — karar türü başına `abstain_in_base` | Avukat |
+| Toplantı nisabı / ikinci toplantı | Sayı **ve** arsa payı yarıdan fazla (KMK m.30); ikinci toplantıda **aranmaz** (`second_call_quorum = null`, parametreyle aranabilir); ikinci toplantı 7 gün sonra (çağrı metni) | Avukat: ikinci toplantıda sayıca çoğunluk aranıyor mu |
+| Çağrı süresi | 15 gün; yalnız uyarı (sunucu engellemez) | Avukat |
+| Kişi sayımı | Bölümün malik kümesi bir kişi: hisseli bölüm tek kişi, aynı malik(ler)in birden çok bölümü tek kişi (`owner_group`); seçenek `per_unit` | Avukat: A tek başına + A–B hisseli iki bölümde A kaç kişi |
+| Kişi başı azami vekâlet | 2 malik (kişi); fiziki vekâlette ad girilir, kâğıt vekâletname salonda kontrol | Avukat: KMK m.31 sınırı |
+| Okuma onayı = çağrı ispatı | Evet (`read_ack_proof`); ispat raporu duyurunun teslim/okuma kayıtları | Avukat: tebliğ tutanağı gerekli mi |
+| Uzaktan oy, dijital vekâlet (B18) | **Kapalı.** Bayrak dayanak belge olmadan açılmaz; SMS doğrulaması (P16c) gelene kadar 409. Oy olayı tablosunda kanal/cihaz/SMS alanları hazır | Avukat 2.4 + K5/P16c |
+| Varsayılan format | Fiziki (uzaktan oy kapalıyken); `remote_voting` açılınca doküman varsayılanı hibrit | B18 |
+| Tutanak PDF'i | Tarayıcı yazdır/PDF; imzalı tutanak belge arşivine yüklenir | Sunucu PDF'i için kütüphane kararı |
+
 ### Yapı, kişiler ve kayıt paketi (P02, 25.10.2026) — uygulanan varsayımlar
 | Konu | Şu anki davranış | Bekleyen |
 |---|---|---|

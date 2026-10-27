@@ -484,8 +484,37 @@ içindir"). Sakin, `requests.read` izni olmadan da kendi taleplerini görür (`0
 | POST | `/sites/{slug}/meetings/{id}/decisions` | `meetings.manage` | R | `{attendance_note, items[{id, result, decision?, votes_*?}]}` — **tek seferlik**: her maddeye sonuç (`accepted` · `rejected` · `postponed` · `info`), `info` dışında karar metni zorunlu; hata 422 `fields.items.{sıra}`. Kayıtla `held`, sonra değişmez; ikinci kayıt 409 `not_planned` |
 | POST | `/sites/{slug}/meetings/{id}/cancel` | `meetings.manage` | R | `{reason}` zorunlu; yalnız planlanan (409 `not_planned`) |
 
-Yeter sayı (KMK m.30) hesaplanmaz; çağrı süresi (15 gün, m.29) yalnız ekranda uyarı. Sistemdeki
-tutanak noter onaylı karar defterinin yerine geçmez.
+Elle karar girişi (`/decisions`) genel kurulun hazirunu ya da oylaması başlayınca kapanır (409
+`assembly_in_progress`); kararlar tutanak kesinleşince genel kurul ekranından yazılır. Çağrı süresi
+(site ayarı, varsayılan 15 gün) yalnız uyarı. Sistemdeki tutanak noter onaylı karar defterinin
+yerine geçmez.
+
+### 2.18a Genel kurul (servis istekleri 75–77 — modül `general-assembly`)
+Yönetim kurulu toplantısında tüm uçlar 409 `not_general`. Yazma `meetings.manage`, okuma
+`meetings.read`. Yazma yanıtı `Written[AssemblyOut]`. Oranlar metin (`"0.385200"`, 0–1, 6 ondalık).
+Kesinleşmiş tutanakta yazma 409 `finalized`; planlanmamış toplantıda 409 `invalid_status`.
+
+| Yöntem | Yol | İzin | Durum | Not |
+|---|---|---|---|---|
+| GET · PUT | `/sites/{slug}/assembly-settings` | okuma `meetings.read` · yazma `meetings.manage` | R | `{decision_types[{code, name, base: present\|all, num, den, strict, person, share, abstain_in_base}], quorum{num, den, strict, person, share}, second_call_quorum\|null, proxy_limit, person_rule: owner_group\|per_unit, notice_days, second_call_days, read_ack_proof, remote_voting, digital_proxy, legal_basis_document_id, sms_verification_available}`; PUT kısmi. Kesinleşmemiş genel kurulda kullanılan karar türü kaldırılamaz (422 `fields.decision_types`). `remote_voting`/`digital_proxy` dayanak belge olmadan 422, SMS doğrulaması yokken 409 `sms_verification_unavailable` |
+| GET | `/sites/{slug}/meetings/{id}/assembly` | `meetings.read` | R | `{meeting_id, format, format_label, legal_ack{by, at}, second_call, item_types{agenda_item_id: code}, invitation{announcement_id, sent_at, by, ack_hours, ack_deadline, recipients, read, read_in_time, counts_as_proof}, notice{days, last_day, ok}, roster[{unit_id, unit_name, block_name, owners[], key, share, share_den}], roster_frozen, attendance[{unit_id, mode, proxy_name, at, recorded_by}], votes{agenda_item_id: {decision_type, status: none\|open\|closed, ballots{unit_id: for\|against\|abstain}, result, live, opened_at, closed_at}}, minutes{notes, decisions, opening, attendance_sentence, finalized_at, finalized_by, signed_document, summary_draft}, settings, quorum{persons_present, persons_total, share_present, share_total, person_ok, share_ok, required, ok, second_call}}`. Okuma yazmaz; malik listesi hazirun başlayana kadar canlı |
+| PUT | `…/meetings/{id}/assembly/prep` | `meetings.manage` | R | `{format?: physical\|hybrid\|prevote, item_types?, second_call?}` — hazirun başlayınca format/karar türü 409 `started`; ikinci toplantı işareti oylama başlayana kadar değişir. Format değişince hukuki uyarı onayı sıfırlanır. 422 `fields.format`, `fields.item_types.{id}` |
+| POST | `…/meetings/{id}/assembly/legal-ack` | `meetings.manage` | R | hukuki geçerlilik uyarısı onayı (kim, ne zaman) |
+| POST | `…/meetings/{id}/assembly/invitation` | `meetings.manage` | R | `{title, body, ack_hours (1–720, varsayılan 72)}` → maliklere (`owners_only`) uygulama + e-posta + SMS, sabit, toplantı gününe kadar duyuru. Hibrit/ön oylamada onay yoksa 409 `legal_ack_required`; ikinci çağrı 409 `already_sent`; geçmiş toplantı 409 `meeting_past`. Çağrı süresi aşıldıysa yalnız mesajda uyarı |
+| GET | `…/meetings/{id}/assembly/invitation-proof` | `meetings.read` | R | sayfalı çağrı ispat raporu: `{person_id, name, units[], channels[], sent_at, read_at, read_in_time}`; çağrı yoksa 404 |
+| PUT | `…/meetings/{id}/assembly/attendance` | `meetings.manage` | R | `{unit_id, mode: self\|proxy\|null, proxy_name?}`. İlk kayıt malik listesini sabitler. Açık oylama varken 409 `voting_open`; vekil adı 422 `fields.proxy_name`; vekilin taşıdığı **kişi** sayısı `proxy_limit`'i aşarsa 409 `proxy_limit`; listede olmayan bölüm 404 |
+| POST | `…/meetings/{id}/assembly/items/{agenda_item_id}/open` | `meetings.manage` | R | toplantı nisabı yoksa 409 `no_quorum` ("… (kişi 24/46 ✓, arsa payı %38,52 ✗) …"); başka açık oylama 409 `voting_open`; açılmış 409 `invalid_status` |
+| PUT | `…/meetings/{id}/assembly/items/{agenda_item_id}/ballots` | `meetings.manage` | R | `{ballots{unit_id: for\|against\|abstain\|null}}` — her değişiklik değişmez oy olayı. Hazirunda olmayan 422 `fields.ballots.{unit_id}`; aynı malikin bölümlerine farklı oy 422 `owner_conflict`; açık değil 409 `invalid_status` |
+| POST | `…/meetings/{id}/assembly/items/{agenda_item_id}/close` | `meetings.manage` | R | eksik oy 422 `missing_ballots` ("N katılımcının oyu girilmedi."); sonuç değişmez anlık görüntü |
+| PUT | `…/meetings/{id}/assembly/minutes` | `meetings.manage` | R | `{notes{id: metin}, decisions{id: metin}, opening}` — sonuç ve oy sayıları düzenlenmez |
+| POST | `…/meetings/{id}/assembly/minutes/finalize` | `meetings.manage` | R | kapanmamış madde 422 `items_open`; toplantı kararları (`held`) + değişmez tutanak + kabul edilen kararlar karar defterine site bazında artan numarayla |
+| POST | `…/meetings/{id}/assembly/minutes/signed` | `meetings.manage` | R | multipart `file` (PDF/görsel ≤ 10 MB), `title?` → belge arşivine (`subject_type = meetings`); kesinleşmeden 409 `not_finalized` |
+| GET | `/sites/{slug}/decision-book` | `meetings.read` | R | sayfalı, numara büyükten küçüğe: `{no, meeting_id, meeting_title, date, item_title, decision, result, type_name}` |
+
+Nisap/çoğunluk hesabı `domain/assembly.py` (tam kesir): kişi = bölümün malik kümesi (hisseli bölüm
+tek, aynı malik(ler)in birden çok bölümü tek; `person_rule = per_unit` ile her bölüm); karar türü
+tabanı katılanlar ya da tüm malikler; çekimser oy tabanda kalır (`abstain_in_base`). Uygulamadan
+katılım/oy ve dijital vekâlet (B18) kapalı — hukuki teyit ve SMS doğrulaması (P16c) bekliyor.
 
 ### 2.19 Anket (servis isteği 15 — modül `surveys`)
 | Yöntem | Yol | İzin | Durum | Not |

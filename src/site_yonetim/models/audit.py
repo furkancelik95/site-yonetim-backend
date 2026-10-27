@@ -181,6 +181,13 @@ AUDITED_TABLES = frozenset(
         # yönetim (anket oyları gizli: poll_votes yazılmaz)
         "meetings",
         "meeting_agenda_items",
+        "assembly_settings",
+        "assemblies",
+        "assembly_items",
+        "assembly_attendance",
+        "assembly_ballots",
+        "assembly_minutes",
+        "decision_book_entries",
         "polls",
         "contracts",
         "assets",

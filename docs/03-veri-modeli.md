@@ -492,6 +492,20 @@ Site içinde artan `number`; silinmez, içerik değişmez. Olay: `kind`, `locati
   `planned` · `held` · `cancelled`, `attendance_note`, `held_at`, `cancel_reason`) ve
   `meeting_agenda_items` (`order` toplantı içinde tekil, `result`, `decision`, `votes_*` ≥ 0).
   Kararlar tek seferde girilir, sonra değişmez.
+- **Genel kurul** (servis istekleri 75–77, göç 0037): `assembly_settings` (tek satır: karar türleri
+  JSON `{code, name, base: present|all, num, den, strict, person, share, abstain_in_base}`, nisap,
+  ikinci toplantı nisabı — NULL aranmaz, `proxy_limit` 1–20, `person_rule` owner_group|per_unit,
+  `notice_days`, `second_call_days`, `read_ack_proof`, B18 bayrakları `remote_voting` /
+  `digital_proxy` varsayılan kapalı + `legal_basis_document_id`); `assemblies` (toplantı başına
+  tekil: format, hukuki uyarı onayı, çağrı duyurusu ve okuma onayı süresi, `roster_frozen_at`,
+  tutanak açılışı, kesinleşme, imzalı tutanak belgesi); `assembly_items` (gündem maddesi başına:
+  karar türü kodu, `none|open|closed`, kapanış sonucu JSON — kapalıysa zorunlu, görüşme notu,
+  karar metni); `assembly_attendance` (bölüm başına: `self|proxy`, vekil adı ve Türkçe küçük harf
+  anahtarı). **Değişmez** (`forbid_history_change`): `assembly_roster` (ilk hazirun kaydında
+  sabitlenen malik listesi: malik kişi kimlikleri ve adları, kişi anahtarı, arsa payı),
+  `assembly_ballots` (oy olayları; son olay geçerli, `choice` NULL = silindi; `channel`
+  hall|app, `device`, `sms_verified` B18 için), `assembly_minutes` (kesinleşen tutanak anlık
+  görüntüsü), `decision_book_entries` (site içinde artan `number`, kabul edilen karar).
 - `polls` (`question`, `audience`, `ends_on`, erken kapanışta `closed_at`), `poll_options`,
   `poll_votes(poll_id, unit_id)` **benzersiz** — bölüm başına bir oy. Oyu kimin verdiği tutulmaz;
   oy tablosu denetim kaydına yazılmaz (gizli oy).

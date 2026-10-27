@@ -12,6 +12,16 @@ from site_yonetim.models.approvals import (
     ApprovalRule,
     ApprovalRuleVersion,
 )
+from site_yonetim.models.assembly import (
+    Assembly,
+    AssemblyAttendance,
+    AssemblyBallot,
+    AssemblyItem,
+    AssemblyMinutes,
+    AssemblyRosterEntry,
+    AssemblySettings,
+    DecisionBookEntry,
+)
 from site_yonetim.models.audit import AuditLog
 from site_yonetim.models.cash import (
     BankImport,
@@ -198,6 +208,13 @@ __all__ = [
     "ApprovalRequest",
     "ApprovalRule",
     "ApprovalRuleVersion",
+    "Assembly",
+    "AssemblyAttendance",
+    "AssemblyBallot",
+    "AssemblyItem",
+    "AssemblyMinutes",
+    "AssemblyRosterEntry",
+    "AssemblySettings",
     "Asset",
     "AssetInspectionRecord",
     "AssetInspectionSchedule",
@@ -230,6 +247,7 @@ __all__ = [
     "Contract",
     "CustomField",
     "CustomFieldValue",
+    "DecisionBookEntry",
     "DemandLetter",
     "DepositedKey",
     "Document",

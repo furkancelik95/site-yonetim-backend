@@ -83,6 +83,7 @@ from site_yonetim.models import (
     Vehicle,
 )
 from site_yonetim.models.audit import bulk_operation
+from site_yonetim.seed.demo_assembly import seed_assemblies
 from site_yonetim.seed.demo_data import (
     ACCOUNTS,
     ANNOUNCEMENTS,
@@ -284,6 +285,7 @@ async def _seed_demo(
         await _seed_resident(factory, aksu, password_hash, store, today)
         await _seed_staff(factory, aksu, user_ids, today)
         await _seed_facility(factory, aksu, user_ids, store, today)
+        await seed_assemblies(factory, aksu, today)
 
     logger.info("Demo verisi yüklendi: %d site, %d hesap.", len(SITES), len(ACCOUNTS) + 1)
     return True
