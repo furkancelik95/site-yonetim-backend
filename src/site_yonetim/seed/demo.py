@@ -121,10 +121,12 @@ from site_yonetim.services import (
     security,
 )
 from site_yonetim.services import approvals as approvals_svc
+from site_yonetim.services import communication as comm_svc
 from site_yonetim.services import leaves as leaves_svc
 from site_yonetim.services import shifts as shifts_svc
 from site_yonetim.services import staff as staff_svc
 from site_yonetim.services import timesheets as timesheets_svc
+from site_yonetim.services import transparency as transparency_svc
 from site_yonetim.services.charging import BUSINESS_TZ
 from site_yonetim.services.files import FileStore
 from site_yonetim.services.provisioning import provision_site
@@ -230,6 +232,7 @@ async def _seed_demo(
                     await set_module_enabled(session, site, key, enable=True)
                 await _seed_finance(session, spec, today)
                 await _seed_operations(session, spec, today)
+                await _seed_communication(session, site, today)
                 await _seed_gate(session, spec, today)
                 await _seed_directory(session, spec, today)
                 await _seed_security_setup(session, spec, today)
@@ -549,6 +552,71 @@ async def _seed_operations(session: AsyncSession, spec: SiteSpec, today: date) -
                 session, request, status, demand.resolution, actor="Site Yönetimi",
                 now=opened + timedelta(hours=4 * step),
             )  # fmt: skip
+
+
+async def _seed_communication(session: AsyncSession, site: Site, today: date) -> None:
+    """ILT-01/06, RAP-02: okuma onaylı duyuru, acil bilgi kartı, geçen ayın şeffaflık raporu."""
+    now = datetime.combine(today - timedelta(days=1), time(11), BUSINESS_TZ)
+    await announcements.publish(
+        session,
+        announcements.NewAnnouncement(
+            title="Asansör yenileme çalışması — okuma onayı",
+            body="A blok asansörü 3 gün boyunca kullanılamayacak. Lütfen okuduğunuzu onaylayın.",
+            importance=Importance.IMPORTANT,
+            audience=Audience.ALL_RESIDENTS,
+            block_ids=(),
+            channels=(),
+            expires_on=None,
+            is_pinned=False,
+            requires_ack=True,
+            ack_hours=72,
+            sms_fallback=True,
+        ),
+        published_by="Site Yönetimi",
+        now=now,
+        today=today,
+    )
+    blocks = list(await session.scalars(select(Block).order_by(Block.name).limit(2)))
+    await comm_svc.publish_card(
+        session,
+        comm_svc.CardInput(
+            muster_points=[
+                {"name": "Otopark girişi", "directions": "Ana kapının karşısı, açık alan"},
+                {"name": "Çocuk parkı", "directions": "B blok arkası"},
+            ],
+            phones=[
+                {"label": "Acil çağrı", "number": "112"},
+                {"label": "Doğal gaz acil", "number": "187"},
+                {"label": "Site güvenliği", "number": "02125550000"},
+            ],
+            instructions={},
+            block_notes=[
+                {"block_id": str(b.id), "note": "Merdivenle inin; asansör kullanmayın."}
+                for b in blocks[:1]
+            ],
+        ),
+        by="Site Yönetimi",
+    )
+    last = today.replace(day=1) - timedelta(days=1)
+    report = await transparency_svc.prepare(
+        session,
+        year=last.year,
+        month=last.month,
+        scope={"include_categories": True, "include_collection": True,
+               "include_cash_balance": False},
+        note="Yönetim kurulu tarafından onaylanan aylık özet.",
+        by="Site Yönetimi",
+        today=today,
+    )  # fmt: skip
+    await transparency_svc.submit(
+        session,
+        site,
+        report,
+        requester=approvals_svc.Person(uuid.UUID(int=0), "Site Yönetimi"),
+        can_publish=True,
+        today=today,
+        now=now,
+    )
 
 
 async def _seed_gate(session: AsyncSession, spec: SiteSpec, today: date) -> None:

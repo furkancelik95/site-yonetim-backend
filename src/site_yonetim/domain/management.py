@@ -48,7 +48,19 @@ class PollStatus(StrEnum):
     CLOSED = "closed"
 
 
+class PollQuestionKind(StrEnum):
+    SINGLE = "single"  # tek seçim
+    MULTIPLE = "multiple"  # çoklu seçim
+    RATING = "rating"  # 1–5 puan
+    TEXT = "text"  # serbest metin
+
+
 OPTIONS_MIN, OPTIONS_MAX = 2, 8
+QUESTIONS_MAX = 20
+TEXT_ANSWER_MAX = 1000
+POLL_NOTICE = (
+    "Anket sonucu danışma niteliğindedir; resmî oylama ve genel kurul kararı yerine geçmez."
+)
 
 
 def poll_status(ends_on: date, closed_early: bool, today: date) -> PollStatus:

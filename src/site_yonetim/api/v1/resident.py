@@ -2,7 +2,8 @@
 
 - Yalnız kişiye bağlı üyelik (sakin) kullanır; kişisi olmayan kullanıcı 403.
 - Kendi bölümleri, kendi cari hesapları ve ekstresi, kendisine teslim edilen duyurular, kendi
-  talepleri; sitenin gerçekleşen giderleri ve fatura görüntüsü (şeffaflık).
+  talepleri. Gider şeffaflığı K32 ile şeffaflık raporuna taşındı (`api/v1/transparency.py`):
+  sakin artık giderleri ve fatura görüntüsünü tek tek görmez.
 - Başka kişinin hesabı/talebi "yok"tur (404). Duyuru ve talep modülü kapalıysa ilgili uç 404.
 """
 
@@ -11,7 +12,6 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, status
-from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, func, or_, select
 
@@ -25,7 +25,6 @@ from site_yonetim.api.schemas import Money, Page, PageParams, Written
 from site_yonetim.api.v1 import announcements as announcements_api
 from site_yonetim.api.v1 import requests as requests_api
 from site_yonetim.api.v1.charges import LineOut
-from site_yonetim.api.v1.expenses import StoreDep, send_document
 from site_yonetim.api.v1.payments import AccountOut, EntryOut, LastChargeOut, StatementOut
 from site_yonetim.core.errors import ForbiddenError, NotFoundError
 from site_yonetim.domain.finance import LedgerSource
@@ -36,20 +35,16 @@ from site_yonetim.domain.security import PackageStatus
 from site_yonetim.domain.structure import AccountKind, PartyRole
 from site_yonetim.models import (
     Block,
-    Expense,
-    ExpenseCategory,
     LedgerAccount,
     LedgerEntry,
     Request,
     Unit,
     UnitParty,
 )
-from site_yonetim.models.audit import AuditAction, record
 from site_yonetim.services import accounts as accounts_svc
 from site_yonetim.services import announcements as announcements_svc
 from site_yonetim.services import requests as requests_svc
 from site_yonetim.services import security as security_svc
-from site_yonetim.services.expenses import realized, stored_file
 
 router = APIRouter(prefix="/sites/{slug}/resident", tags=["sakin"])
 Paging = Annotated[PageParams, Depends()]
@@ -364,92 +359,3 @@ async def my_packages(ctx: Resident, today: TodayDep) -> list[MyPackage]:
         )
         for p in rows
     ]
-
-
-# --- Site giderleri (şeffaflık) --------------------------------------------------------
-
-
-class SiteExpense(BaseModel):
-    id: uuid.UUID
-    date: dt.date
-    description: str
-    category: str
-    vendor: str | None
-    amount: Money
-    is_paid: bool
-    document_id: uuid.UUID | None = Field(description="fatura görüntüsü: GET …/resident/files/{id}")
-
-
-class SiteExpensesOut(Page[SiteExpense]):
-    total_amount: Money = Field(description="seçilen yılın gerçekleşen gideri")
-
-
-@router.get("/expenses", summary="Sitenin gider dökümü (gerçekleşen)")
-async def site_expenses(
-    ctx: Resident,
-    paging: Paging,
-    today: TodayDep,
-    year: Annotated[int | None, Query(ge=2000, le=2100, description="boşsa bu yıl")] = None,
-) -> SiteExpensesOut:
-    chosen = year or today.year
-    conditions = [realized(), func.extract("year", Expense.date) == chosen]
-    total = (
-        await ctx.session.scalar(select(func.count()).select_from(Expense).where(*conditions)) or 0
-    )
-    amount = await ctx.session.scalar(
-        select(func.coalesce(func.sum(Expense.amount), 0)).where(*conditions)
-    )
-    rows = await ctx.session.execute(
-        select(Expense, ExpenseCategory.name)
-        .join(
-            ExpenseCategory,
-            and_(
-                ExpenseCategory.id == Expense.expense_category_id,
-                ExpenseCategory.site_id == Expense.site_id,
-            ),
-        )
-        .where(*conditions)
-        .order_by(Expense.date.desc(), Expense.created_at.desc())
-        .offset(paging.offset)
-        .limit(paging.page_size)
-    )
-    return SiteExpensesOut(
-        items=[
-            SiteExpense(
-                id=e.id,
-                date=e.date,
-                description=e.description,
-                category=category,
-                vendor=e.vendor,
-                amount=e.amount,
-                is_paid=e.paid_on is not None,
-                document_id=e.stored_file_id,
-            )
-            for e, category in rows
-        ],
-        page=paging.page,
-        page_size=paging.page_size,
-        total=total,
-        total_amount=amount or ZERO,
-    )
-
-
-@router.get(
-    "/files/{file_id}",
-    summary="Gider belgesi (fatura görüntüsü)",
-    response_class=Response,
-    responses={200: {"content": {"application/pdf": {}, "image/*": {}}}},
-)
-async def expense_document(file_id: uuid.UUID, ctx: Resident, store: StoreDep) -> Response:
-    """Yalnız gerçekleşen bir giderin belgesi; başka dosya "yok"tur."""
-    linked = await ctx.session.scalar(
-        select(Expense.id).where(Expense.stored_file_id == file_id, realized()).limit(1)
-    )
-    row = await stored_file(ctx.session, file_id) if linked else None
-    if row is None:
-        raise NotFoundError("Belge bulunamadı.")
-    response = send_document(row, store)
-    # Kişisel veri içerebilecek belge indirildi (docs/09 §6).
-    record(ctx.session, AuditAction.DOWNLOAD, "stored_files", row.id, {"file_name": row.file_name})
-    await ctx.session.commit()
-    return response

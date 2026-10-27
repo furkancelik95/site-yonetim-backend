@@ -12,6 +12,7 @@ from site_yonetim.api.v1 import (
     certificates,
     charge_schedule,
     charges,
+    communication,
     contracts,
     custom_fields,
     dashboard,
@@ -53,6 +54,7 @@ from site_yonetim.api.v1 import (
     structure,
     structure_defs,
     timesheets,
+    transparency,
     vehicles,
     visits,
 )
@@ -92,6 +94,12 @@ api_router.include_router(account_ops.router)
 api_router.include_router(requests.router)
 api_router.include_router(departments.router)
 api_router.include_router(announcements.router)
+api_router.include_router(announcements.scheduled_router)
+api_router.include_router(announcements.resident_router)
+api_router.include_router(communication.router)
+api_router.include_router(communication.resident_router)
+api_router.include_router(transparency.router)
+api_router.include_router(transparency.resident_router)
 api_router.include_router(cash.router)
 api_router.include_router(recurring_expenses.router)
 api_router.include_router(expenses.router)

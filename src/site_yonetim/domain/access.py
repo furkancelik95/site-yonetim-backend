@@ -54,6 +54,8 @@ class Permission(StrEnum):
     DOCUMENTS_READ = "documents.read"  # gizli dışındaki belgeler (sakin kendi ucunu kullanır)
     DOCUMENTS_MANAGE = "documents.manage"  # yükleme ve yeni sürüm
     DOCUMENTS_CONFIDENTIAL = "documents.confidential"  # gizli belgeler; her açılış kayda geçer
+    TRANSPARENCY_MANAGE = "transparency.manage"  # şeffaflık raporu hazırlama (RAP-02)
+    TRANSPARENCY_PUBLISH = "transparency.publish"  # onay kuralı yoksa doğrudan yayın
 
 
 class SiteRole(StrEnum):
@@ -94,6 +96,7 @@ ROLE_PERMISSIONS: dict[SiteRole, frozenset[Permission]] = {
             P.POLLS_MANAGE, P.CONTRACTS_MANAGE, P.INVENTORY_READ, P.INVENTORY_MANAGE,
             P.STAFF_MANAGE, P.APPROVAL_RULES_READ, P.APPROVAL_RULES_MANAGE, P.PEOPLE_CONTACT,
             P.DOCUMENTS_READ, P.DOCUMENTS_MANAGE, P.DOCUMENTS_CONFIDENTIAL,
+            P.TRANSPARENCY_MANAGE, P.TRANSPARENCY_PUBLISH,
         }
     ),
     SiteRole.BOARD_MEMBER: frozenset(
@@ -115,7 +118,7 @@ ROLE_PERMISSIONS: dict[SiteRole, frozenset[Permission]] = {
             P.FINANCE_READ, P.FINANCE_CHARGE_POST, P.FINANCE_PAYMENT_RECORD,
             P.FINANCE_BUDGET_MANAGE, P.EXPENSES_READ, P.EXPENSES_MANAGE, P.FINANCE_CASH_READ,
             P.FINANCE_CASH_MANAGE, P.FINANCE_REPORTS_READ, P.UNITS_READ, P.PEOPLE_READ,
-            P.CONTRACTS_MANAGE, P.INVENTORY_READ, P.DOCUMENTS_READ,
+            P.CONTRACTS_MANAGE, P.INVENTORY_READ, P.DOCUMENTS_READ, P.TRANSPARENCY_MANAGE,
         }
     ),
     # Yalnızca kapıdaki iş: borç, kişi listesi, muhasebe yok

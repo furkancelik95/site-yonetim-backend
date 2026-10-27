@@ -10,6 +10,8 @@ uv run python -m site_yonetim.cli run-approval-jobs      # onay hatırlatma/eska
 uv run python -m site_yonetim.cli run-structure-jobs     # öznitelik yürürlüğü, davet (günde bir)
 uv run python -m site_yonetim.cli run-staff-jobs         # ayrılan personelin erişimini kapat (gece)
 uv run python -m site_yonetim.cli run-document-expiry    # belge geçerlilik uyarısı (günde bir)
+uv run python -m site_yonetim.cli run-announcement-jobs # duyuru zamanlama, SMS yedeği (dakika)
+uv run python -m site_yonetim.cli run-emergency-purge    # acil durum yoklama verisi saklama (gece)
 """
 
 import argparse
@@ -24,10 +26,12 @@ from site_yonetim.db.session import create_engine_from_settings, create_session_
 from site_yonetim.domain.finance import ScheduleRunStatus
 from site_yonetim.seed.demo import DemoSeedRefusedError, ensure_demo_allowed, seed_demo
 from site_yonetim.services import (
+    announcements,
     approvals,
     bank_imports,
     charge_schedule,
     documents,
+    emergencies,
     login_throttle,
     rate_limit,
     reconciliation,
@@ -258,6 +262,35 @@ async def _run_document_expiry() -> int:
     return 0
 
 
+async def _run_announcement_jobs() -> int:
+    """ILT-01: vakti gelen zamanlanmış duyuruyu yayınlar; son onay süresi dolan okuma onaylı
+    duyuruda onaylamayanlara bir kez SMS yedeği (sağlayıcı P16c ile). Dakikalık."""
+    engine = create_engine_from_settings(get_settings())
+    try:
+        results = await announcements.run_jobs(
+            create_session_factory(engine), now=datetime.now(UTC)
+        )
+    finally:
+        await engine.dispose()
+    for r in results:
+        print(f"{r.site_id}: yayınlanan {r.published}, SMS yedeği {r.fallbacks}")
+    return 0
+
+
+async def _run_emergency_purge() -> int:
+    """ILT-06 / K8: `auto_purge` açık sitelerde bitişten `retention_days` gün sonra acil durum
+    yoklama ayrıntısını siler (özet kalır). Varsayılan kapalı — hukuk teyidi bekliyor. Gece."""
+    engine = create_engine_from_settings(get_settings())
+    try:
+        results = await emergencies.run_purge(create_session_factory(engine), now=datetime.now(UTC))
+    finally:
+        await engine.dispose()
+    for r in results:
+        print(f"{r.site_id}: {r.purged} acil durumun yoklama verisi silindi")
+    print(f"{len(results)} sitede acil durum verisi temizlendi.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="site_yonetim.cli")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -276,6 +309,10 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("run-structure-jobs", help="Öznitelik yürürlüğü, davet süresi (günde bir)")
     sub.add_parser("run-staff-jobs", help="Ayrılan personelin site erişimini kapat (gece)")
     sub.add_parser("run-document-expiry", help="Belge geçerlilik uyarısı (günde bir)")
+    sub.add_parser(
+        "run-announcement-jobs", help="Zamanlanmış duyuru + okuma onayı SMS yedeği (dakikalık)"
+    )
+    sub.add_parser("run-emergency-purge", help="Acil durum yoklama verisi saklama (gece)")
     reconcile = sub.add_parser("reconcile", help="Özet bakiyeleri defterle karşılaştır")
     reconcile.add_argument("--fix", action="store_true", help="Farklı siteleri onar")
     args = parser.parse_args(argv)
@@ -296,6 +333,10 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_run_structure_jobs())
     if args.command == "run-staff-jobs":
         return asyncio.run(_run_staff_jobs())
+    if args.command == "run-announcement-jobs":
+        return asyncio.run(_run_announcement_jobs())
+    if args.command == "run-emergency-purge":
+        return asyncio.run(_run_emergency_purge())
     if args.command == "run-document-expiry":
         return asyncio.run(_run_document_expiry())
     if args.command == "run-recurring-expenses":

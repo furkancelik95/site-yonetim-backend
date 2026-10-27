@@ -367,12 +367,13 @@ async def test_demo_duyuru_ve_talep(
                     select(func.count()).select_from(Announcement)
                 )
         assert statuses == {"open", "in_progress", "waiting", "resolved", "closed"}
-        assert announcement_count == 4
+        assert announcement_count == 5  # + okuma onaylı duyuru (ILT-01)
 
     resident = await login_headers(api, "sakin@demo.local", DEMO_PASSWORD)
     listed = (await api.get("/api/v1/sites/aksu-konaklari/announcements", headers=resident)).json()
     assert [a["title"] for a in listed["items"]] == [
         "Olağan genel kurul toplantısı",
+        "Asansör yenileme çalışması — okuma onayı",
         "Planlı su kesintisi",
         "Aidat ödeme hatırlatması",
     ]
