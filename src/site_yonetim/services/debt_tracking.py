@@ -20,7 +20,7 @@ from decimal import Decimal
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from site_yonetim.domain.access import ROLE_PERMISSIONS, Permission
+from site_yonetim.domain.access import Permission
 from site_yonetim.domain.approvals import ActionType
 from site_yonetim.domain.debt_tracking import (
     BUCKET_LABELS,
@@ -51,8 +51,8 @@ from site_yonetim.models import (
 from site_yonetim.models.approvals import ApprovalRequest
 from site_yonetim.services import approvals as approvals_svc
 from site_yonetim.services import finance_params, payment_plans
-from site_yonetim.services import members as members_svc
 from site_yonetim.services import notifications as notify_svc
+from site_yonetim.services import roles as roles_svc
 from site_yonetim.services.approvals import ExecutionError, Person
 
 SYSTEM_NAME = "Sistem (kademe işi)"
@@ -433,11 +433,7 @@ async def run_stages(session: AsyncSession, site: Site, today: date) -> int:
                 tasks.append(stage.value)
     await session.flush()
     if tasks:
-        users = {
-            m.user.id
-            for m in await members_svc.list_members(session, site)
-            if m.is_active and Permission.FINANCE_PAYMENT_RECORD in ROLE_PERMISSIONS[m.role]
-        }
+        users = await roles_svc.permission_holders(session, site, Permission.FINANCE_PAYMENT_RECORD)
         await notify_svc.notify(
             session,
             users,

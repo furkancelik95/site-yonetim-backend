@@ -77,7 +77,7 @@ def _check(table: str, column: str, values: tuple[str, ...]) -> None:
 
 
 revision: str = "0027"
-down_revision: str | None = "0032"
+down_revision: str | None = "0041"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
