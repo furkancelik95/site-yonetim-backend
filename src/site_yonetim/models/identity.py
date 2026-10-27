@@ -234,6 +234,7 @@ class Registration(TenantMixin, Base):
     __tablename__ = "registrations"
     __table_args__ = tenant_table_args(
         tenant_fk("unit_id", "units"),
+        tenant_fk("requested_unit_id", "units"),
         tenant_fk("person_id", "persons"),
         UniqueConstraint("site_id", "number"),
         CheckConstraint("status IN ('pending', 'approved', 'rejected')", name="status"),
@@ -263,3 +264,5 @@ class Registration(TenantMixin, Base):
     reject_reason: Mapped[str | None] = mapped_column(Text)
     unit_id: Mapped[uuid.UUID | None]
     person_id: Mapped[uuid.UUID | None]
+    # Başvuranın formda listeden seçtiği bölüm (istek 23); onayda yönetici yine seçer.
+    requested_unit_id: Mapped[uuid.UUID | None]

@@ -87,6 +87,7 @@ class PublicSite:
     site_id: uuid.UUID
     name: str
     slug: str
+    lifecycle_status: str = "live"
 
 
 async def site_by_code(factory: async_sessionmaker[AsyncSession], code: str) -> PublicSite | None:
@@ -97,7 +98,7 @@ async def site_by_code(factory: async_sessionmaker[AsyncSession], code: str) -> 
         async with factory() as session:
             row = (
                 await session.execute(
-                    select(Site.id, Site.name, Site.slug)
+                    select(Site.id, Site.name, Site.slug, Site.lifecycle_status)
                     .join(RegistrationLink, RegistrationLink.site_id == Site.id)
                     .where(RegistrationLink.code == code, RegistrationLink.is_enabled)
                 )
@@ -115,6 +116,7 @@ async def submit(
     explicit_consent: bool,
     now: datetime,
     ip: str | None,
+    unit_id: uuid.UUID | None = None,
 ) -> Registration:
     pending = await session.scalar(
         select(Registration.id).where(
@@ -139,6 +141,7 @@ async def submit(
         explicit_consent_at=now if explicit_consent else None,
         ip=ip,
         status="pending",
+        requested_unit_id=unit_id,
     )
     session.add(registration)
     try:
@@ -179,6 +182,28 @@ async def unit_names(session: AsyncSession, unit_ids: set[uuid.UUID]) -> dict[uu
         .where(Unit.id.in_(list(unit_ids)))
     )
     return {i: f"{block}-{number}" for i, number, block in rows}
+
+
+@dataclass(frozen=True, slots=True)
+class PublicBlock:
+    id: uuid.UUID
+    name: str
+    units: list[tuple[uuid.UUID, str]]
+
+
+async def public_blocks(session: AsyncSession) -> list[PublicBlock]:
+    """Herkese açık form için yalnız blok ve etkin bölüm adları — kişi bilgisi yok (KVKK)."""
+    rows = await session.execute(
+        select(Block.id, Block.name, Unit.id, Unit.number)
+        .join(Unit, and_(Unit.block_id == Block.id, Unit.site_id == Block.site_id))
+        .where(Unit.is_active)
+        .order_by(Block.sort_order, Block.name, func.length(Unit.number), Unit.number)
+    )
+    blocks: dict[uuid.UUID, PublicBlock] = {}
+    for block_id, block_name, unit_id, number in rows:
+        block = blocks.setdefault(block_id, PublicBlock(block_id, block_name, []))
+        block.units.append((unit_id, f"{block_name}-{number}" if block_name else number))
+    return list(blocks.values())
 
 
 # --- Karar --------------------------------------------------------------------------

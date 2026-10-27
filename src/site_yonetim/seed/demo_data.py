@@ -315,10 +315,18 @@ REQUESTS: tuple[RequestSpec, ...] = (
                 location="B blok 3. kat", resolution="Ampul değiştirildi.", assignee="Teknik ekip"),
     RequestSpec("Kalorifer peteği ısınmıyor", "heating", "high", "waiting",
                 assignee="Teknik ekip"),
-    RequestSpec("Otopark girişi kirli", "cleaning", "normal", "closed",
+    RequestSpec("Otopark girişi kirli", "cleaning", "normal", "closed", assignee="Temizlik ekibi",
                 location="Otopark girişi", resolution="Temizlik yapıldı."),
-    RequestSpec("Bahçe sulama sistemi arızalı", "garden", "normal", "open", location="Ön bahçe"),
+    RequestSpec("Bahçe sulama sistemi arızalı", "garden", "normal", "assigned", location="Ön bahçe",
+                assignee="Yeşil Peyzaj"),
 )  # fmt: skip
+
+# Ücretli hizmet tarifesi (HIZ-04): kalem, birim, birim fiyat
+TARIFFS: tuple[tuple[str, str, Decimal], ...] = (
+    ("İşçilik", "saat", Decimal("400.00")),
+    ("Batarya değişimi", "iş", Decimal("650.00")),
+    ("Klozet takımı değişimi", "iş", Decimal("900.00")),
+)
 
 
 # --- Kasa ve gider (docs/10 §1.4) ------------------------------------------------
@@ -394,4 +402,141 @@ SHIFT_TEMPLATES: tuple[tuple[str, str, str, int], ...] = (
     ("Sabah", "08:00", "16:00", 60),
     ("Akşam", "16:00", "00:00", 30),
     ("Gece", "00:00", "08:00", 30),
+)
+
+
+# --- Operasyon ekleri ve teknik varlık (servis istekleri 53–58; HIZ-06/07; K28) --------------
+# Anahtar: tip, kod, ad, alan, yetkili roller (boş: herkes).
+FACILITY_KEYS: tuple[tuple[str, str, str, str, tuple[str, ...]], ...] = (
+    ("key", "TS-01", "Toplantı salonu", "Sosyal tesis", ()),
+    ("remote", "OT-01", "Otopark bariyer kumandası", "Otopark", ("Güvenlik", "Görevli")),
+    ("card", "SP-01", "Spor salonu kartı", "Sosyal tesis", ()),
+    ("key", "TK-01", "Teknik oda", "B Blok bodrum", ("Teknik Personel", "Yönetici")),
+)
+# Poliçe: tür, sigortacı, no, kapsam, prim, başlangıç (bugünden gün), bitiş (bugünden gün)
+INSURANCE_POLICIES: tuple[tuple[str, str, str, str, str, int, int], ...] = (
+    (
+        "building",
+        "Anadolu Sigorta",
+        "KNT-2026-0418",
+        "Deprem, yangın, su baskını",
+        "18400.00",
+        -320,
+        45,
+    ),
+    (
+        "liability",
+        "Allianz",
+        "SRM-77812",
+        "Üçüncü şahıs sorumluluk 5.000.000 TL",
+        "6200.00",
+        -100,
+        265,
+    ),
+    ("elevator", "Axa Sigorta", "ASN-5521", "Asansör kaza ve sorumluluk", "3900.00", -200, 165),
+)
+# Teknik varlık: kategori, ad, konum, marka, seri no, sorumlu firma,
+#   muayene (şablon anahtarı, son muayene — bugünden gün; None: yok)
+TECHNICAL_ASSETS: tuple[tuple[str, str, str, str, str, str | None, str | None, int | None], ...] = (
+    (
+        "elevator",
+        "A Blok asansörü",
+        "A Blok",
+        "Kone",
+        "KN-55871",
+        "Asansör Bakım Ltd.",
+        "elevator_periodic",
+        -340,
+    ),
+    (
+        "elevator",
+        "B Blok asansörü",
+        "B Blok",
+        "Otis",
+        "OT-90214",
+        "Asansör Bakım Ltd.",
+        "elevator_periodic",
+        -120,
+    ),
+    (
+        "generator",
+        "Jeneratör",
+        "Teknik oda",
+        "Aksa",
+        "AJ-1100",
+        "Enerji Servis A.Ş.",
+        "generator_load_test",
+        -310,
+    ),
+    (
+        "hydrophore",
+        "Hidrofor",
+        "B Blok bodrum",
+        "Wilo",
+        "WL-3321",
+        "Pompa Servis",
+        "pressure_vessel",
+        -200,
+    ),
+    (
+        "fire_system",
+        "Yangın tüpleri",
+        "Tüm bloklar",
+        "Sesa",
+        "YT-SET-24",
+        "Yangın Güvenlik Ltd.",
+        "fire_extinguisher",
+        -359,
+    ),
+    ("camera", "Kamera sistemi", "Güvenlik kulübesi", "Hikvision", "HK-NVR-08", None, None, None),
+)
+# Bakım planı: varlık adı, iş, periyot (birim, sayı), sıradaki tarih (bugünden gün), sorumlu
+MAINTENANCE_PLANS: tuple[tuple[str, str, str, int, int, str], ...] = (
+    ("A Blok asansörü", "Aylık asansör bakımı", "month", 1, 3, "Asansör Bakım Ltd."),
+    ("B Blok asansörü", "Aylık asansör bakımı", "month", 1, 10, "Asansör Bakım Ltd."),
+    ("Hidrofor", "Hidrofor filtre ve basınç kontrolü", "month", 3, 0, "Pompa Servis"),
+    ("Jeneratör", "Jeneratör yağ ve akü kontrolü", "month", 6, 40, "Enerji Servis A.Ş."),
+)
+# Görev şablonu: ad, sıklık, haftanın günleri, ayın günü, başlangıç, bitiş, yer, atanan,
+#   personel kartı (STAFF_CARDS sırası; None), fotoğraf zorunlu
+TASK_TEMPLATES: tuple[
+    tuple[str, str, tuple[int, ...], int | None, str, str, str, str, int | None, bool], ...
+] = (
+    ("Çöplerin toplanması", "daily", (), None, "07:00", "09:00", "Tüm bloklar", "Görevli", 2, True),
+    (
+        "Giriş holü temizliği",
+        "daily",
+        (),
+        None,
+        "09:00",
+        "11:00",
+        "A ve B Blok",
+        "Görevli",
+        2,
+        False,
+    ),
+    (
+        "Havuz klor ölçümü",
+        "weekdays",
+        (0, 3),
+        None,
+        "10:00",
+        "11:00",
+        "Havuz",
+        "Teknik Personel",
+        1,
+        True,
+    ),
+    (
+        "Jeneratör çalıştırma testi",
+        "monthly",
+        (),
+        1,
+        "14:00",
+        "15:00",
+        "Teknik oda",
+        "Teknik Personel",
+        1,
+        False,
+    ),
 )

@@ -33,6 +33,7 @@ from site_yonetim.domain.imports.unit_validator import (
     Column,
     ImportFileError,
     Issue,
+    PersonData,
     Severity,
     UnitRow,
     ValidationResult,
@@ -297,10 +298,21 @@ class ImportStore:
 
 
 @dataclass(frozen=True, slots=True)
+class PersonMerge:
+    """K16: ad + telefon aynı olan kişiler tek kayıt olur (birden çok bölüme bağlanır)."""
+
+    full_name: str
+    phone: str
+    row_numbers: list[int]
+    existing: bool  # sitede zaten kayıtlı kişi — yeni kişi açılmaz
+
+
+@dataclass(frozen=True, slots=True)
 class Preview:
     result: ValidationResult
     existing: frozenset[tuple[str, str]]  # sitede zaten kayıtlı bölümler — atlanacak
     notices: list[Issue] = field(default_factory=list)  # dosya geneli uyarılar
+    merges: list[PersonMerge] = field(default_factory=list)
 
     @property
     def new_rows(self) -> list[UnitRow]:
@@ -316,9 +328,54 @@ async def _existing_unit_keys(session: AsyncSession) -> frozenset[tuple[str, str
     return frozenset(unit_key(block, number) for block, number in rows)
 
 
+def person_key(data: PersonData) -> tuple[str, str] | None:
+    """K16 eşleme anahtarı: Türkçe küçük harf ad soyad + telefon. Telefonsuz kişi eşlenmez."""
+    if not data.phone:
+        return None
+    return (tr_lower(" ".join(f"{data.first_name} {data.last_name}".split())), data.phone)
+
+
+def _row_people(row: UnitRow) -> list[PersonData]:
+    return [row.owner] + ([row.tenant] if row.tenant is not None else [])
+
+
+async def _existing_people(
+    session: AsyncSession, keys: set[tuple[str, str]]
+) -> dict[tuple[str, str], Person]:
+    if not keys:
+        return {}
+    found: dict[tuple[str, str], Person] = {}
+    for person in await session.scalars(
+        select(Person)
+        .where(Person.phone.in_({phone for _, phone in keys}), Person.merged_into_id.is_(None))
+        .order_by(Person.created_at)
+    ):
+        key = (person.search_name, person.phone or "")
+        if key in keys and key not in found:
+            found[key] = person
+    return found
+
+
 async def build_preview(session: AsyncSession, site: Site, result: ValidationResult) -> Preview:
     existing = await _existing_unit_keys(session)
     preview = Preview(result, existing)
+    groups: dict[tuple[str, str], tuple[PersonData, list[int]]] = {}
+    for row in preview.new_rows:
+        for data in _row_people(row):
+            key = person_key(data)
+            if key is not None:
+                groups.setdefault(key, (data, []))[1].append(row.row_number)
+    known = await _existing_people(session, set(groups))
+    for key, (data, numbers) in groups.items():
+        if len(numbers) > 1 or key in known:
+            preview.merges.append(
+                PersonMerge(
+                    f"{data.first_name} {data.last_name}",
+                    key[1],
+                    sorted(set(numbers)),
+                    key in known,
+                )
+            )
     # Öneri (docs/11 §4): plan tavanı aşılacaksa uyar, engelleme.
     max_units = await session.scalar(select(Plan.max_units).where(Plan.id == site.plan_id))
     if max_units is not None:
@@ -348,11 +405,15 @@ class ImportOutcome:
     created_blocks: int = 0
     created_unit_types: int = 0
     skipped: list[str] = field(default_factory=list)
+    reused_people: int = 0  # K16: mevcut ya da dosyada tekrarlanan kişi
+    created_ids: dict[str, list[str]] = field(default_factory=dict)  # geri alma için
 
     @property
     def message(self) -> str:
         if self.created_units:
             text = f"{self.created_units} bölüm ve {self.created_people} kişi aktarıldı."
+            if self.reused_people:
+                text += f" Ad ve telefonu aynı {self.reused_people} kayıt tek kişide birleştirildi."
         else:
             text = "Yeni bölüm aktarılmadı."
         if self.skipped:
@@ -384,6 +445,8 @@ async def apply_import(
     type_order = max((t.sort_order for t in unit_types.values()), default=-1)
     existing = await _existing_unit_keys(session)
     taken_codes = set(await session.scalars(select(LedgerAccount.reference_code)))
+    created_blocks: list[str] = []
+    created_types: list[str] = []
 
     new_units: list[tuple[UnitRow, Unit, Block]] = []
     for row in rows:
@@ -396,6 +459,7 @@ async def apply_import(
             block = Block(id=uuid.uuid7(), name=row.block, sort_order=block_order)
             blocks[_name_key(row.block)] = block
             session.add(block)
+            created_blocks.append(str(block.id))
             outcome.created_blocks += 1
         unit_type = None
         if row.unit_type:
@@ -408,6 +472,7 @@ async def apply_import(
                 )
                 unit_types[_name_key(row.unit_type)] = unit_type
                 session.add(unit_type)
+                created_types.append(str(unit_type.id))
                 outcome.created_unit_types += 1
         unit = Unit(
             id=uuid.uuid7(),
@@ -428,6 +493,11 @@ async def apply_import(
     session.add_all(unit for _, unit, _ in new_units)
     await session.flush()
 
+    keys: set[tuple[str, str]] = set()
+    for row, _, _ in new_units:
+        keys.update(k for k in map(person_key, _row_people(row)) if k is not None)
+    people_by_key = await _existing_people(session, keys)
+    new_people: list[Person] = []
     parties: list[tuple[Unit, Block, Person, PartyRole, bool]] = []
     for row, unit, block in new_units:
         has_tenant = row.tenant is not None
@@ -435,33 +505,61 @@ async def apply_import(
         if row.tenant is not None:
             people.append((row.tenant, PartyRole.TENANT))
         for data, role in people:
-            person = Person(
-                id=uuid.uuid7(),
-                first_name=data.first_name,
-                last_name=data.last_name,
-                phone=data.phone,
-                email=data.email,
-            )
-            session.add(person)
+            key = person_key(data)
+            person = people_by_key.get(key) if key else None
+            if person is not None:
+                outcome.reused_people += 1
+            else:
+                person = Person(
+                    id=uuid.uuid7(),
+                    first_name=data.first_name,
+                    last_name=data.last_name,
+                    phone=data.phone,
+                    email=data.email,
+                )
+                session.add(person)
+                new_people.append(person)
+                if key:
+                    people_by_key[key] = person
             parties.append((unit, block, person, role, has_tenant))
     await session.flush()
 
+    party_ids: list[str] = []
+    account_ids: list[str] = []
     for unit, block, person, role, has_tenant in parties:
-        session.add(
-            UnitParty(unit_id=unit.id, person_id=person.id, role=role.value, start_date=start_date)
+        party = UnitParty(
+            id=uuid.uuid7(),
+            unit_id=unit.id,
+            person_id=person.id,
+            role=role.value,
+            start_date=start_date,
         )
+        session.add(party)
+        party_ids.append(str(party.id))
         base = reference_base(block.name, unit.number)
         for kind, letter in accounts_to_open(role, unit_has_active_tenant=has_tenant):
             code = reference_code(base, letter, taken_codes)
             taken_codes.add(code)
-            session.add(
-                LedgerAccount(
-                    unit_id=unit.id, person_id=person.id, kind=kind.value, reference_code=code
-                )
+            account = LedgerAccount(
+                id=uuid.uuid7(),
+                unit_id=unit.id,
+                person_id=person.id,
+                kind=kind.value,
+                reference_code=code,
             )
+            session.add(account)
+            account_ids.append(str(account.id))
             outcome.created_accounts += 1
     await session.flush()
 
     outcome.created_units = len(new_units)
-    outcome.created_people = len(parties)
+    outcome.created_people = len(new_people)
+    outcome.created_ids = {
+        "units": [str(u.id) for _, u, _ in new_units],
+        "persons": [str(p.id) for p in new_people],
+        "parties": party_ids,
+        "accounts": account_ids,
+        "blocks": created_blocks,
+        "unit_types": created_types,
+    }
     return outcome

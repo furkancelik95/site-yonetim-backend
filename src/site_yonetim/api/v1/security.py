@@ -240,10 +240,18 @@ async def list_visitors(
     today: TodayDep,
     day: Annotated[dt.date | None, Query(alias="date", description="boşsa bugün")] = None,
     status_filter: Annotated[VisitorStatus | None, Query(alias="status")] = None,
+    unit_id: Annotated[
+        uuid.UUID | None,
+        Query(description="bölüm kartı süzgeci; tarih verilmezse son 30 gün (yeni üstte)"),
+    ] = None,
 ) -> Page[VisitorOut]:
-    query = svc.visitors_query(
-        day or today, status_filter, ctx.access.blocks_for(Permission.SECURITY_VISITORS)
-    )
+    blocks = ctx.access.blocks_for(Permission.SECURITY_VISITORS)
+    if unit_id is not None and day is None:
+        query = svc.visitors_query(
+            None, status_filter, blocks, unit_id=unit_id, since=today - dt.timedelta(days=30)
+        )
+    else:
+        query = svc.visitors_query(day or today, status_filter, blocks, unit_id=unit_id)
     total = await ctx.session.scalar(select(func.count()).select_from(query.subquery())) or 0
     rows = list(await ctx.session.scalars(query.offset(paging.offset).limit(paging.page_size)))
     return Page(

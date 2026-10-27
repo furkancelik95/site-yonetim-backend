@@ -21,7 +21,7 @@ from alembic import op
 from site_yonetim.db.rls import disable_tenant_rls, enable_tenant_rls
 
 revision: str = "0041"
-down_revision: str | None = "0029"
+down_revision: str | None = "0032"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
