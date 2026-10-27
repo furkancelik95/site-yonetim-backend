@@ -100,7 +100,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_origins=settings.cors_origins,
         allow_credentials=True,  # yenileme jetonu httpOnly çerezde (docs/05-yetki.md §8)
         allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE"],
-        allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "X-Request-ID"],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "Idempotency-Key",
+            "X-Request-ID",
+            "X-View-As-Session",  # sakin olarak görüntüleme (PLT-12)
+        ],
         expose_headers=["X-Request-ID"],
         max_age=600,
     )

@@ -47,12 +47,15 @@ class AuditAction(StrEnum):
     DOWNLOAD = "download"
     EXPORT = "export"  # dışa aktarma (Excel) — Yazılım Dokümanı M-24, PLT-07
     CONTACT_VIEW = "contact_view"  # maskeli kişisel verinin açılması (YAP-03 S2, KVKK)
+    # Destek oturumunda / sakin olarak görüntülemede açılan ekran (PYN-04, PLT-12)
+    VIEW = "view"
 
 
 class ActorType(StrEnum):
     USER = "user"  # oturum açmış kişi (herkese açık formda başvuran da: kullanıcı kimliği yok)
     SYSTEM = "system"  # gece işi, demo kurulumu
     DELEGATE = "delegate"  # yetki devriyle (vekâleten) — onay mekanizması
+    SUPPORT_SESSION = "support_session"  # platform destek ekibi, müşteri onaylı oturumda (PYN-04)
 
 
 class AuditLog(TenantMixin, Base):
@@ -255,6 +258,10 @@ AUDITED_TABLES = frozenset(
         # bildirim gönderimi (PLT-05, ILT-05, RAP-05): SMS hesabı/sessiz saat ve planlı rapor
         "site_messaging_settings",
         "scheduled_reports",
+        # platform destek (PYN-04/06, PLT-12): bilet, destek oturumu, sakin olarak görüntüleme
+        "support_tickets",
+        "support_sessions",
+        "view_as_sessions",
         # yetki / üyelik
         "site_memberships",
         "site_roles",

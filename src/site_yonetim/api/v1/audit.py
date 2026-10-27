@@ -34,7 +34,9 @@ class AuditOut(BaseModel):
     before: dict[str, Any] | None = Field(description="değişiklikte eski değerler")
     after: dict[str, Any] | None = Field(description="yeni değerler / olay ayrıntısı")
     ip: str | None
-    actor_type: ActorType = Field(description="user (kişi) · system (gece işi, demo) · delegate")
+    actor_type: ActorType = Field(
+        description="user (kişi) · system (gece işi, demo) · delegate · support_session"
+    )
     request_id: str | None = Field(description="isteğin kimliği (yanıttaki X-Request-ID)")
     user_agent: str | None
     reason: str | None = Field(description="hassas işlemlerde gerekçe")

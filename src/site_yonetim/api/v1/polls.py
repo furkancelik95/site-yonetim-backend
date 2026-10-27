@@ -29,7 +29,7 @@ from site_yonetim.api.schemas import Page, PageParams, Written
 from site_yonetim.api.v1.members import form_error
 from site_yonetim.api.v1.resident import resident
 from site_yonetim.core.errors import ApiError, ForbiddenError, NotFoundError
-from site_yonetim.domain.access import Permission
+from site_yonetim.domain.access import AccessMode, Permission
 from site_yonetim.domain.management import (
     POLL_NOTICE,
     PollAudience,
@@ -146,7 +146,10 @@ class PollOut(BaseModel):
 class MyVote(BaseModel):
     unit_id: uuid.UUID
     unit_name: str
-    option_id: uuid.UUID | None = Field(description="bu bölüm adına ilk sorudaki seçim; yoksa null")
+    option_id: uuid.UUID | None = Field(
+        description="bu bölüm adına ilk sorudaki seçim; yoksa null. Sakin olarak görüntülemede "
+        "içerik gösterilmez (PLT-12) — yalnız `voted`"
+    )
     voted: bool = Field(description="bu bölüm adına yanıt verildi mi")
 
 
@@ -387,6 +390,7 @@ async def my_polls(ctx: Resident, today: TodayDep, now: NowDep) -> list[Resident
     votes = await svc.unit_votes(ctx.session, ids, list(units))
     responded_polls = await svc.person_responded(ctx.session, ids, person)
     found: list[ResidentPollOut] = []
+    hide_ballot = ctx.access.mode is AccessMode.VIEW_AS  # PLT-12: oy içeriği gösterilmez
     for poll, out in zip(rows, await _out(ctx, rows, today), strict=True):
         eligible = svc.eligible_units(poll, units)
         mine = (
@@ -394,7 +398,7 @@ async def my_polls(ctx: Resident, today: TodayDep, now: NowDep) -> list[Resident
                 MyVote(
                     unit_id=u,
                     unit_name=names.get(u, "—"),
-                    option_id=votes.get((poll.id, u)),
+                    option_id=None if hide_ballot else votes.get((poll.id, u)),
                     voted=(poll.id, u) in votes,
                 )
                 for u in sorted(eligible, key=lambda u: names.get(u, ""))

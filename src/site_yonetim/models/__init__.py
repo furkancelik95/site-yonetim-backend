@@ -200,6 +200,14 @@ from site_yonetim.models.structure import (
     UnitAttributeChange,
     UnitType,
 )
+from site_yonetim.models.support import (
+    KnowledgeArticle,
+    KnowledgeFeedback,
+    SupportSession,
+    SupportTicket,
+    SupportTicketMessage,
+    ViewAsSession,
+)
 
 __all__ = [
     "AccountBalance",
@@ -273,6 +281,8 @@ __all__ = [
     "InsurancePolicy",
     "Invitation",
     "KeyLoan",
+    "KnowledgeArticle",
+    "KnowledgeFeedback",
     "LateFeePolicy",
     "LeaveRequest",
     "LedgerAccount",
@@ -363,6 +373,9 @@ __all__ = [
     "StockMove",
     "StoredFile",
     "StructureSettings",
+    "SupportSession",
+    "SupportTicket",
+    "SupportTicketMessage",
     "TaskCompletion",
     "TaskTemplate",
     "TechnicalAsset",
@@ -380,6 +393,7 @@ __all__ = [
     "User",
     "UserInvitation",
     "Vehicle",
+    "ViewAsSession",
     "VisitRequest",
     "Visitor",
     "VisitorInvite",

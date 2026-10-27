@@ -49,6 +49,7 @@ from site_yonetim.api.v1 import (
     payments,
     plates,
     platform,
+    platform_support,
     polls,
     portfolio,
     recurring_expenses,
@@ -70,6 +71,7 @@ from site_yonetim.api.v1 import (
     structure,
     structure_defs,
     subject_documents,
+    support,
     technical_assets,
     timesheets,
     transparency,
@@ -92,6 +94,9 @@ api_router.include_router(scheduled_reports.router)
 api_router.include_router(notifications.me_router)
 api_router.include_router(sites.router)
 api_router.include_router(platform.router)
+api_router.include_router(platform_support.router)
+api_router.include_router(platform_support.knowledge_router)
+api_router.include_router(support.router)
 api_router.include_router(security.router)  # /units/lookup, /units/{id}'den önce
 api_router.include_router(incidents.router)
 # Güvenlik, devriye, otopark (servis istekleri 40–46, K30); /units/{id}/… yapıdan önce

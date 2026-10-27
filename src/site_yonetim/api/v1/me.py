@@ -11,7 +11,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
 from site_yonetim.api.deps import AuthenticatedUserDep, FactoryDep, NowDep, TodayDep
-from site_yonetim.domain.access import RoleGrant, RoleScope, SiteAccess, UserAccess
+from site_yonetim.domain.access import AccessMode, RoleGrant, RoleScope, SiteAccess, UserAccess
 from site_yonetim.domain.mfa import MfaStatus
 from site_yonetim.services.access import load_user_access
 from site_yonetim.services.mfa import required_for
@@ -62,6 +62,11 @@ class SiteAccessOut(BaseModel):
     is_derived: bool
     organization_id: uuid.UUID | None
     organization_role: str | None
+    access_mode: AccessMode = Field(
+        description="member · support_session (müşteri onaylı destek oturumu, salt okunur)"
+    )
+    read_only: bool = Field(description="salt okunur erişim: yazma istekleri 403 `read_only`")
+    access_ends_at: dt.datetime | None = Field(description="destek oturumunun bitişi")
 
     @classmethod
     def of(cls, access: SiteAccess) -> SiteAccessOut:
@@ -80,6 +85,9 @@ class SiteAccessOut(BaseModel):
             is_derived=access.is_derived,
             organization_id=access.organization_id,
             organization_role=access.organization_role.value if access.organization_role else None,
+            access_mode=access.mode,
+            read_only=access.read_only,
+            access_ends_at=access.ends_at,
         )
 
 

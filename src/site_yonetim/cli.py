@@ -20,6 +20,8 @@ uv run python -m site_yonetim.cli run-notification-jobs  # bildirim gönderimi, 
 uv run python -m site_yonetim.cli run-scheduled-reports  # planlı rapor e-postası (dakikalık)
 uv run python -m site_yonetim.cli run-announcement-jobs # duyuru zamanlama, SMS yedeği (dakika)
 uv run python -m site_yonetim.cli run-emergency-purge    # acil durum yoklama verisi saklama (gece)
+uv run python -m site_yonetim.cli run-support-jobs       # destek oturumu / sakin olarak görüntüle
+                                                         # kapanışı, bilet SLA aşımı (dakikalık)
 """
 
 import argparse
@@ -54,6 +56,7 @@ from site_yonetim.services import (
     service_desk,
     staff,
     structure_jobs,
+    support,
     technical_assets,
 )
 from site_yonetim.services.channels import channels_from_settings
@@ -427,6 +430,23 @@ async def _run_emergency_purge() -> int:
     return 0
 
 
+async def _run_support_jobs() -> int:
+    """Platform destek (PYN-04, PYN-06, PLT-12): süresi dolan destek oturumlarını ve sakin olarak
+    görüntülemeleri kapatır, bilet SLA aşımını işler. Dakikalık (oturum kapanışı dokümanda
+    dakikalık; SLA 15 dakikada bir yeterli). Erişim zaten bitiş anında kapanır; iş durumu yazar."""
+    engine = create_engine_from_settings(get_settings())
+    try:
+        r = await support.run_jobs(create_session_factory(engine), now=datetime.now(UTC))
+    finally:
+        await engine.dispose()
+    print(
+        f"Kapanan destek oturumu {r.sessions_expired}, sakin olarak görüntüleme "
+        f"{r.view_as_expired}; ilk yanıt aşımı {r.first_breached}, çözüm aşımı "
+        f"{r.resolve_breached}."
+    )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="site_yonetim.cli")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -459,6 +479,9 @@ def main(argv: list[str] | None = None) -> int:
         "run-announcement-jobs", help="Zamanlanmış duyuru + okuma onayı SMS yedeği (dakikalık)"
     )
     sub.add_parser("run-emergency-purge", help="Acil durum yoklama verisi saklama (gece)")
+    sub.add_parser(
+        "run-support-jobs", help="Destek oturumu kapanışı ve bilet SLA aşımı (dakikalık)"
+    )
     reconcile = sub.add_parser("reconcile", help="Özet bakiyeleri defterle karşılaştır")
     reconcile.add_argument("--fix", action="store_true", help="Farklı siteleri onar")
     args = parser.parse_args(argv)
@@ -497,6 +520,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_run_notification_jobs())
     if args.command == "run-scheduled-reports":
         return asyncio.run(_run_scheduled_reports())
+    if args.command == "run-support-jobs":
+        return asyncio.run(_run_support_jobs())
     if args.command == "run-recurring-expenses":
         return asyncio.run(_run_recurring_expenses())
     if args.command == "run-charge-schedules":

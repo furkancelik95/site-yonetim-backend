@@ -122,6 +122,7 @@ from site_yonetim.seed.demo_data import (
     units_for,
 )
 from site_yonetim.seed.demo_finance_ops import seed_finance_ops
+from site_yonetim.seed.demo_support import seed_support
 from site_yonetim.services import (
     announcements,
     cash,
@@ -288,6 +289,13 @@ async def _seed_demo(
         await _seed_resident(factory, aksu, password_hash, store, today)
         await _seed_staff(factory, aksu, user_ids, today)
         await _seed_facility(factory, aksu, user_ids, store, today)
+        await seed_support(
+            factory,
+            aksu,
+            user_ids["yonetici@demo.local"],
+            user_ids["platform@demo.local"],
+            datetime.combine(today, time(10), BUSINESS_TZ),
+        )
 
     logger.info("Demo verisi yüklendi: %d site, %d hesap.", len(SITES), len(ACCOUNTS) + 1)
     return True
