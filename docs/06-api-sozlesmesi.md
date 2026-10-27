@@ -244,18 +244,42 @@ açıklama formül olarak çalışmaz (`09` §3.3).
 ### 2.10 Talep
 | Yöntem | Yol | İzin | Durum | Not |
 |---|---|---|---|---|
-| GET | `/sites/{slug}/requests?status=&category=&priority=&department_id=` | `requests.read` veya kendi talepleri | R | sayfalı, yeni üstte. İzni olmayan sakin yalnız kendi açtıklarını görür. Satırda `department_id`, `department_name` |
+| GET | `/sites/{slug}/requests?status=&category=&priority=&department_id=&sla_breached=` | `requests.read` veya kendi talepleri | R | sayfalı, yeni üstte. İzni olmayan sakin yalnız kendi açtıklarını görür. Satırda `department_id`, `department_name`, `category_name`, `allowed_transitions` (personelin seçebileceği durumlar), `can_cancel`, `sla {due_at, hour_type, target_hours, used_minutes, remaining_minutes, state: ok\|warning\|breached\|met\|missed, paused}`, `outage` (ana olay özeti), `feedback` (son sakin değerlendirmesi), `quote` (son ücretli hizmet teklifi), `auto_close_at`, `closed_at` |
 | GET | `/sites/{slug}/requests/{id}` | `requests.read` veya kendi talebi | R | + olay geçmişi (`events`, eskiden yeniye). Başkasının talebi 404 |
-| POST | `/sites/{slug}/requests` | `requests.create` | R | `{title, description?, category, priority, unit_id?, location?, reported_by_person_id?}` → numara site içinde artan. Sakin kendi adına ve yalnız kendi bölümü (ya da ortak alan) için açar (422 `unit_not_yours`) |
-| POST | `/sites/{slug}/requests/{id}/status` | `requests.assign` | R | `{status, resolution?}` — çözüldü/kapandı yapılırken `resolution` zorunlu (422); aynı durum 409 |
-| POST | `/sites/{slug}/requests/{id}/assign` | `requests.assign` | R | `{assignee}` |
+| POST | `/sites/{slug}/requests` | `requests.create` | R | `{title, description?, category (site kategorisi anahtarı), priority?, unit_id?, location?, reported_by_person_id?}` → numara site içinde artan. Öncelik boşsa kategorinin varsayılanı; **sakinde öncelik her zaman kategoriden** (HIZ-01). Kategorinin ekibi varsa talep o departmana gider; SLA kural anlık görüntüsü talebe yazılır. Pasif/olmayan kategori 422 `fields.category`. Sakin kendi adına ve yalnız kendi bölümü (ya da ortak alan) için açar (422 `unit_not_yours`) |
+| POST | `/sites/{slug}/requests/{id}/status` | `requests.assign` | R | `{status, resolution?}` — geçiş tablosu (K18): Açık → Atandı → İşlemde ⇄ Beklemede → Çözüldü → Kapandı; İptal (açık/atandı/işlemde/beklemede'den). Tablo dışı 409 `invalid_transition`; kapandı/iptal 409 `request_finished`; atanmamış talep "Atandı" olamaz 409 `assignee_required`; sakinin açtığı çözüldü talep personelce kapatılamaz 409 `awaiting_confirmation`. Çözüldü ve iptalde `resolution` zorunlu (422); aynı durum 409 |
+| POST | `/sites/{slug}/requests/{id}/assign` | `requests.assign` | R | `{assignee}` — açık talep "Atandı" olur; kapanmış talep 409 |
+| GET · POST | `/sites/{slug}/requests/{id}/internal-notes` | `requests.assign` | R | iç not (K26): `{body}` → `{id, body, author_name, created_at}`; değişmez. Sakin uçlarında, talep yanıtında, olay geçmişinde ve bildirimlerde **hiç dönmez** |
+| GET | `/sites/{slug}/requests/{id}/merge-suggestions` | `requests.assign` | R | `{linked_outage, similar: [{id, number, title, unit_name, location, created_at}], open_outages: [{id, title, request_count}], window_hours}` — kural tabanlı: aynı kategori + (aynı konum metni ya da ikisi de ortak alan ya da aynı blok) + pencere; bitmemiş ve olaya bağlı olmayan talepler |
+| POST | `/sites/{slug}/requests/{id}/quotes` | `requests.assign` | R | ücretli hizmet teklifi `{lines: [{description, qty, unit_price}], note?}` → `ServiceQuoteOut`. Ortak alan talebi 409 `not_unit_request`; açık teklif varken 409 `quote_open`; bölümde açık cari hesap yoksa 409 `no_account`; kalem 422 `fields.lines` |
 | POST | `/sites/{slug}/requests/{id}/department` | `requests.assign` | R | `{department_id \| null}` → talep ayrıntısı; geçmişe `department_changed` olayı. Pasif ya da başka sitenin departmanı 422 `fields.department_id` |
 | GET | `/sites/{slug}/departments` | `requests.read` | R | dizi `{id, name, is_active, request_count}`; site açılışında Teknik, Temizlik, Güvenlik, Bahçe, Yönetim |
 | POST · PATCH | `/sites/{slug}/departments[/{id}]` | `requests.assign` | R | `{name}` / `{name?, is_active?}`. Ad site içinde benzersiz (Türkçe harf duyarsız) → 409 `already_exists`. Silme yok, pasifleştirme var |
 | POST | `/sites/{slug}/requests/{id}/comments` | `requests.read` veya kendi talebi | R | `{body}` |
 
 Modül kapalıysa tüm talep uçları 404. `reporter_name` `people.read` izni ya da kendi talebi
-değilse `null`. Durum geçişleri serbest (açık karar `12` K18).
+değilse `null`. Durum geçişleri dokümandaki akışla (K18, 25.10.2026).
+
+### 2.10a Hizmetler — kategori, SLA, hazır yanıt, ana olay, ücretli hizmet, tadilat (HIZ-02..05)
+Modül `requests`. Ayar yazma izni `requests.settings` (yalnız Yönetici).
+
+| Yöntem | Yol | İzin | Durum | Not |
+|---|---|---|---|---|
+| GET | `/sites/{slug}/request-categories?active=` | talep açabilen herkes (sakin dahil) | R | dizi `{id, key, name, hour_type: 24x7\|business, resolve_hours: {low, normal, high, urgent}, default_priority, department_id, is_active}`. Site açılışında HIZ-03 varsayılanları (eski sabit liste anahtarları korunur) |
+| POST · PATCH | `/sites/{slug}/request-categories[/{id}]` | `requests.settings` | R | `{name, hour_type, resolve_hours, default_priority, department_id?, is_active}`; anahtar addan üretilir, değişmez; ad site içinde benzersiz (422 `fields.name`); saat 1–2160 (422 `fields.resolve_hours.{öncelik}`). Silme yok, pasifleştirme var |
+| GET · PUT | `/sites/{slug}/settings/requests` | okuma `requests.read`, yazma `requests.settings` | R | `{categories: {anahtar: {hour_type, resolve_hours}}, calendar: [{closed, open, close}] × 7 (0 = pazartesi), auto_close_days 1–30, merge_window_hours 1–168, low_rating_threshold 1–4}`. Değişiklik yalnız yeni talepleri etkiler |
+| GET · POST · PATCH | `/sites/{slug}/reply-templates[/{id}]` | okuma `requests.assign`, yazma `requests.settings` | R | `{title, category?, body, is_active}`; değişkenler `{{sakin.ad}}`, `{{talep.no}}`, `{{talep.konu}}` ekranda doldurulur |
+| GET | `/sites/{slug}/outages?status=` | `requests.read` | R | sayfalı ana olaylar `{id, title, category, location, public_description, status: open\|resolved, request_ids, created_by, created_at, resolved_at, resolution}` |
+| POST | `/sites/{slug}/outages` | `requests.assign` | R | `{title, category, location?, public_description, request_ids?}`; bağlı talep 409 `already_linked`, bitmiş talep 409 `request_not_active` |
+| POST | `/sites/{slug}/outages/{id}/links` · `/unlink` | `requests.assign` | R | `{request_id}`; çözülmüş olay 409 `outage_resolved` |
+| POST | `/sites/{slug}/outages/{id}/resolve` | `requests.assign` | R | `{resolution}` — bağlı açık talepler aynı işlemde "çözüldü" olur, her sakine bildirim |
+| GET | `/sites/{slug}/service-tariffs` | `requests.assign` | R | dizi `{id, name, unit, price, is_active}` |
+| POST · PATCH | `/sites/{slug}/service-tariffs[/{id}]` | `requests.settings` | R | `{name, unit, price, is_active}` → `{status: saved\|approval_pending, tariff, approval_request_id}`; "Ücretli hizmet tarifesi" onay kuralı varsa **202** |
+| POST | `/sites/{slug}/quotes/{id}/complete` | `requests.assign` | R | `{actual_total}` — yalnız sakinin onayladığı teklif (409 `invalid_status`); gerçekleşen ≤ teklif → cariye yazılır (kaynak `service`); aşarsa `extra_pending` (sakin onayı) |
+| GET · PUT | `/sites/{slug}/settings/permits` | okuma `requests.read`, yazma `requests.settings` | R | `{weekday_hours "SS:DD-SS:DD", saturday_hours? (boş = yasak), sunday_allowed, deposit_amount, checklist[]}` |
+| GET | `/sites/{slug}/permits?status=` | `requests.read` | R | sayfalı başvurular `{id, unit_id, unit_name, type: renovation\|move_in\|move_out, date_from, date_to, contractor, description, status: pending\|approved\|rejected\|completed, approval_request_id, approval_status, reject_reason, checklist, deposit, deposit_refunded, …}` |
+| POST | `/sites/{slug}/permits/{id}/approve` | `requests.assign` | R | "Tadilat / taşınma izni" onay kuralı varsa **202** `{status: approval_pending, approval_request_id}`; yoksa onaylanır: sakine, komşu bölümlere (aynı blok, ±1 kat) ve güvenliğe bildirim; tadilatta depozito > 0 ise malik hesabına borç (kaynak `deposit`) |
+| POST | `/sites/{slug}/permits/{id}/reject` · `/complete` | `requests.assign` | R | ret `{reason}` (422 `fields.reason`); tamamlama `{checklist: [{item, ok}], refund_deposit}` — giriş taşınması dışında liste zorunlu; depozito iadesi ters kayıt |
 
 ### 2.11 Duyuru
 | Yöntem | Yol | İzin | Durum | Not |
@@ -351,7 +375,11 @@ rapor; `auto_anonymize` açık sitelerde saklama süresi dolan ziyaretçi/plaka 
 | GET | `/sites/{slug}/resident/home` | sakin | R | `units[]` (bugünkü bölümleri ve rolü), `accounts[]` (bakiyeli), `total_balance`, `recent_entries[5]`, `announcements[3]` ve `open_requests[]` (modül kapalıysa null), `payment_info{bank_name, iban, account_holder}` (sitenin IBAN'ı yoksa null) |
 | GET | `/sites/{slug}/resident/statement?account_id=` | sakin | R | kendi cari ekstresi; `account_id` boşsa oturan hesabı. Başkasının hesabı 404 |
 | GET | `/sites/{slug}/resident/announcements` | sakin | R | kendisine teslim edilen, süresi geçmemiş duyurular (+ `read_at`). Modül kapalıysa 404 |
-| GET · POST | `/sites/{slug}/resident/requests` | sakin | R | kendi talepleri / yeni talep — her zaman kendi adına, yalnız kendi bölümü ya da ortak alan (422 `unit_not_yours`). Modül kapalıysa 404 |
+| GET · POST | `/sites/{slug}/resident/requests` | sakin | R | kendi talepleri / yeni talep — her zaman kendi adına, yalnız kendi bölümü ya da ortak alan (422 `unit_not_yours`); öncelik kategoriden. Modül kapalıysa 404 |
+| POST | `/sites/{slug}/resident/requests/{id}/confirm` | sakin (kendi talebi) | R | `{solved, score?, comment?}` — yalnız çözüldü talep (409 `not_resolved`); çözüldü → 1–5 puan zorunlu (422 `fields.score`), talep kapanır, puan ≤ eşik yöneticiye bildirim; devam ediyor → açıklama zorunlu (422 `fields.comment`), talep yeniden açılır |
+| POST | `/sites/{slug}/resident/requests/{id}/cancel` | sakin (kendi talebi) | R | `{reason?}` — yalnız iş başlamadan (açık/atandı); yoksa 409 `not_cancellable` |
+| POST | `/sites/{slug}/resident/quotes/{id}/decision` | sakin (teklifin bölümünde) | R | `{decision: accept\|reject}` — teklif aşamasında onay/ret; ek tutar aşamasında onay → gerçekleşen, ret → teklif tutarı cariye yazılır; karar beklenmiyorsa 409 `invalid_status` |
+| GET · POST | `/sites/{slug}/resident/permits` | sakin | R | `{rules, items}` kendi bölümlerinin başvuruları / yeni başvuru `{unit_id?, type, date_from, date_to?, contractor?, description}` — tarih bugünden önce olamaz (422) |
 | GET | `/sites/{slug}/resident/expenses?year=` | sakin | **Y** | sitenin **gerçekleşen** gider dökümü (geri alınan ve düzeltmeler hariç) + `total_amount`; satırda `document_id`. Şeffaflık vaadinin karşılığı |
 | GET | `/sites/{slug}/resident/packages` | sakin | Y | dairelerine gelen, teslim bekleyen kargolar **teslim koduyla** (modül: `packages`) |
 | GET | `/sites/{slug}/resident/files/{id}` | sakin | Y | **fatura görüntüsü** — yalnız gerçekleşen bir giderin belgesi; başka dosya 404 |

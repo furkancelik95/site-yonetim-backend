@@ -28,6 +28,8 @@ class Permission(StrEnum):
     REQUESTS_READ = "requests.read"
     REQUESTS_CREATE = "requests.create"
     REQUESTS_ASSIGN = "requests.assign"
+    # Talep ayarları: kategori, SLA, takvim, hazır yanıt, tarife, tadilat kuralları (SR 47–52)
+    REQUESTS_SETTINGS = "requests.settings"
     ANNOUNCEMENTS_READ = "announcements.read"
     ANNOUNCEMENTS_PUBLISH = "announcements.publish"
     EXPENSES_READ = "expenses.read"
@@ -88,6 +90,7 @@ ROLE_PERMISSIONS: dict[SiteRole, frozenset[Permission]] = {
             P.FINANCE_BUDGET_MANAGE, P.FINANCE_CASH_READ, P.FINANCE_CASH_MANAGE,
             P.FINANCE_REPORTS_READ, P.UNITS_READ, P.UNITS_MANAGE, P.PEOPLE_READ,
             P.PEOPLE_MANAGE, P.REQUESTS_READ, P.REQUESTS_CREATE, P.REQUESTS_ASSIGN,
+            P.REQUESTS_SETTINGS,
             P.ANNOUNCEMENTS_READ, P.ANNOUNCEMENTS_PUBLISH, P.EXPENSES_READ, P.EXPENSES_MANAGE,
             P.SECURITY_VISITORS, P.SECURITY_PACKAGES, P.MODULES_MANAGE, P.MEMBERS_MANAGE,
             P.AUDIT_READ, P.SECURITY_INCIDENTS, P.MEETINGS_READ, P.MEETINGS_MANAGE,

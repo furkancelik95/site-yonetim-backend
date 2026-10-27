@@ -315,10 +315,18 @@ REQUESTS: tuple[RequestSpec, ...] = (
                 location="B blok 3. kat", resolution="Ampul değiştirildi.", assignee="Teknik ekip"),
     RequestSpec("Kalorifer peteği ısınmıyor", "heating", "high", "waiting",
                 assignee="Teknik ekip"),
-    RequestSpec("Otopark girişi kirli", "cleaning", "normal", "closed",
+    RequestSpec("Otopark girişi kirli", "cleaning", "normal", "closed", assignee="Temizlik ekibi",
                 location="Otopark girişi", resolution="Temizlik yapıldı."),
-    RequestSpec("Bahçe sulama sistemi arızalı", "garden", "normal", "open", location="Ön bahçe"),
+    RequestSpec("Bahçe sulama sistemi arızalı", "garden", "normal", "assigned", location="Ön bahçe",
+                assignee="Yeşil Peyzaj"),
 )  # fmt: skip
+
+# Ücretli hizmet tarifesi (HIZ-04): kalem, birim, birim fiyat
+TARIFFS: tuple[tuple[str, str, Decimal], ...] = (
+    ("İşçilik", "saat", Decimal("400.00")),
+    ("Batarya değişimi", "iş", Decimal("650.00")),
+    ("Klozet takımı değişimi", "iş", Decimal("900.00")),
+)
 
 
 # --- Kasa ve gider (docs/10 §1.4) ------------------------------------------------

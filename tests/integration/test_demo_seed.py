@@ -31,14 +31,18 @@ from site_yonetim.models import (
     LedgerAccount,
     LedgerEntry,
     Organization,
+    Outage,
     Package,
     Payment,
     PaymentAllocation,
     Period,
+    Permit,
     Person,
     Plan,
     Request,
     RequestEvent,
+    ServiceQuote,
+    ServiceTariff,
     Site,
     SiteModule,
     Unit,
@@ -366,7 +370,17 @@ async def test_demo_duyuru_ve_talep(
                 announcement_count = await session.scalar(
                     select(func.count()).select_from(Announcement)
                 )
-        assert statuses == {"open", "in_progress", "waiting", "resolved", "closed"}
+                extras = [
+                    await session.scalar(select(func.count()).select_from(model))
+                    for model in (Outage, Permit, ServiceQuote, ServiceTariff)
+                ]
+                pending = await session.scalar(
+                    select(Request.auto_close_at).where(Request.status == "resolved")
+                )
+        assert statuses == {"open", "assigned", "in_progress", "waiting", "resolved", "closed"}
+        assert extras == [1, 1, 1, 3]  # ana olay, tadilat başvurusu, teklif, tarife (SR 49–52)
+        assert pending is not None
+        assert pending.date() > SEED_DAY  # sakin onayı bekliyor
         assert announcement_count == 4
 
     resident = await login_headers(api, "sakin@demo.local", DEMO_PASSWORD)

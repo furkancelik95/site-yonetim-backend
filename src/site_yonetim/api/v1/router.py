@@ -43,6 +43,7 @@ from site_yonetim.api.v1 import (
     requests,
     resident,
     security,
+    service_desk,
     sessions,
     setup,
     shift_log,
@@ -91,6 +92,7 @@ api_router.include_router(certificates.router)
 api_router.include_router(account_ops.router)
 api_router.include_router(requests.router)
 api_router.include_router(departments.router)
+api_router.include_router(service_desk.router)
 api_router.include_router(announcements.router)
 api_router.include_router(cash.router)
 api_router.include_router(recurring_expenses.router)

@@ -4,6 +4,7 @@ uv run python -m site_yonetim.cli seed-demo       # demo verisi (yalnız develop
 uv run python -m site_yonetim.cli purge-imports   # süresi dolan Excel aktarımlarını sil (cron)
 uv run python -m site_yonetim.cli purge-login-throttle  # dolmuş giriş sayaçlarını sil (gece)
 uv run python -m site_yonetim.cli reconcile [--fix]    # özet bakiye ↔ defter mutabakatı (gece)
+uv run python -m site_yonetim.cli run-request-jobs       # talep kapanış + SLA (5 dakikada bir)
 uv run python -m site_yonetim.cli run-charge-schedules # otomatik aylık tahakkuk (günde bir)
 uv run python -m site_yonetim.cli run-recurring-expenses # tekrarlanan giderler (günde bir)
 uv run python -m site_yonetim.cli run-approval-jobs      # onay hatırlatma/eskalasyon (saatlik)
@@ -33,6 +34,7 @@ from site_yonetim.services import (
     reconciliation,
     recurring_expenses,
     security_jobs,
+    service_desk,
     staff,
     structure_jobs,
 )
@@ -127,6 +129,21 @@ async def _reconcile(*, fix: bool) -> int:
         print(f"Onarımdan sonra {len(remaining)} fark kaldı.")
         return 1
     print(f"{len(sites)} sitenin özetleri defterden yeniden üretildi; onarıldı.")
+    return 0
+
+
+async def _run_request_jobs() -> int:
+    """Talep işleri (HIZ-01/02, K18): yanıtsız "çözüldü" talepleri kapatır; SLA %80 ve aşım
+    bildirimleri. 5 dakikada bir (SLA takibi dokümanda 5 dakika)."""
+    engine = create_engine_from_settings(get_settings())
+    now = datetime.now(UTC)
+    try:
+        results = await service_desk.run_all_jobs(create_session_factory(engine), now=now)
+    finally:
+        await engine.dispose()
+    for site_id, r in results:
+        print(f"{site_id}: kapanan {r.closed}, SLA uyarısı {r.warned}, SLA aşımı {r.breached}")
+    print(f"{len(results)} sitede talep işleri çalıştı.")
     return 0
 
 
@@ -264,6 +281,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("seed-demo", help="Demo verisini yükle (yalnız development)")
     sub.add_parser("purge-imports", help="Süresi dolan Excel aktarım dosyalarını sil")
     sub.add_parser("purge-login-throttle", help="Penceresi dolmuş giriş sayaçlarını sil")
+    sub.add_parser("run-request-jobs", help="Talep otomatik kapanış ve SLA (5 dakikada bir)")
     sub.add_parser("run-charge-schedules", help="Otomatik aylık tahakkuku çalıştır (günde bir)")
     sub.add_parser("run-recurring-expenses", help="Tekrarlanan giderleri yaz (günde bir)")
     sub.add_parser("run-approval-jobs", help="Onay hatırlatma ve eskalasyonu (saatlik)")
@@ -286,6 +304,8 @@ def main(argv: list[str] | None = None) -> int:
         return _purge_imports()
     if args.command == "purge-login-throttle":
         return asyncio.run(_purge_login_throttle())
+    if args.command == "run-request-jobs":
+        return asyncio.run(_run_request_jobs())
     if args.command == "run-security-daily":
         return asyncio.run(_run_security_daily())
     if args.command == "run-patrol-checks":
