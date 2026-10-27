@@ -15,13 +15,13 @@
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 
 from sqlalchemy import Select, and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from site_yonetim.db.tenancy import all_sites_scope, current_scope, site_scope
-from site_yonetim.domain.access import ROLE_PERMISSIONS, Permission
+from site_yonetim.domain.access import Permission
 from site_yonetim.domain.documents import (
     WARN_FIRST,
     CheckedDocument,
@@ -51,8 +51,8 @@ from site_yonetim.models import (
     UnitParty,
 )
 from site_yonetim.models.audit import Actor, set_actor
-from site_yonetim.services import members as members_svc
 from site_yonetim.services import notifications
+from site_yonetim.services import roles as roles_svc
 from site_yonetim.services.files import FileStore
 from site_yonetim.services.security import unit_names
 
@@ -455,18 +455,19 @@ def _due(today: date) -> Select[Document]:
     )
 
 
-async def _responsible(session: AsyncSession, site: Site) -> tuple[set[uuid.UUID], set[uuid.UUID]]:
+async def _responsible(
+    session: AsyncSession, site: Site, today: date
+) -> tuple[set[uuid.UUID], set[uuid.UUID]]:
     """(belge yöneticileri, bunlardan gizli belge yetkisi olanlar) — aktif kullanıcılar."""
     managers: set[uuid.UUID] = set()
     confidential: set[uuid.UUID] = set()
-    for member in await members_svc.list_members(session, site):
-        if not (member.is_active and member.user.is_active):
-            continue
-        permissions = ROLE_PERMISSIONS[member.role]
+    moment = datetime.combine(today, time(12), tzinfo=UTC)
+    for holder in await roles_svc.holders(session, site, moment):
+        permissions = holder.permissions
         if Permission.DOCUMENTS_MANAGE in permissions:
-            managers.add(member.user.id)
+            managers.add(holder.user.id)
             if Permission.DOCUMENTS_CONFIDENTIAL in permissions:
-                confidential.add(member.user.id)
+                confidential.add(holder.user.id)
     return managers, confidential
 
 
@@ -475,7 +476,7 @@ async def warn_expiring(session: AsyncSession, site: Site, *, today: date) -> in
     documents = list(await session.scalars(_due(today)))
     if not documents:
         return 0
-    managers, confidential = await _responsible(session, site)
+    managers, confidential = await _responsible(session, site, today)
     written = 0
     for document in documents:
         left = days_left(document.valid_until, today)

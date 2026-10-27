@@ -55,11 +55,15 @@ SENSITIVE_COLUMNS: dict[str, Callable[[str], str]] = {
     "leave_type": mask_all,  # IK-03: raporlu izin özel nitelikli veri sayılabilir
     "leave_note": mask_all,
     "qr_code": mask_all,  # giriş-çıkış doğrulama kodu
+    "to_phone": mask_phone,  # OPS-01: anahtarı teslim alanın telefonu
+    "authorized": mask_all,  # OPS-01: emanet anahtar yetkili kişileri (ad + telefon listesi)
 }
 
 
 def mask_value(column: str, value: object) -> object:
     masker = SENSITIVE_COLUMNS.get(column)
+    if masker is mask_all and isinstance(value, (list, dict)) and value:
+        return mask_all("")  # JSON değer (ör. kişi listesi) bütünüyle gizlenir
     if masker is None or not isinstance(value, str) or not value:
         return value
     return masker(value)

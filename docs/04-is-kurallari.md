@@ -390,6 +390,10 @@ Değişebilen tek şeyler durum alanlarıdır: `charge_runs.status → reversed`
 `expenses.is_reversed → true`, `expenses.paid_on` (bir kez, ödenince).
 Uç noktalarda bu tablolar için `DELETE` yoktur.
 
+**Dönem kilidi (FIN-13, 26.10.2026):** kapanıştaki ya da kilitli döneme tarihli hiçbir kayıt yazılmaz; kilitli döneme ait kaydın ters kaydı da alınmaz (orijinalin dönemini değiştirir). Hepsi 409 `period_locked`, mesajda en erken açık dönem. Tek kontrol noktası `services/period_lock.ensure_writable`; yeni bir finansal yazma yolu yazan onu çağırır. Kapanan kasa gününe (FIN-11) hareket yazılmaz (`cash_day_closed`).
+
+**Ödeme planı (FIN-12, §8.9):** plan yürürlüğe girince tutar kadar alacak hareketi yazılır ve en eski açık borçları FIFO kapatır (`payment_plan_closures`; açık borç = borç − mahsuplar − plan kapatmaları); her taksit ayrı vadeli borçtur. Taksitler eşit, kuruş artığı ilk taksitlere. İptalde ödenmemiş taksitler kapanır, aynı tutar yapılandırılan en eski vadeyle yeniden borç olarak açılır. Bakiye hiçbir adımda değişmez.
+
 ## 9. Gider
 
 Gider ile ödeme **bilinçli olarak ayrı:** fatura geldiğinde gider yazılır, parası çıktığında

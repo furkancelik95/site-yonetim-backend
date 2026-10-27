@@ -135,6 +135,7 @@ CronJob ile):
 | `run-charge-schedules` | günde bir (gece) | otomatik aylık tahakkuk: kesim günü gelen siteler, site başına ayrı transaction, ay başına tek sonuç (`charge_schedule_runs`); başarısız site varsa çıkış 1 |
 | `run-recurring-expenses` | günde bir (gece) | tekrarlanan giderler: günü gelen etkin tanımlar için gider kaydı, ay başına bir (`recurring_expense_runs`); başarısız varsa çıkış 1 |
 | `run-document-expiry` | günde bir | belge geçerlilik uyarısı (RAP-03): bitişe 60 ve 30 gün kala ve bitince (30 gün içinde) belge yöneticilerine uygulama içi bildirim; gizli belgede yalnız gizli belge yetkisi olanlara; aynı uyarı bir kez (bildirim tekil anahtarı) |
+| `run-finance-jobs` | saatlik | dönem kilidi: süresi dolan süreli açmayı yeniden kilitler (FIN-13); borç takibi kademeleri (vade +3/+10/+30, ihtarname hazırlığı — finans parametresi; aynı açık vade için bir kez; ödeme planındaki hesaba yazılmaz; gönderim K5'e bağlı, yalnız kayıt + yöneticiye görev bildirimi); bozulan ödeme planını finans yetkililerine bir kez bildirir |
 | `reconcile [--fix]` | günde bir | özet bakiye ↔ defter mutabakatı (`08` §2) |
 | `purge-login-throttle` | günde bir | dolmuş giriş sayaçları |
 | `purge-imports` | saatlik | onaylanmamış Excel aktarım dosyaları ve süresi dolan banka ekstresi önizlemeleri |

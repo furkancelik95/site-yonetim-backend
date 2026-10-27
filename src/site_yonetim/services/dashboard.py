@@ -11,13 +11,13 @@ from decimal import Decimal
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from site_yonetim.domain.operations import RequestPriority, RequestStatus
+from site_yonetim.domain.operations import ACTIVE_STATUSES, RequestPriority, RequestStatus
 from site_yonetim.models import Announcement, Expense, Request, SiteFinanceSummary
 from site_yonetim.services import accounts, cash
 from site_yonetim.services.announcements import visible_query
 from site_yonetim.services.expenses import realized
 
-OPEN_STATUSES = (RequestStatus.OPEN, RequestStatus.IN_PROGRESS, RequestStatus.WAITING)
+OPEN_STATUSES = ACTIVE_STATUSES
 TOP_DEBTORS = 5
 RECENT = 5
 
@@ -70,7 +70,16 @@ async def request_counts(session: AsyncSession) -> RequestCounts:
     row = (
         await session.execute(
             select(
-                func.count(case((Request.status == RequestStatus.OPEN.value, 1))),
+                func.count(
+                    case(
+                        (
+                            Request.status.in_(
+                                [RequestStatus.OPEN.value, RequestStatus.ASSIGNED.value]
+                            ),
+                            1,
+                        )
+                    )
+                ),
                 func.count(case((Request.status == RequestStatus.IN_PROGRESS.value, 1))),
                 func.count(case((Request.status == RequestStatus.WAITING.value, 1))),
                 func.count(case((is_open & (Request.priority == RequestPriority.URGENT.value), 1))),

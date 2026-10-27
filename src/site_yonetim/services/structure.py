@@ -325,7 +325,9 @@ async def ensure_common_area_name_free(
 
 async def closed_months(session: AsyncSession) -> list[tuple[int, int]]:
     rows = await session.execute(
-        select(Period.year, Period.month).where(Period.status == PeriodStatus.CLOSED.value)
+        select(Period.year, Period.month).where(
+            Period.status.in_([PeriodStatus.CLOSING.value, PeriodStatus.LOCKED.value])
+        )
     )
     return [(y, m) for y, m in rows]
 

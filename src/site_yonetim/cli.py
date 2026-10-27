@@ -4,6 +4,11 @@ uv run python -m site_yonetim.cli seed-demo       # demo verisi (yalnız develop
 uv run python -m site_yonetim.cli purge-imports   # süresi dolan Excel aktarımlarını sil (cron)
 uv run python -m site_yonetim.cli purge-login-throttle  # dolmuş giriş sayaçlarını sil (gece)
 uv run python -m site_yonetim.cli reconcile [--fix]    # özet bakiye ↔ defter mutabakatı (gece)
+uv run python -m site_yonetim.cli run-finance-jobs       # dönem kilidi, borç kademeleri, ödeme
+uv run python -m site_yonetim.cli run-operations-jobs    # muayene 60/30/7, bakım iş emri, poliçe,
+                                                         # görev gün sonu özeti (günde bir, gece)
+uv run python -m site_yonetim.cli run-key-reminders      # anahtar iade gecikmesi (saatlik)
+uv run python -m site_yonetim.cli run-request-jobs       # talep kapanış + SLA (5 dakikada bir)
 uv run python -m site_yonetim.cli run-charge-schedules # otomatik aylık tahakkuk (günde bir)
 uv run python -m site_yonetim.cli run-recurring-expenses # tekrarlanan giderler (günde bir)
 uv run python -m site_yonetim.cli run-approval-jobs      # onay hatırlatma/eskalasyon (saatlik)
@@ -32,13 +37,19 @@ from site_yonetim.services import (
     charge_schedule,
     documents,
     emergencies,
+    finance_jobs,
+    insurance,
+    keys,
     login_throttle,
     rate_limit,
     reconciliation,
     recurring_expenses,
+    routine_tasks,
     security_jobs,
+    service_desk,
     staff,
     structure_jobs,
+    technical_assets,
 )
 from site_yonetim.services.charging import BUSINESS_TZ
 from site_yonetim.services.imports import ImportStore
@@ -131,6 +142,78 @@ async def _reconcile(*, fix: bool) -> int:
         print(f"Onarımdan sonra {len(remaining)} fark kaldı.")
         return 1
     print(f"{len(sites)} sitenin özetleri defterden yeniden üretildi; onarıldı.")
+    return 0
+
+
+async def _run_finance_jobs() -> int:
+    """Süreli açması dolan dönemi kilitler, borç takibi kademelerini yazar, bozulan ödeme
+    planlarını bildirir (saatlik; tekrar güvenli)."""
+    engine = create_engine_from_settings(get_settings())
+    now = datetime.now(UTC)
+    try:
+        results = await finance_jobs.run_all(
+            create_session_factory(engine), now=now, today=now.astimezone(BUSINESS_TZ).date()
+        )
+    finally:
+        await engine.dispose()
+    for site_id, r in results:
+        print(f"{site_id}: kilitlenen {r.relocked}, kademe {r.reminders}, bozulan plan "
+              f"{r.broken_plans}")  # fmt: skip
+    print(f"{len(results)} sitede finans işi çalıştı.")
+    return 0
+
+
+async def _run_operations_jobs() -> int:
+    """Operasyon ve teknik varlık günlük işleri (HIZ-06/07, OPS-04, OPS-06): yasal muayene
+    60/30/7 gün uyarısı, planı gelen periyodik bakımın iş emri, poliçe bitiş 60/30 uyarısı, dünün
+    görev özeti. Hepsi tekrar güvenli (aynı uyarı/iş emri ikinci kez yazılmaz)."""
+    engine = create_engine_from_settings(get_settings())
+    today = datetime.now(UTC).astimezone(BUSINESS_TZ).date()
+    try:
+        factory = create_session_factory(engine)
+        assets = await technical_assets.run_daily(factory, today=today)
+        policies = await insurance.run_expiry_warnings(factory, today=today)
+        tasks = await routine_tasks.run_daily_summary(factory, today=today)
+    finally:
+        await engine.dispose()
+    for r in assets:
+        print(f"{r.site_id}: muayene uyarısı {r.warnings}, bakım iş emri {r.runs}")
+    for site_id, written in policies:
+        print(f"{site_id}: poliçe uyarısı {written}")
+    for site_id, written in tasks:
+        print(f"{site_id}: görev özeti {written}")
+    print(f"{len(assets)} sitede varlık/bakım, {len(policies)} sitede poliçe işi çalıştı.")
+    return 0
+
+
+async def _run_key_reminders() -> int:
+    """Anahtar iade gecikmesi (OPS-01): iade zamanı geçen teslimler için yöneticiye bildirim
+    (saatlik; teslim başına bir kez)."""
+    engine = create_engine_from_settings(get_settings())
+    try:
+        results = await keys.run_overdue_warnings(
+            create_session_factory(engine), now=datetime.now(UTC)
+        )
+    finally:
+        await engine.dispose()
+    for site_id, written in results:
+        print(f"{site_id}: {written} gecikme uyarısı")
+    print(f"{len(results)} sitede anahtar iade kontrolü çalıştı.")
+    return 0
+
+
+async def _run_request_jobs() -> int:
+    """Talep işleri (HIZ-01/02, K18): yanıtsız "çözüldü" talepleri kapatır; SLA %80 ve aşım
+    bildirimleri. 5 dakikada bir (SLA takibi dokümanda 5 dakika)."""
+    engine = create_engine_from_settings(get_settings())
+    now = datetime.now(UTC)
+    try:
+        results = await service_desk.run_all_jobs(create_session_factory(engine), now=now)
+    finally:
+        await engine.dispose()
+    for site_id, r in results:
+        print(f"{site_id}: kapanan {r.closed}, SLA uyarısı {r.warned}, SLA aşımı {r.breached}")
+    print(f"{len(results)} sitede talep işleri çalıştı.")
     return 0
 
 
@@ -297,6 +380,12 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("seed-demo", help="Demo verisini yükle (yalnız development)")
     sub.add_parser("purge-imports", help="Süresi dolan Excel aktarım dosyalarını sil")
     sub.add_parser("purge-login-throttle", help="Penceresi dolmuş giriş sayaçlarını sil")
+    sub.add_parser("run-finance-jobs", help="Dönem kilidi, borç kademeleri, plan uyumu (saatlik)")
+    sub.add_parser(
+        "run-operations-jobs", help="Muayene/bakım/poliçe uyarıları ve görev özeti (günde bir)"
+    )
+    sub.add_parser("run-key-reminders", help="Anahtar iade gecikmesi uyarısı (saatlik)")
+    sub.add_parser("run-request-jobs", help="Talep otomatik kapanış ve SLA (5 dakikada bir)")
     sub.add_parser("run-charge-schedules", help="Otomatik aylık tahakkuku çalıştır (günde bir)")
     sub.add_parser("run-recurring-expenses", help="Tekrarlanan giderleri yaz (günde bir)")
     sub.add_parser("run-approval-jobs", help="Onay hatırlatma ve eskalasyonu (saatlik)")
@@ -323,6 +412,14 @@ def main(argv: list[str] | None = None) -> int:
         return _purge_imports()
     if args.command == "purge-login-throttle":
         return asyncio.run(_purge_login_throttle())
+    if args.command == "run-finance-jobs":
+        return asyncio.run(_run_finance_jobs())
+    if args.command == "run-operations-jobs":
+        return asyncio.run(_run_operations_jobs())
+    if args.command == "run-key-reminders":
+        return asyncio.run(_run_key_reminders())
+    if args.command == "run-request-jobs":
+        return asyncio.run(_run_request_jobs())
     if args.command == "run-security-daily":
         return asyncio.run(_run_security_daily())
     if args.command == "run-patrol-checks":

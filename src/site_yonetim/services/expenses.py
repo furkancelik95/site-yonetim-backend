@@ -27,29 +27,21 @@ from site_yonetim.domain.cash import (
     check_payable,
     clean_text,
     clip,
-    closed_period_error,
     expense_movement_text,
     missing_cash_account,
 )
+from site_yonetim.domain.charging.periods import YearMonth
 from site_yonetim.domain.files import check_document
-from site_yonetim.domain.finance import FinanceRuleError, PeriodStatus
+from site_yonetim.domain.finance import FinanceRuleError
 from site_yonetim.models import Expense, ExpenseCategory, Period, StoredFile
-from site_yonetim.services import cash
+from site_yonetim.services import cash, period_lock
 from site_yonetim.services.files import FileStore
 
 
 async def _period(session: AsyncSession, day: date) -> Period:
-    """Belge tarihinin dönemi; yoksa açılır, kapalıysa reddedilir (docs/04 §9.1)."""
-    row: Period | None = await session.scalar(
-        select(Period).where(Period.year == day.year, Period.month == day.month)
-    )
-    if row is None:
-        row = Period(year=day.year, month=day.month)
-        session.add(row)
-        await session.flush()
-    if row.status == PeriodStatus.CLOSED.value:
-        raise closed_period_error(day)
-    return row
+    """Belge tarihinin dönemi; yoksa açılır, kilitliyse reddedilir (docs/04 §9.1, FIN-13)."""
+    await period_lock.ensure_writable(session, day)
+    return await period_lock.get_or_create(session, YearMonth.of(day))
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,6 +185,7 @@ async def pay(
     """Sonradan ödeme (docs/04 §9.2): ödeme bilgisi + kasadan çıkış, tek transaction."""
     check_payable(_state(expense))
     check_paid_on(paid_on, expense.date, today)
+    await period_lock.ensure_writable(session, paid_on)
     account = await cash.active_account(session, cash_account_id)
     expense.paid_on = paid_on
     expense.cash_account_id = account.id
@@ -211,6 +204,9 @@ async def reverse(
 ) -> Expense:
     """Eksi tutarlı düzeltme kaydı; orijinal `is_reversed`. Ödenmişse para kasaya döner (§9.3)."""
     text_reason = check_expense_reversible(_state(expense), reason)
+    # Düzeltme orijinalin dönemine yazılır ve orijinali işaretler: o dönem açık olmalı.
+    await period_lock.ensure_writable(session, expense.date, original=True)
+    await period_lock.ensure_writable(session, today)
     account = None
     if expense.paid_on is not None and expense.cash_account_id is not None:
         account = await cash.active_account(session, expense.cash_account_id)

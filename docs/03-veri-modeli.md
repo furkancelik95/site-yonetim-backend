@@ -84,12 +84,38 @@ Tablo ve sütun adları `snake_case`, İngilizce. Kullanıcıya görünen etiket
 | is_active | BOOL | |
 
 ### `site_memberships` [K]
+Kullanıcı ↔ site bağı. **Rol burada değil** (P18, göç 0041): roller `site_role_assignments`'ta.
+| Sütun | Tip | Not |
+|---|---|---|
+| user_id | UUID → users | `(site_id, user_id)` benzersiz |
+| person_id | UUID NULL → persons | **Sakin** üyeliğinde dolu: kullanıcının hangi kişi olduğu. FK `persons` tablosuyla (Dilim 3) eklenir |
+| is_active | BOOL | pasif açık üyelik erişim vermez ve o sitedeki türetilmiş erişimi de kapatır (`05` §4) |
+
+### `site_roles` [K] — siteye özel rol ya da şablon düzeyi (P18, K20)
+| Sütun | Tip | Not |
+|---|---|---|
+| key | TEXT | `(site_id, key)` benzersiz. Şablon düzeyi satırında şablon anahtarı (`security`), özel rolde `custom-…` |
+| name | TEXT | `(site_id, name)` benzersiz; onay kurallarında rolü tanıtır, **değişmez** |
+| description | TEXT NULL | |
+| base_key | TEXT NULL | özel rolün kopyalandığı rol |
+| is_system | BOOL | true: hazır şablonun bu sitedeki düzeyi (izinler koddan); false: özel rol |
+| permissions | TEXT[] NULL | özel rolün izinleri (şablonda NULL). Tanınmayan izin adı yok sayılır |
+| level | SMALLINT | 1–9, 1 en üst (rol sırası) |
+| is_active | BOOL | özel rol arşivi (silinmez) |
+| created_by_name | TEXT NULL | |
+
+### `site_role_assignments` [K] — rol ataması (PLT-09, P18)
+Kişi × rol × kapsam × (başlangıç–bitiş). Silinmez; kaldırma `ends_at = now` + `removed_*` (atama
+geçmişi). Etkin: `starts_at ≤ now < ends_at` (boş = sınırsız).
 | Sütun | Tip | Not |
 |---|---|---|
 | user_id | UUID → users | |
-| role | TEXT | site rol şablonu adı — `05-yetki.md` §2 |
-| person_id | UUID NULL → persons | **Sakin** üyeliğinde dolu: kullanıcının hangi kişi olduğu. FK `persons` tablosuyla (Dilim 3) eklenir |
-| is_active | BOOL | pasif açık üyelik erişim vermez ve o sitedeki türetilmiş erişimi de kapatır (`05` §4) |
+| role_key | TEXT | şablon anahtarı ya da özel rol `key`'i |
+| scope_kind | TEXT | `site` · `block` · `gate` (kapı: GUV-08 gelince) |
+| block_id | UUID NULL → blocks | bileşik FK; yalnız `block` |
+| gate_id | UUID NULL | yalnız `gate`; kapı tablosu gelince FK |
+| starts_at · ends_at | TIMESTAMPTZ NULL | `ends_at ≥ starts_at` |
+| assigned_by_name · removed_at · removed_by_name | | atama geçmişi |
 
 ### `auth_sessions` [G] — oturum (yenileme jetonu)
 | Sütun | Tip | Not |
@@ -625,17 +651,22 @@ oradan), `uploaded_by_id`, `uploaded_by_name`.
 | number | INT | site içinde artan: 1, 2, 3 … |
 | title | TEXT | |
 | description | TEXT NULL | |
-| category | TEXT | `other` · `plumbing` · `electrical` · `elevator` · `heating` · `cleaning` · `security` · `garden` · `common_area` |
+| category | TEXT | site kategorisinin anahtarı — `(site_id, category)` → `request_categories(site_id, key)` (D-26) |
 | priority | TEXT | `low` · `normal` · `high` · `urgent` |
-| status | TEXT | `open` · `in_progress` · `waiting` · `resolved` · `closed` · `cancelled` |
+| status | TEXT | `open` · `assigned` · `in_progress` · `waiting` · `resolved` · `closed` · `cancelled` (geçiş tablosu K18) |
 | reported_by_person_id | UUID NULL | |
 | unit_id | UUID NULL | ortak alan talebinde boş |
 | location | TEXT NULL | "B blok otopark girişi" |
 | assigned_to | TEXT NULL | |
 | due_at | TIMESTAMPTZ NULL | |
 | resolved_at | TIMESTAMPTZ NULL | |
-| resolution | TEXT NULL | **`resolved`/`closed` yapılırken zorunlu** |
+| resolution | TEXT NULL | **`resolved`/`closed` yapılırken zorunlu**; iptalde gerekçe |
 | created_by_name | TEXT NULL | talebi açan kullanıcının adı (Python backend) |
+| closed_at | TIMESTAMPTZ NULL | kapandı/iptal anı |
+| auto_close_at | TIMESTAMPTZ NULL | çözüldü talep sakin yanıtsızsa bu anda kapanır (`auto_close_days`) |
+| sla_hour_type, sla_target_hours, sla_calendar | TEXT/INT/JSONB NULL | SLA kural anlık görüntüsü (açılıştaki kategori + takvim); `due_at` bitiş |
+| sla_warn_at, sla_warned_at, sla_breached_at | TIMESTAMPTZ NULL | %80 anı; uyarı ve aşım bildirimi yazıldı mı (iş tekrarlamaz) |
+| outage_id | UUID NULL | ana olay (`outages`) |
 
 `(site_id, number)` UNIQUE; numara site başına işlem kilidi altında `max + 1`. İndeks `(site_id, status)`.
 
@@ -643,12 +674,36 @@ oradan), `uploaded_by_id`, `uploaded_by_name`.
 | Sütun | Tip | Not |
 |---|---|---|
 | request_id | UUID | |
-| kind | TEXT | `created` · `status_changed` · `assigned` · `comment` · `resolved` |
+| kind | TEXT | `created` · `status_changed` · `assigned` · `comment` · `resolved` · `department_changed` · `closed` · `cancelled` · `reopened` · `feedback` · `outage_linked` · `outage_unlinked` · `quote` |
 | description | TEXT | |
 | actor_name | TEXT NULL | |
 | new_status | TEXT NULL | |
 
 UPDATE/DELETE tetikleyiciyle reddedilir.
+
+### Hizmetler (HIZ-01..05, göç 0031)
+- `request_categories` [K] — site tanımlı kategori: `key` (değişmez, site içinde benzersiz), `name`
+  (+`name_key` benzersiz), `hour_type` (`24x7` · `business`), `hours_low/normal/high/urgent`
+  (1–2160), `default_priority`, `department_id?` (atanacak ekip), `is_active`, `sort_order`.
+- `request_settings` [K] — tek satır: `calendar` JSONB (7 gün), `auto_close_days` (1–30, vars. 3),
+  `merge_window_hours` (1–168, vars. 24), `low_rating_threshold` (1–4, vars. 2).
+- `reply_templates` [K] — `title`, `category?` (→ kategori anahtarı), `body`, `is_active`.
+- `request_internal_notes` [K] — iç not (K26) **değişmez**: `request_id`, `body`, `author_user_id`, `author_name`.
+- `request_feedback` [K] — sakin değerlendirmesi **değişmez**: `request_id`, `solved`, `score`
+  (çözüldüyse 1–5, değilse NULL), `comment`, `person_id`, `by_name`. Son satır geçerli.
+- `outages` [K] — ana olay: `title`, `category`, `location`, `public_description`, `status`
+  (`open` · `resolved`), `resolution`, `resolved_at`. Bağlı talepler `requests.outage_id`.
+- `service_tariffs` [K] — `name` (+`name_key` benzersiz), `unit`, `price` > 0, `is_active`.
+- `service_quotes` [K] — `request_id`, `unit_id`, `account_id` (teklif anında belirlenir),
+  `total`, `status` (`pending` · `accepted` · `rejected` · `extra_pending` · `billed`),
+  `actual_total`, `billed_total`, `ledger_entry_id` (kaynak `service`). Talepte tek açık teklif
+  (kısmi benzersiz indeks). `service_quote_lines`: `line_no`, `description`, `qty`, `unit_price`, `total`.
+- `permit_settings` [K] — tek satır: `weekday_hours`, `saturday_hours?`, `sunday_allowed`,
+  `deposit_amount`, `checklist[]`.
+- `permits` [K] — `unit_id`, `person_id`, `type` (`renovation` · `move_in` · `move_out`),
+  `date_from/to`, `contractor`, `description`, `status` (`pending` · `approved` · `rejected` ·
+  `completed`), `reject_reason`, `checklist` JSONB, `deposit`, `deposit_entry_id` (kaynak
+  `deposit`), `refund_entry_id` (ters kayıt), `approval_request_id`.
 
 ### `announcements` [K]
 | Sütun | Tip | Not |
@@ -737,6 +792,44 @@ UPDATE/DELETE tetikleyiciyle reddedilir.
 
 `visitors.anonymized_at` eklendi. Kişisel veri (ziyaretçi adı, plaka, not) saklama süresi dolunca
 gece işiyle silinir ya da "Anonim" olur; kaydın kendisi (tarih, sayı) kalır.
+
+### Operasyon ekleri ve teknik varlık [K] (göç 0032; OPS-01..06, HIZ-06/07; K28, K29)
+Hepsi kiracı tablosu (RLS), denetim kaydında; silme yok (pasifleştirme / durum).
+
+| Tablo | Ne | Not |
+|---|---|---|
+| `operation_settings` | site başına tek satır | `meter_anomaly_percent` (varsayılan 50), `meter_photo_required` |
+| `facility_keys` | anahtar / kart / kumanda | `code` site içinde tekil (büyük harf), `authorized_roles` JSONB |
+| `key_loans` | teslim kaydı | açık teslim tekil (kısmi indeks `returned_at IS NULL`); `to_phone` denetimde maskeli |
+| `deposited_keys` | sakinin emanet anahtarı | `authorized` JSONB `[{name, phone}]` (denetimde `***`), `status` requested/held/handed/returned; `expired` okumada |
+| `stock_counts` · `stock_count_lines` | sayım ve satırları | sayım anındaki sistem miktarı + fark; `approval_request_id` ("Stok sayım farkı" onayı) |
+| `checklist_templates` · `checklist_inspections` | denetim şablonu (maddeler JSONB) ve saha denetimi | denetim **değişmez**; yanıtlar `[{text, type, value, ok, photo_id}]`, açılan talepler |
+| `insurance_policies` · `insurance_claims` | poliçe ve hasar dosyası | `end_date > start_date`; ödendi → `paid` + `paid_on` (kısıt); belgeler `documents.subject_*` |
+| `meters` · `meter_readings` | sayaç ve dönem okuması | aktif seri no tekil; dönem başına tek geçerli okuma (kısmi indeks `status <> 'reread'`); fotoğraf `stored_files` |
+| `task_templates` · `task_completions` | görev şablonu ve günlük kapanış | şablon `staff_member_id` (K29); kapanış (şablon, gün) tekil ve **değişmez** |
+| `technical_assets` | teknik varlık kartı (**K28: `assets`'ten ayrı**) | kod `TV-0001` sıralı, `contract_id` → `contracts` |
+| `asset_inspection_schedules` · `asset_inspection_records` | yasal muayene takvimi ve sonucu | `next_due_on` saklanır; kayıt **değişmez**, `report_document_id` zorunlu, olumsuzda `request_id` |
+| `maintenance_plans` · `maintenance_runs` | periyodik bakım planı ve dönemi | (plan, `due_on`) tekil; iş emri `request_id`, bakımda bulunan arıza `issue_request_id` |
+
+## 9a. Finans Mod P işlemleri (göç 0027; servis istekleri 27–33)
+
+| Tablo | Özet |
+|---|---|
+| `periods` (genişletildi) [K] | `status`: `open` · `closing` · `locked` · `temp_open` (eski `closed` → `locked`); `exceptions` (madde → gerekçe), kapanışı başlatan, kilitleyen, `unlock_until`, `unlock_reason`, `unlock_request_id` (onay bekleyen açma) |
+| `period_events` [K] **değişmez** | dönem durum geçmişi (`start_close`, `reopen`, `lock`, `unlock_requested`, `unlock`, `unlock_rejected`, `relocked`) |
+| `cash_days` [K] | kasa gün sonu sayımı: `system_balance`, `counted`, `difference`, `reason`, `status` (`closed` · `approval_pending` · `rejected`); hesap + gün başına bir geçerli sayım (kısmi benzersiz) |
+| `collection_actions` [K] **değişmez** | hatırlatma / arama / not; gece işi kademesi `stage` + `due_ref` (aynı açık vade için bir kez) |
+| `demand_letters` [K] | ihtarname gönderimi: yöntem, tarih, takip no, tebliğ tarihi, durum |
+| `payment_plans` [K] | ödeme planı: tutar, taksit sayısı, ilk vade, tolerans (parametreden kopya), durum (`approval_pending` · `active` · `cancelled` · `rejected`; bozuldu/tamamlandı taksitlerden) |
+| `payment_plan_installments` [K] **değişmez** | taksit → cari borç hareketi (`source: payment_plan`) |
+| `payment_plan_closures` [K] **değişmez** | planın kapattığı borç hareketleri (`restructure` · `cancel`) — açık borç hesabı bunları düşer |
+| `ad_hoc_charge_settings` · `ad_hoc_charges` [K] | dönem dışı ücret ayarı (kaynak → yansıma, vade günü) ve ücretler (borç hareketi `source: ad_hoc_charge`, iptal ters kayıt) |
+| `accounting_mapping_versions` [K] **değişmez** | hesap kodu eşlemesi (versiyonlu) |
+| `accounting_exports` · `accounting_export_items` [K] **değişmez** | üretilen fiş dosyası (içerik saklanır) ve aktarılan fişler (`voucher_key` sitede tekil → fiş bir kez aktarılır) |
+| `finance_parameter_versions` [K] | finans parametresi sürümü: yürürlük ayı, tüm değerler (JSONB), değişen alanlar, durum |
+
+`ledger_entries.source` değerlerine `ad_hoc_charge`, `payment_plan`; onay işlem tiplerine
+`period_unlock`, `cash_difference`, `ad_hoc_charge`, `finance_parameter`, `demand_letter` eklendi.
 
 ## 9b. İletişim, acil durum ve şeffaflık (göç 0036 — ILT-01..06, RAP-02)
 

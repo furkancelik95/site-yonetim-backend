@@ -10,10 +10,10 @@ istekleri 71–74; PM kararları K31, K32, K8).
   acil durum saklama ayarı, acil bilgi kartı, şeffaflık raporu, anket soruları/pusula/yanıt/
   katılımcı.
 - Onay mekanizmasına yeni işlem tipi: "Şeffaflık raporu" (`transparency_report`). Kısıt listesi
-  main'deki son göçten (0026) alındı.
+  main'deki son göçten (0027) alındı.
 
 Revision ID: 0036
-Revises: 0026
+Revises: 0027
 Create Date: 2026-10-27 11:09:33.847747
 """
 
@@ -39,15 +39,18 @@ TABLES = (
 )
 IMMUTABLE = ("notification_template_versions",)
 
-# Onay işlem tipleri: main'deki son göç (0026) listesi + "transparency_report".
-_ACTIONS_0026 = (
+# Onay işlem tipleri: main'deki son göç (0027, P03a) listesi + "transparency_report".
+_ACTIONS_0027 = (
     "charge_rule", "charge_run", "charge_run_reversal", "refund", "debt_write_off", "expense",
     "emergency_expense", "purchase_request", "purchase_order", "quote_exception", "reservation",
     "renovation_permit", "payment_plan", "paid_service_tariff", "role_change",
     "finance_mode_change", "registration", "stock_count_difference", "approval_rule_change",
-    "leave_request", "ownership_transfer",
+    "leave_request",  # göç 0029 (insan kaynakları)
+    "ownership_transfer",  # göç 0026 (yapı, kişiler)
+    "period_unlock", "cash_difference", "ad_hoc_charge", "finance_parameter",
+    "demand_letter",  # göç 0027 (finans P03a)
 )  # fmt: skip
-_ACTIONS = (*_ACTIONS_0026, "transparency_report")
+_ACTIONS = (*_ACTIONS_0027, "transparency_report")
 
 
 def _action_check(actions: tuple[str, ...]) -> None:
@@ -63,7 +66,7 @@ def _action_check(actions: tuple[str, ...]) -> None:
 _ALL_SITES = "SELECT set_config('app.all_sites', 'on', true)"
 
 revision: str = "0036"
-down_revision: str | None = "0026"
+down_revision: str | None = "0027"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -602,7 +605,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.execute(_ALL_SITES)
-    _action_check(_ACTIONS_0026)
+    _action_check(_ACTIONS_0027)
     for table in IMMUTABLE:
         op.execute(f'DROP TRIGGER IF EXISTS {table}_immutable ON "{table}"')
     for table in reversed(TABLES):
