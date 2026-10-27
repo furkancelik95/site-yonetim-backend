@@ -66,6 +66,8 @@ class Permission(StrEnum):
     NOTIFICATIONS_MANAGE = "notifications.manage"
     # Planlı rapor gönderimi (RAP-05)
     REPORTS_SCHEDULE = "reports.schedule"
+    TRANSPARENCY_MANAGE = "transparency.manage"  # şeffaflık raporu hazırlama (RAP-02)
+    TRANSPARENCY_PUBLISH = "transparency.publish"  # onay kuralı yoksa doğrudan yayın
 
 
 class SiteRole(StrEnum):
@@ -111,6 +113,7 @@ ROLE_PERMISSIONS: dict[SiteRole, frozenset[Permission]] = {
             P.STAFF_MANAGE, P.APPROVAL_RULES_READ, P.APPROVAL_RULES_MANAGE, P.PEOPLE_CONTACT,
             P.DOCUMENTS_READ, P.DOCUMENTS_MANAGE, P.DOCUMENTS_CONFIDENTIAL,
             P.NOTIFICATIONS_MANAGE, P.REPORTS_SCHEDULE,
+            P.TRANSPARENCY_MANAGE, P.TRANSPARENCY_PUBLISH,
         }
     ),
     SiteRole.BOARD_MEMBER: frozenset(
@@ -133,6 +136,7 @@ ROLE_PERMISSIONS: dict[SiteRole, frozenset[Permission]] = {
             P.FINANCE_BUDGET_MANAGE, P.EXPENSES_READ, P.EXPENSES_MANAGE, P.FINANCE_CASH_READ,
             P.FINANCE_CASH_MANAGE, P.FINANCE_REPORTS_READ, P.UNITS_READ, P.PEOPLE_READ,
             P.CONTRACTS_MANAGE, P.INVENTORY_READ, P.DOCUMENTS_READ, P.REPORTS_SCHEDULE,
+            P.TRANSPARENCY_MANAGE,
         }
     ),
     # Yalnızca kapıdaki iş: borç, kişi listesi, muhasebe yok

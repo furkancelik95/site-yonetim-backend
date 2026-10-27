@@ -243,6 +243,12 @@ AUDITED_TABLES = frozenset(
         "approval_requests",
         "approval_decisions",
         "approval_delegations",
+        # iletişim ve acil durum (yoklama ayrıntısı `emergency_units` kişisel veri: yazılmaz,
+        # 30 gün sonra silinir; acil bilgi kartı görsel içerdiği için elle özetle yazılır)
+        "emergencies",
+        "emergency_settings",
+        "notification_template_versions",
+        "transparency_reports",
         # belge arşivi (gizli belge açılışı ayrıca document_access_logs'ta)
         "documents",
         "document_versions",

@@ -51,6 +51,7 @@ class ActionType(StrEnum):
     AD_HOC_CHARGE = "ad_hoc_charge"  # dönem dışı ücret (FIN-06)
     FINANCE_PARAMETER = "finance_parameter"  # finans parametresi değişikliği (FIN-16)
     DEMAND_LETTER = "demand_letter"  # ihtarname (FIN-12)
+    TRANSPARENCY_REPORT = "transparency_report"  # şeffaflık raporu yayını (RAP-02)
 
 
 ACTION_LABELS: dict[ActionType, str] = {
@@ -80,6 +81,7 @@ ACTION_LABELS: dict[ActionType, str] = {
     ActionType.AD_HOC_CHARGE: "Dönem dışı ücret",
     ActionType.FINANCE_PARAMETER: "Finans parametresi",
     ActionType.DEMAND_LETTER: "İhtarname",
+    ActionType.TRANSPARENCY_REPORT: "Şeffaflık raporu",
 }
 
 

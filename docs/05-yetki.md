@@ -251,3 +251,12 @@ birleşimi, `scoped_permissions` sınırı taşır.
 - Kimlik olaylarının hepsi `auth_events`'e yazılır (hedef telefon/e-posta yazılmaz).
 - İzinler: `notifications.manage` (yönetici — SMS hesabı, kota, sessiz saat, teslim kayıtları),
   `reports.schedule` (yönetici, muhasebe — planlı raporlar).
+
+### Şeffaflık raporu izinleri (P12, 27.10.2026 — K32)
+
+| İzin | Roller | Ne |
+|---|---|---|
+| `transparency.manage` | Yönetici, Muhasebe | şeffaflık raporu taslağı hazırlama, silme, yayına gönderme |
+| `transparency.publish` | Yönetici | "Şeffaflık raporu" onay kuralı yoksa doğrudan yayın |
+
+Acil durum: başlatma/bitirme `announcements.publish` ya da `security.incidents`; pano ve yoklama ayrıca `security.visitors`. Anket isimli dökümü (K31) `polls.manage`.

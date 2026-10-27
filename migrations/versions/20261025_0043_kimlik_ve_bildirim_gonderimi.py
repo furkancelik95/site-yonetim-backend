@@ -30,7 +30,7 @@ from sqlalchemy.dialects import postgresql
 from site_yonetim.db.rls import disable_tenant_rls, enable_tenant_rls
 
 revision: str = "0043"
-down_revision: str | None = "0027"
+down_revision: str | None = "0036"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

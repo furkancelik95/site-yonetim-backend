@@ -492,9 +492,14 @@ Site içinde artan `number`; silinmez, içerik değişmez. Olay: `kind`, `locati
   `planned` · `held` · `cancelled`, `attendance_note`, `held_at`, `cancel_reason`) ve
   `meeting_agenda_items` (`order` toplantı içinde tekil, `result`, `decision`, `votes_*` ≥ 0).
   Kararlar tek seferde girilir, sonra değişmez.
-- `polls` (`question`, `audience`, `ends_on`, erken kapanışta `closed_at`), `poll_options`,
-  `poll_votes(poll_id, unit_id)` **benzersiz** — bölüm başına bir oy. Oyu kimin verdiği tutulmaz;
-  oy tablosu denetim kaydına yazılmaz (gizli oy).
+- `polls` (`question` = başlık, `audience`, `block_ids?`, `ends_on`, erken kapanışta `closed_at`,
+  K31: `is_anonymous`, `one_per_unit`), `poll_questions` (`order` anket içinde tekil, `kind`
+  `single` · `multiple` · `rating` · `text`), `poll_options` (`question_id`, `order` soru içinde
+  tekil), `poll_ballots` (yanıt: `unit_id?`, `person_id?` — yalnız isimli ankette; kısmi tekil
+  indeks `(poll_id, unit_id)` ve kişi başına ankette `(poll_id, person_id)`), `poll_answers`
+  (seçim / puan 1–5 / metin), `poll_participants` (anonim + kişi başına ankette yalnız katılım).
+  Göç 0036 eski `poll_votes` satırlarını pusula + yanıta taşıdı. Yanıt tabloları denetim kaydına
+  yazılmaz.
 - `contracts` (`end_date ≥ start_date`, `amount?` NUMERIC(18,2), `notice_days` 0–365,
   `is_archived`). `days_left`/`state` saklanmaz, okurken hesaplanır.
 - `assets` (`sequence` site içinde tekil → `code` `DB-0001`, `status` `in_use` · `broken` ·
@@ -825,6 +830,18 @@ Hepsi kiracı tablosu (RLS), denetim kaydında; silme yok (pasifleştirme / duru
 
 `ledger_entries.source` değerlerine `ad_hoc_charge`, `payment_plan`; onay işlem tiplerine
 `period_unlock`, `cash_difference`, `ad_hoc_charge`, `finance_parameter`, `demand_letter` eklendi.
+
+## 9b. İletişim, acil durum ve şeffaflık (göç 0036 — ILT-01..06, RAP-02)
+
+| Tablo | Not |
+|---|---|
+| `announcements` (+ sütunlar) | `channels[]`, zamanlama `scheduled_for` · `requested_publish_at` · `cancelled_at` (`published_at` boşken), okuma onayı `requires_ack` · `ack_hours` (1–720) · `ack_deadline` · `sms_fallback` ve yedek izi `sms_fallback_ran_at/_count/_sent` |
+| `announcement_deliveries.acked_at` | "Okudum, anladım" anı (okundu da sayılır) |
+| `notification_template_versions` | şablon sürümü (`code`, `version` site içinde tekil, `variants` JSONB, `customized`) — **değişmez**; satır yoksa sürüm 1 = sistem metni |
+| `emergencies` · `emergency_units` | acil durum (tek aktif: kısmi tekil indeks `ended_at IS NULL`), kapsam başlatmada sabitlenen bölümler ve son durumu; bitişte `summary` + `purge_on`; ayrıntı `run-emergency-purge` ile silinir (`purged_at`) |
+| `emergency_settings` | site başına: `retention_days` (30), `auto_purge` (false — K8) |
+| `emergency_info_cards` | site başına tek kart (JSONB: toplanma alanları, telefonlar, talimatlar, blok notları), her yayında `version` artar |
+| `transparency_reports` | dönem (`year`, `month`; reddedilmemiş rapor dönemde tekil), `status` `draft` · `pending` · `published` · `rejected`, donmuş `content` (kişi/bölüm yok), `scope`, onay talebi bağı |
 
 ## 10. Eksik ama gerekecek
 

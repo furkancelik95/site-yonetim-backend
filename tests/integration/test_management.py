@@ -238,7 +238,7 @@ async def test_anket_ac_dogrula_kapat(mgmt: World) -> None:
 
     created = await w.post("/polls", POLL)
     assert created.status_code == 201, created.text
-    assert created.json()["message"] == "Anket açıldı; sakinler kendi ekranlarında görüyor."
+    assert created.json()["message"] == "Anket açıldı (anonim); 0 kişiye bildirim gitti."
     poll = created.json()["data"]
     assert (poll["status"], poll["total_votes"], poll["created_by"]) == (
         "open",
@@ -310,7 +310,7 @@ async def test_sakin_oyu_gizli_bolum_basina_bir(mgmt: World) -> None:
     staff_view = (await w.get("/polls")).json()["items"][0]
     assert staff_view["total_votes"] == 2
     assert "my_votes" not in staff_view  # kim neye oy verdi personelde yok
-    assert await audited(w, "poll_votes") == []  # gizli oy denetim kaydına yazılmaz
+    assert await audited(w, "poll_ballots") == []  # gizli oy denetim kaydına yazılmaz
 
     stranger = await w.api.post(
         url(f"/{poll['id']}/vote"),
