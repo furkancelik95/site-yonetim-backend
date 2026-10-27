@@ -397,12 +397,13 @@ async def test_demo_duyuru_ve_talep(
         assert extras == [1, 1, 1, 3]  # ana olay, tadilat başvurusu, teklif, tarife (SR 49–52)
         assert pending is not None
         assert pending.date() > SEED_DAY  # sakin onayı bekliyor
-        assert announcement_count == 4
+        assert announcement_count == 5  # + okuma onaylı duyuru (ILT-01)
 
     resident = await login_headers(api, "sakin@demo.local", DEMO_PASSWORD)
     listed = (await api.get("/api/v1/sites/aksu-konaklari/announcements", headers=resident)).json()
     assert [a["title"] for a in listed["items"]] == [
         "Olağan genel kurul toplantısı",
+        "Asansör yenileme çalışması — okuma onayı",
         "Planlı su kesintisi",
         "Aidat ödeme hatırlatması",
     ]

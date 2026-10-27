@@ -344,12 +344,39 @@ Modül `requests`. Ayar yazma izni `requests.settings` (yalnız Yönetici).
 |---|---|---|---|---|
 | GET | `/sites/{slug}/announcements` | `announcements.read` | R | sabitlenmiş önce, sonra yayın tarihine göre. Yayınlayan hepsini (süresi geçenler dahil) + `recipient_count`/`read_count`; **sakin yalnız kendisine teslim edilen**, süresi geçmemiş olanları + `read_at`; diğer personel yürürlükteki hepsini |
 | GET | `/sites/{slug}/announcements/{id}` | `announcements.read` | Y | aynı görünürlük; görmediği 404 |
-| POST | `/sites/{slug}/announcements` | `announcements.publish` | R | `{title, body, importance, audience, audience_block_ids?, channels[], expires_on?, is_pinned}` → hedef kişiler için teslim kayıtları. **Gerçek gönderim: arka plan işi** — henüz yok (`12` K5): `in_app` hemen teslim, diğer kanallar bekler |
+| POST | `/sites/{slug}/announcements` | `announcements.publish` | R | `{title, body, importance, audience, audience_block_ids?, channels[], expires_on?, is_pinned, requires_ack?, ack_hours? (1–720), sms_fallback?, publish_at?}` → hedef kişiler için teslim kayıtları. `publish_at` ileride ise **zamanlanır** (`published_at` null, `scheduled_for`); sessiz saate (22:00–08:00, P16c ayarı gelene dek varsayılan) düşen zaman bitişe kayar, `critical` aşar. Geçmiş 422 `fields.publish_at`; süre 422 `fields.ack_hours`. **Gerçek gönderim: arka plan işi** — henüz yok (`12` K5): `in_app` hemen teslim, diğer kanallar bekler |
+| GET | `/sites/{slug}/announcements/{id}/read-report` | `announcements.publish` | Y | okuma raporu (servis isteği 71): `{recipient_count, read_count, requires_ack, ack_deadline, acks[{name, units, at, channel}], not_acked, sms_fallback{due, count, sent, note}, recipients[{name, units, delivered_at, read_at, acked_at, channel}], generated_at}` |
+| GET | `/sites/{slug}/scheduled-announcements` | `announcements.publish` | Y | yayın bekleyenler `{id, title, importance, publish_at, requested_at, shifted, requires_ack, created_by}` |
+| POST | `/sites/{slug}/scheduled-announcements/{id}/cancel` | `announcements.publish` | Y | yalnız yayınlanmamışsa; değilse 409 `invalid_status` |
+| GET | `/sites/{slug}/resident/pending-acks` | sakin | Y | onaylamadığım okuma onaylı duyurular `{announcement_id, title, deadline}` (ana sayfada sabit) |
+| POST | `/sites/{slug}/resident/announcements/{id}/acknowledge` | sakin | Y | "Okudum, anladım" (201); okundu da sayılır; tekrar 409 `already`; onay istemeyen 404 |
 | POST | `/sites/{slug}/announcements/{id}/read` | `announcements.read` | Y | sakin okundu işaretler (ilk okuma anı korunur); kendisine teslim edilmemişse 404 |
 
 Hedef kitle bugünkü etkin malik/kiracı/oturanlardan seçilir (vekil hariç): `blocks` seçilen
 blokların bölümleri, `owners_only` malikler, `tenants_only` kiracılar, `debtors_only` bakiyesi
 borçlu bir cari hesabı olanlar. Yayından sonra taraf değişse de teslim listesi değişmez.
+
+Okuma onayı (16.3): son onay = yayın + `ack_hours`; yalnız teslim kaydı olan kişi onaylar (hane
+üyesi teslim almaz). Süre dolunca onaylamayanlara **bir kez** SMS yedeği — `run-announcement-jobs`
+(dakikalık; zamanlanmış duyuruyu da yayınlar). SMS sağlayıcısı P16c ile bağlanacak
+(`services/outbound.register_sms_sender`); o zamana dek kişi sayısı kayda geçer, `sent=false`.
+
+### 2.11a İletişim ve acil durum (servis istekleri 72–74, ILT-02/04/06 — modül `announcements`)
+| Yöntem | Yol | İzin | Durum | Not |
+|---|---|---|---|---|
+| GET | `/sites/{slug}/notification-templates` | `announcements.publish` | Y | sistem + duyuru şablonları `{code, name, channel: push\|sms\|email\|announcement, variables, required, variants[{lang, subject, body}], version, history[{version, at, by}], customized, sms[{lang, encoding, chars, segments}]}` |
+| PUT | `/sites/{slug}/notification-templates/{code}` | `announcements.publish` | Y | `{variants[]}` → yeni sürüm (değişmez tablo). Türkçe zorunlu (422 `fields.variants`), zorunlu/tanımsız değişken ve SMS 3 parça sınırı 422 `fields.variants.{lang}` |
+| POST | `/sites/{slug}/notification-templates/{code}/reset` | `announcements.publish` | Y | sistem metnine dön (yeni sürüm) |
+| GET | `/sites/{slug}/emergency-info-card` · `/resident/emergency-info-card` | personel · sakin | Y | `{muster_points[{id, name, directions, map}], phones[{label, number}], instructions{earthquake, fire, flood, gas}, block_notes[{block_id, block_name, note}], version, updated_at, updated_by}`; `ETag` + `If-None-Match` → 304 (çevrimdışı önbellek) |
+| PUT | `/sites/{slug}/emergency-info-card` | `announcements.publish` | Y | yeni sürüm; ≥1 toplanma alanı, telefon 3–13 hane, kroki PNG/JPEG/WEBP data URL (≤ ~300 KB) |
+| POST | `/sites/{slug}/emergencies` | `announcements.publish` ya da `security.incidents` | Y | `{kind, scope: all\|blocks, block_ids, message}`; tek aktif (409 `already_active`); kapsam sabitlenir; onay gerekmez, denetime yazılır; kapsamdakilere `urgent` bildirim |
+| GET | `/sites/{slug}/emergencies/active` | + `security.visitors` | Y | pano: `rows[{unit_id, unit_name, block_id, block_name, status: safe\|muster\|help\|none, note, muster_point, by, method, at}]` (yardım isteyen üstte), `totals` · yoksa `null` |
+| GET | `/sites/{slug}/emergencies` | + `security.visitors` | Y | geçmiş: özet, `purge_on`, `purged` |
+| POST | `/sites/{slug}/emergencies/{id}/muster-checks` | + `security.visitors` | Y | `{unit_ids, muster_point}` (karttaki alan) → `{marked, skipped_help}`; yardım isteyen kapanmaz |
+| POST | `/sites/{slug}/emergencies/{id}/end` | başlatma izni | Y | özet + `purge_on` = bitiş + `retention_days`; aktif değilse 409 `not_active` |
+| GET · PUT | `/sites/{slug}/emergency-settings` | okuma başlatma izni · yazma `announcements.publish` | Y | `{retention_days (30), auto_purge (false)}` — K8; `run-emergency-purge` gece işi yalnız açıksa siler |
+| GET | `/sites/{slug}/resident/emergency` | sakin | Y | kapsamdaysam `{id, kind, kind_label, message, started_at, units[{unit_id, unit_name, status}], muster_points}` · yoksa `null` |
+| POST | `/sites/{slug}/resident/emergency/status` | sakin | Y | `{status: safe\|help\|muster, note?, muster_point?}` kapsamdaki tüm bölümlerime; kapsam dışı 403, aktif yok 409 `not_active` |
 
 ### 2.12 Güvenlik (modül: `visitors`, `packages`)
 | Yöntem | Yol | İzin | Durum | Not |
@@ -438,9 +465,8 @@ rapor; `auto_anonymize` açık sitelerde saklama süresi dolan ziyaretçi/plaka 
 | POST | `/sites/{slug}/resident/requests/{id}/cancel` | sakin (kendi talebi) | R | `{reason?}` — yalnız iş başlamadan (açık/atandı); yoksa 409 `not_cancellable` |
 | POST | `/sites/{slug}/resident/quotes/{id}/decision` | sakin (teklifin bölümünde) | R | `{decision: accept\|reject}` — teklif aşamasında onay/ret; ek tutar aşamasında onay → gerçekleşen, ret → teklif tutarı cariye yazılır; karar beklenmiyorsa 409 `invalid_status` |
 | GET · POST | `/sites/{slug}/resident/permits` | sakin | R | `{rules, items}` kendi bölümlerinin başvuruları / yeni başvuru `{unit_id?, type, date_from, date_to?, contractor?, description}` — tarih bugünden önce olamaz (422) |
-| GET | `/sites/{slug}/resident/expenses?year=` | sakin | **Y** | sitenin **gerçekleşen** gider dökümü (geri alınan ve düzeltmeler hariç) + `total_amount`; satırda `document_id`. Şeffaflık vaadinin karşılığı |
+| GET | `/sites/{slug}/resident/transparency-reports[/{id}]` | sakin | Y | **K32:** yayınlanmış şeffaflık raporları (kişi/bölüm yok). Eski `resident/expenses` ve `resident/files/{id}` (tüm giderler + fatura görüntüsü) **kaldırıldı** |
 | GET | `/sites/{slug}/resident/packages` | sakin | Y | dairelerine gelen, teslim bekleyen kargolar **teslim koduyla** (modül: `packages`) |
-| GET | `/sites/{slug}/resident/files/{id}` | sakin | Y | **fatura görüntüsü** — yalnız gerçekleşen bir giderin belgesi; başka dosya 404 |
 
 "Sakin" = üyeliğinde `person_id` olan kullanıcı; yoksa **403** ("Bu ekran yalnız sakinler
 içindir"). Sakin, `requests.read` izni olmadan da kendi taleplerini görür (`05` §6).
@@ -490,15 +516,26 @@ tutanak noter onaylı karar defterinin yerine geçmez.
 ### 2.19 Anket (servis isteği 15 — modül `surveys`)
 | Yöntem | Yol | İzin | Durum | Not |
 |---|---|---|---|---|
-| GET | `/sites/{slug}/polls?status=open\|closed` | `announcements.read` (sakin hariç) | R | sayfalı, yeni üstte: `{id, question, description, options[{id, label, votes}], audience, ends_on, status, total_votes, created_by, created_at}` — yalnız toplamlar |
-| POST | `/sites/{slug}/polls` | `polls.manage` | R | `{question, description?, options[2–8, tekrarsız], audience: all\|owners\|tenants, ends_on ≥ bugün}` |
+| GET | `/sites/{slug}/polls?status=open\|closed` | `announcements.read` (sakin hariç) | R | sayfalı, yeni üstte: `{id, question, description, options (ilk soru), questions[{id, order, text, kind, required, options[{id, label, votes}], answered, rating{average, counts}, texts}], audience, block_ids, is_anonymous, one_per_unit, ends_on, status, total_votes, created_by, created_at, notice}` — toplamlar; `texts` yalnız `polls.manage` |
+| POST | `/sites/{slug}/polls` | `polls.manage` | R | `{question (başlık), description?, options[2–8] **ya da** questions[{text, kind: single\|multiple\|rating\|text, options, required}] (≤20), audience: all\|owners\|tenants, block_ids?, ends_on ≥ bugün, is_anonymous (true), one_per_unit (true)}`; hedef kitleye bildirim |
+| GET | `/sites/{slug}/polls/{id}/responses` | `polls.manage` | Y | **K31:** isimli ankette kim ne yanıtladı `[{person_name, unit_name, at, answers[]}]`; açılış denetime yazılır; anonimde 409 `anonymous_poll` |
 | POST | `/sites/{slug}/polls/{id}/close` | `polls.manage` | R | erken kapatır; kapalıysa 409 `already_closed` |
-| GET | `/sites/{slug}/resident/polls` | sakin | R | açık + son 30 günde kapananlar, dizi; ek `my_votes[{unit_id, unit_name, option_id}]` (oy verebileceği bölümler). Oy vermeden ve anket açıkken `votes`/`total_votes` **null** |
-| POST | `/sites/{slug}/resident/polls/{id}/vote` | sakin | R | `{unit_id, option_id}` → `{option_id}`. **Bir bölüm = bir oy** (benzersiz kısıt; eşzamanlıda da). Kapalı 409 `poll_closed`, bölüm adına oy var 409 `already_voted`, bölüm sakinin değil 404, rol hedef kitle dışında 403 `not_eligible` |
+| GET | `/sites/{slug}/resident/polls` | sakin | R | açık + son 30 günde kapananlar, dizi; ek `my_votes[{unit_id, unit_name, option_id, voted}]` (bölüm başına ankette), `can_respond`, `responded`. Yanıt vermeden ve anket açıkken sonuç alanları **null** |
+| POST | `/sites/{slug}/resident/polls/{id}/vote` | sakin | R | `{unit_id?, option_id}` (eski) ya da `{unit_id?, answers[{question_id, option_ids, rating, text}]}` → `{option_id}`. Bölüm başına ankette `unit_id` zorunlu, **bir bölüm = bir yanıt**; değilse kişi başına bir. Kapalı 409 `poll_closed`, tekrar 409 `already_voted`, bölüm sakinin değil 404, hedef dışında 403 `not_eligible`, eksik/yanlış yanıt 422 `fields.answers.{question_id}` (eski biçimde `fields.option_id`) |
 
 `ends_on` günü dahil açık. `audience`: `all` bölümdeki malik/kiracı/oturan (ilk veren), `owners`
-malik, `tenants` kiracı ya da oturan; vekil oy vermez. **Gizli oy**: kimin neye oy verdiği hiçbir
-uçta yok, oy tablosu denetim kaydına yazılmaz. Sonuç danışma niteliğindedir.
+malik, `tenants` kiracı ya da oturan; vekil oy vermez. **Gizlilik anket bazında (K31):** anonim
+ankette kimin neye yanıt verdiği tutulmaz (kişi başına ankette yalnız katılım ayrı tabloda);
+isimli ankette yanıt veren kişi tutulur ve dökümü yalnız `polls.manage` görür. Yanıt tabloları
+denetim kaydına yazılmaz. Sonuç danışma niteliğindedir — resmî oylama değildir (`notice`).
+
+### 2.19a Şeffaflık raporu (RAP-02, K32 — modül `finance`)
+| Yöntem | Yol | İzin | Durum | Not |
+|---|---|---|---|---|
+| GET | `/sites/{slug}/transparency-reports[/{id}]` | `finance.reports.read` ya da `transparency.manage` | Y | `{year, month, period, status: draft\|pending\|published\|rejected, scope, content{period, income, expense, difference, categories[{name, amount, count, share}], collection{charged, collected, rate}, cash_balance}, note, prepared_by, approval_request_id, published_at, published_by, rejection_reason}` |
+| POST | `/sites/{slug}/transparency-reports` | `transparency.manage` | Y | `{year, month, scope{include_categories, include_collection, include_cash_balance}, note?}` → taslak; tutarlar o an donar. Gelecek ay 422 `fields.month`; dönemde reddedilmemiş rapor varsa 409 `exists` |
+| DELETE | `/sites/{slug}/transparency-reports/{id}` | `transparency.manage` | Y | yalnız taslak/reddedilen (204); değilse 409 |
+| POST | `/sites/{slug}/transparency-reports/{id}/publish` | `transparency.manage` | Y | "Şeffaflık raporu" onay kuralı varsa 202 `{status: approval_pending}`; yoksa yalnız `transparency.publish` (yönetici) doğrudan yayınlar, diğerine 403. Yayında sakinlere bildirim. Ret → `rejected` + gerekçe |
 
 ### 2.20 Sözleşme, demirbaş ve stok, personel (servis istekleri 16–18)
 | Yöntem | Yol | İzin | Durum | Not |

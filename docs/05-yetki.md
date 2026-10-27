@@ -228,3 +228,13 @@ birleşimi, `scoped_permissions` sınırı taşır.
 - Erişim çözümleme: `src/SiteYonetimi.Infrastructure/Identity/AccessService.cs`
 - İstek filtresi (404/403): `src/SiteYonetimi.Web/Infrastructure/SiteContext.cs`
 - Platform yöneticisi: `src/SiteYonetimi.Web/Controllers/PlatformController.cs` (`RequirePlatformAdminAttribute`)
+
+
+### Şeffaflık raporu izinleri (P12, 27.10.2026 — K32)
+
+| İzin | Roller | Ne |
+|---|---|---|
+| `transparency.manage` | Yönetici, Muhasebe | şeffaflık raporu taslağı hazırlama, silme, yayına gönderme |
+| `transparency.publish` | Yönetici | "Şeffaflık raporu" onay kuralı yoksa doğrudan yayın |
+
+Acil durum: başlatma/bitirme `announcements.publish` ya da `security.incidents`; pano ve yoklama ayrıca `security.visitors`. Anket isimli dökümü (K31) `polls.manage`.

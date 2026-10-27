@@ -18,11 +18,13 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     Uuid,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from site_yonetim.db.base import Base, TenantMixin, enum_check, tenant_fk, tenant_table_args
+from site_yonetim.domain.communication import ACK_HOURS_MAX, ACK_HOURS_MIN
 from site_yonetim.domain.operations import (
     Audience,
     Channel,
@@ -120,6 +122,17 @@ class Announcement(TenantMixin, Base):
         CheckConstraint(enum_check("importance", Importance), name="importance"),
         CheckConstraint(enum_check("audience", Audience), name="audience"),
         Index("ix_announcements_site_published", "site_id", "published_at"),
+        CheckConstraint(
+            f"ack_hours IS NULL OR ack_hours BETWEEN {ACK_HOURS_MIN} AND {ACK_HOURS_MAX}",
+            name="ack_hours",
+        ),
+        CheckConstraint("NOT requires_ack OR ack_hours IS NOT NULL", name="ack_rule"),
+        Index(
+            "ix_announcements_site_scheduled",
+            "site_id",
+            "scheduled_for",
+            postgresql_where=text("published_at IS NULL AND cancelled_at IS NULL"),
+        ),
     )
 
     title: Mapped[str] = mapped_column(Text)
@@ -131,6 +144,20 @@ class Announcement(TenantMixin, Base):
     expires_on: Mapped[dt.date | None] = mapped_column(Date)
     published_by: Mapped[str | None] = mapped_column(Text)
     is_pinned: Mapped[bool] = mapped_column(default=False)
+    # Zamanlama (ILT-01): `published_at` boş + `scheduled_for` dolu = zamanlanmış. Hedef ve kanal
+    # yayın anında çözülür (teslim kayıtları o an yazılır).
+    channels: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
+    scheduled_for: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    requested_publish_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    cancelled_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    # Zorunlu okuma onayı (16.3): son onay = yayın + ack_hours; süre dolunca bir kez SMS yedeği.
+    requires_ack: Mapped[bool] = mapped_column(default=False)
+    ack_hours: Mapped[int | None]
+    ack_deadline: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    sms_fallback: Mapped[bool] = mapped_column(default=False)
+    sms_fallback_ran_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    sms_fallback_count: Mapped[int | None]  # süre dolduğunda onaylamayan kişi sayısı
+    sms_fallback_sent: Mapped[int | None]  # dış kanala gerçekten giden (sağlayıcı yokken 0)
 
 
 class AnnouncementDelivery(TenantMixin, Base):
@@ -151,6 +178,7 @@ class AnnouncementDelivery(TenantMixin, Base):
     channel: Mapped[str] = mapped_column(Text)
     sent_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     read_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    acked_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))  # "Okudum"
     failure_reason: Mapped[str | None] = mapped_column(Text)
 
 
