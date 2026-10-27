@@ -84,12 +84,38 @@ Tablo ve sütun adları `snake_case`, İngilizce. Kullanıcıya görünen etiket
 | is_active | BOOL | |
 
 ### `site_memberships` [K]
+Kullanıcı ↔ site bağı. **Rol burada değil** (P18, göç 0041): roller `site_role_assignments`'ta.
+| Sütun | Tip | Not |
+|---|---|---|
+| user_id | UUID → users | `(site_id, user_id)` benzersiz |
+| person_id | UUID NULL → persons | **Sakin** üyeliğinde dolu: kullanıcının hangi kişi olduğu. FK `persons` tablosuyla (Dilim 3) eklenir |
+| is_active | BOOL | pasif açık üyelik erişim vermez ve o sitedeki türetilmiş erişimi de kapatır (`05` §4) |
+
+### `site_roles` [K] — siteye özel rol ya da şablon düzeyi (P18, K20)
+| Sütun | Tip | Not |
+|---|---|---|
+| key | TEXT | `(site_id, key)` benzersiz. Şablon düzeyi satırında şablon anahtarı (`security`), özel rolde `custom-…` |
+| name | TEXT | `(site_id, name)` benzersiz; onay kurallarında rolü tanıtır, **değişmez** |
+| description | TEXT NULL | |
+| base_key | TEXT NULL | özel rolün kopyalandığı rol |
+| is_system | BOOL | true: hazır şablonun bu sitedeki düzeyi (izinler koddan); false: özel rol |
+| permissions | TEXT[] NULL | özel rolün izinleri (şablonda NULL). Tanınmayan izin adı yok sayılır |
+| level | SMALLINT | 1–9, 1 en üst (rol sırası) |
+| is_active | BOOL | özel rol arşivi (silinmez) |
+| created_by_name | TEXT NULL | |
+
+### `site_role_assignments` [K] — rol ataması (PLT-09, P18)
+Kişi × rol × kapsam × (başlangıç–bitiş). Silinmez; kaldırma `ends_at = now` + `removed_*` (atama
+geçmişi). Etkin: `starts_at ≤ now < ends_at` (boş = sınırsız).
 | Sütun | Tip | Not |
 |---|---|---|
 | user_id | UUID → users | |
-| role | TEXT | site rol şablonu adı — `05-yetki.md` §2 |
-| person_id | UUID NULL → persons | **Sakin** üyeliğinde dolu: kullanıcının hangi kişi olduğu. FK `persons` tablosuyla (Dilim 3) eklenir |
-| is_active | BOOL | pasif açık üyelik erişim vermez ve o sitedeki türetilmiş erişimi de kapatır (`05` §4) |
+| role_key | TEXT | şablon anahtarı ya da özel rol `key`'i |
+| scope_kind | TEXT | `site` · `block` · `gate` (kapı: GUV-08 gelince) |
+| block_id | UUID NULL → blocks | bileşik FK; yalnız `block` |
+| gate_id | UUID NULL | yalnız `gate`; kapı tablosu gelince FK |
+| starts_at · ends_at | TIMESTAMPTZ NULL | `ends_at ≥ starts_at` |
+| assigned_by_name · removed_at · removed_by_name | | atama geçmişi |
 
 ### `auth_sessions` [G] — oturum (yenileme jetonu)
 | Sütun | Tip | Not |
