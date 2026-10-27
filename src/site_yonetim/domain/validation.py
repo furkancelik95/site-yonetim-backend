@@ -64,3 +64,17 @@ def normalize_tr_mobile(value: str) -> str:
             "Telefon 5 ile başlayan 10 haneli bir cep numarası olmalı (ör. 0532 123 45 67)."
         )
     return f"+90{digits}"
+
+
+_E164 = re.compile(r"^\+[1-9]\d{7,14}$")
+
+
+def normalize_phone(value: str) -> str:
+    """Giriş telefonu → E.164 (PLT-01: ülke kodu seçici, varsayılan +90; boşluk ve baştaki 0
+    temizlenir). `+90` dışındaki ülke kodları genel E.164 kuralıyla kabul edilir."""
+    text = "".join(ch for ch in value.strip() if ch.isdigit() or ch == "+")
+    if text.startswith("+") and not text.startswith("+90"):
+        if not _E164.match(text):
+            raise ValueError("Telefon numarasını ülke koduyla girin (ör. +49 151 2345 6789).")
+        return text
+    return normalize_tr_mobile(text)

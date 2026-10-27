@@ -303,7 +303,7 @@ async def _login(
     if person.user_id is None:
         person.user_id = user.id
     await session.flush()
-    return user.email, password
+    return user.email or user.phone or "", password
 
 
 async def accept(

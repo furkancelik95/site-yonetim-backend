@@ -258,6 +258,9 @@ AUDITED_TABLES = frozenset(
         # belge arşivi (gizli belge açılışı ayrıca document_access_logs'ta)
         "documents",
         "document_versions",
+        # bildirim gönderimi (PLT-05, ILT-05, RAP-05): SMS hesabı/sessiz saat ve planlı rapor
+        "site_messaging_settings",
+        "scheduled_reports",
         # yetki / üyelik
         "site_memberships",
         "site_roles",

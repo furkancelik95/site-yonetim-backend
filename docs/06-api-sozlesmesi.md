@@ -112,15 +112,31 @@ Her hata aynı gövdeyi döner:
 ### 2.1 Kimlik
 | Yöntem | Yol | İzin | Durum | Not |
 |---|---|---|---|---|
-| POST | `/auth/login` | — | R | `{email, password}` → `{access_token, token_type: "bearer", expires_in, must_change_password}` + `sy_refresh` çerezi. Hatalı: 401 `invalid_credentials`; 5 hatada 15 dk kilit: 429 `account_locked`; aynı adresten 15 dk'da 20 hatalı deneme: 429 `too_many_attempts` (+ `Retry-After`, parola denenmez) |
+| POST | `/auth/login` | — | R | `{email, password}` → `{access_token, token_type: "bearer", expires_in, must_change_password, mfa_required, mfa_setup_deadline}` + `sy_refresh` çerezi. **2FA kuruluysa** `mfa_required: true`: oturum beklemede (10 dk), kod `POST /auth/mfa/verify` ile girilene dek her uç 401 `mfa_required`. Yönetici rolünde 2FA kurulmamışsa `mfa_setup_deadline` (geçiş süresi, `MFA_GRACE_DAYS`); süre dolunca `/me`, `/me/security`, `/auth/mfa/setup|enable` dışında 403 `mfa_setup_required`. Hatalı: 401 `invalid_credentials`; 5 hatada 15 dk kilit: 429 `account_locked`; aynı adresten 15 dk'da 20 hatalı deneme: 429 `too_many_attempts` (+ `Retry-After`, parola denenmez) |
 | POST | `/auth/change-password` | giriş | R | `{current_password, new_password}` → 204. Geçici parolada (`must_change_password: true`) zorunlu; o zamana kadar `/me` dışındaki uçlar 403 `password_change_required`. Hatalar 422: `invalid_current_password` (hesap kilidi sayacını artırır), `weak_password` (en az 8), `password_unchanged`. Başarılıysa **diğer oturumlar iptal**, bu oturum sürer |
 | POST | `/auth/refresh` | çerez | Y | gövde yok; çerezle → yeni `access_token` + yeni çerez. Geçersiz/süresi dolmuş: 401 `session_expired`. Frontend `credentials: "include"` ile çağırır |
 | POST | `/auth/logout` | — | R | Bearer ve/veya çerez; oturumu iptal eder, çerezi siler. Her zaman 204 |
-| GET | `/me` | giriş | R | `UserAccess` — `05-yetki.md` §4 + `must_change_password`. Site başına `role` (ana rol), `roles[]` (`{key, name, level, scope_kind, block_id, ends_at}`), `permissions` (birleşim) ve `scoped_permissions` (blokla sınırlı izinler). `GET /sites/{slug}` aynı alanları taşır. Frontend yönlendirmesi buna bakar (geçici paroladayken de çalışır) |
+| GET | `/me` | giriş | R | `UserAccess` — `05-yetki.md` §4 + `must_change_password`. Site başına `role` (ana rol), `roles[]` (`{key, name, level, scope_kind, block_id, ends_at}`), `permissions` (birleşim) ve `scoped_permissions` (blokla sınırlı izinler). `GET /sites/{slug}` aynı alanları taşır. Frontend yönlendirmesi buna bakar (geçici paroladayken de çalışır) Ayrıca (P5) `email`, `phone`, `mfa_enabled`, `mfa_required`, `mfa_setup_deadline`, `mfa_setup_required`; 2FA kurulumu beklerken de çalışır |
+| POST | `/auth/otp/request` | — | Y | **P5, PLT-01.** `{phone}` (E.164 ya da 05XX…) → `Written[{sent_to (maskeli), expires_at, resend_after_seconds, test_code}]`. Numara kayıtlı olsun olmasın **aynı yanıt**. Sınır (§4.7, hedef başına, amaçtan bağımsız): 60 sn'de bir → 429 `code_too_soon`; günde 10 → 429 `code_daily_limit`; kilitliyken 429 `code_locked` (+ `Retry-After`). IP başına 15 dk'da 20 istek (429 `too_many_attempts`). `test_code` yalnız geliştirme/demo (test sağlayıcısı, K5); üretimde her zaman `null` |
+| POST | `/auth/otp/verify` | — | Y | `{phone, code}` → `TokenResponse` + çerez. 6 hane, 3 dk; hatalı 422 `invalid_code` ("Kalan deneme: N"), süresi dolmuş/kullanılmış 422 `code_expired`, 5. hata 429 `code_locked` (numara 15 dk). Kod doğru ama hesap yok → 404 `no_account` (kayıt başvurusuna yönlendir); pasif hesap 403 `account_disabled` |
+| POST | `/auth/mfa/verify` | bekleyen oturum | Y | girişin 2. adımı: `{code}` (TOTP 6 hane ya da yedek kod `xxxx-xxxx`) → `TokenResponse`. Hatalı 422 `invalid_code`; 5 hatada hesap 15 dk kilit (429 `account_locked`) ve bekleyen oturum kapanır |
+| POST | `/auth/mfa/setup` | giriş (kurulum kapısı açık) | Y | yeni sır → `{secret, otpauth_uri, account, issuer}` (QR'ı frontend çizer). Kurulu doğrulayıcı varsa 409 `mfa_already_enabled` |
+| POST | `/auth/mfa/enable` | giriş (kurulum kapısı açık) | Y | `{code}` → `Written[{codes: [10 yedek kod]}]` — kodlar **yalnız bu yanıtta**. Kurulum başlatılmadıysa 409 `mfa_setup_missing` |
+| POST | `/auth/mfa/recovery-codes` | giriş | Y | `{code}` (TOTP) → yeni 10 yedek kod; eskiler geçersiz |
+| POST | `/auth/mfa/disable` | giriş | Y | `{code}` → 204. Yönetici rolünde 409 `mfa_required_for_role` |
+| POST | `/auth/step-up` | giriş | Y | `{password?, code?}` (2FA kodu, yedek kod ya da `/auth/step-up/code` SMS kodu) → `Written[{verified_at, valid_until}]`; hassas uçlar 5 dk açılır (aksi 403 `step_up_required`) |
+| POST | `/auth/step-up/code` | giriş | Y | kayıtlı telefona step-up kodu (2FA'sı olmayan telefon kullanıcısı); sınırlar SMS koduyla aynı |
+| POST | `/auth/password/forgot` | — | Y | `{email}` ya da `{phone}` → aynı `Written[CodeSentOut]`; kod **yalnız kayıtlı hesaba** gider, yanıt hesabın varlığını sızdırmaz |
+| POST | `/auth/password/reset` | — | Y | `{email\|phone, code, new_password}` → `Written[{reset: true}]`. Parola değişir, kilit ve geçici parola işareti kalkar, **bütün oturumlar kapanır**. 422 `weak_password` / `invalid_code` / `code_expired` |
+| GET | `/auth/invitations/{token}` | — | Y | hesap daveti (PLT-09, 72 saat): `{full_name, login (maskeli), site_name, role_label, invited_by_name, expires_at, status: pending\|accepted\|expired}`; bilinmeyen 404 |
+| POST | `/auth/invitations/{token}/accept` | — | Y | `{password}` → `TokenResponse` (parola belirlenir, oturum açılır). Kullanılmış/süresi dolmuş 410 `invitation_gone` |
+| GET | `/me/security` | giriş (kurulum kapısı açık) | Y | `{email, phone, phone_changed_at, has_password, mfa: {enabled, enabled_at, required, setup_deadline, setup_required, recovery_codes_left}}` |
+| POST | `/me/phone-change` | giriş | Y | `{phone}` → yeni numaraya kod (`CodeSentOut`) |
+| POST | `/me/phone-change/confirm` | giriş | Y | `{phone, code}` → `Written[{phone, step_up_until}]`; eski numaraya bilgilendirme SMS'i; 24 saat finansal işlemde step-up. Numara başka hesaptaysa (kod doğrulandıktan sonra) 409 `phone_taken` |
 | GET | `/me/sessions` | giriş | R | açık oturumlarım, son kullanılan üstte: `[{id, device ("Chrome · Windows"), user_agent, ip, created_at, last_used_at, expires_at, is_current}]` (Yazılım Dokümanı PLT-10) |
 | DELETE | `/me/sessions/{id}` | giriş | R | bir cihazı kapatır → 204; o cihazın jetonu bir sonraki istekte 401. Başkasının ya da kapalı oturum 404 |
 | DELETE | `/me/sessions?keep_current=true` | giriş | R | "tüm cihazlardan çık" → `{revoked, current_revoked}`; `keep_current=false` bu oturumu da kapatır (frontend girişe döner) |
-| GET | `/me/security-events` | giriş | R | giriş geçmişim, son 50: `[{at, kind, label, device, ip}]`; `kind`: `login_succeeded` · `login_failed` · `account_locked` · `logout` · `password_changed` · `session_revoked` · `token_reused` |
+| GET | `/me/security-events` | giriş | R | giriş geçmişim, son 50: `[{at, kind, label, device, ip}]`; `kind`: `login_succeeded` · `login_failed` · `account_locked` · `logout` · `password_changed` · `session_revoked` · `token_reused` · `code_sent` · `code_failed` · `code_locked` · `mfa_enabled` · `mfa_disabled` · `mfa_failed` · `recovery_code_used` · `recovery_codes_regenerated` · `password_reset` · `phone_changed` · `step_up` · `invitation_sent` · `invitation_accepted` |
 
 ### 2.2 Platform (yalnız platform yöneticisi — değilse 404)
 | Yöntem | Yol | Durum | Not |
@@ -655,14 +671,37 @@ yerine her an hazır; gün kesinleşince `timesheet_lines` donar.
 | GET | `/sites/{slug}/notifications/unread-count` | site üyesi | R | sayı (zil rozeti) |
 | POST | `/sites/{slug}/notifications/read` | site üyesi | R | `{ids?: [..]}` → `{marked, unread_count}`; `ids` yoksa okunmamışların hepsi. Başkasının kimliği etkisiz (0) |
 | GET | `/me/notifications/summary` | giriş | R | erişebildiğim her site için `{site_id, slug, unread_count}` (site seçici rozeti) |
-| GET · PUT | `/me/notification-preferences` | giriş | R | kategori × kanal (`push` · `sms` · `email`) matrisi: `{in_app: true, delivery_enabled: false, categories: [{category, label, rule, channels: [{channel, enabled, locked}]}]}`. PUT `{changes: [{category, channel, enabled}]}`. Acil ve yönetişimin varsayılan kanalları kapatılamaz (`locked`), finansal ve güvenlikte en az bir kanal açık kalır; aksi 422 `preference_not_allowed` |
+| GET · PUT | `/me/notification-preferences` | giriş | R | kategori × kanal (`push` · `sms` · `email`) matrisi: `{in_app: true, delivery_enabled: true, test_provider: true, categories: [{category, label, rule, channels: [{channel, enabled, locked}]}]}`. PUT `{changes: [{category, channel, enabled}]}`. Acil ve yönetişimin varsayılan kanalları kapatılamaz (`locked`), finansal ve güvenlikte en az bir kanal açık kalır; aksi 422 `preference_not_allowed` |
 | POST | `/me/push-tokens` | giriş | R | `{token, platform: ios\|android\|web}` → 204; tekrar güvenli; aynı jeton başka hesapla gelirse ona taşınır |
 | POST | `/me/push-tokens/remove` | giriş | R | `{token}` → 204 (çıkışta); başkasınınki 404 |
 
-Uygulama içi bildirim **her zaman** yazılır. Push/SMS/e-posta gönderimi açık karar **K5**'e kadar
-yok (`delivery_enabled: false`); tercihler ve jetonlar şimdiden saklanır. Bildirimi modüller
-`services/notifications.notify()` ile, olayı üreten kayıtla aynı transaction'da yazar; aynı
-olay aynı kişiye ikinci kez yazılmaz (tekil anahtar). İlk üretici: onay mekanizması (§2.22).
+Uygulama içi bildirim **her zaman** yazılır. Modüller `services/notifications.notify()` ile,
+olayı üreten kayıtla aynı transaction'da yazar; aynı olay aynı kişiye ikinci kez yazılmaz (tekil
+anahtar). Aynı çağrı **gönderim katmanında** (`services/delivery.py`, NotificationService) dış
+kanal teslim kayıtlarını üretir: kişinin tercihi ve adresi (push jetonu, telefon, e-posta),
+sitenin sessiz saatleri (acil aşar). Kritik (acil) bildirimde push 2 dk'da teslim edilmezse SMS
+yedeği; push jetonu yoksa SMS hemen. Gönderim isteğin hemen ardından ve dakikalık
+`run-notification-jobs` ile yapılır. Sağlayıcı K5'e kadar **test sağlayıcısı** (kayda geçer,
+dışarı gitmez; `test_provider: true`).
+
+### 2.21a SMS hesabı, sessiz saatler, teslim kayıtları, planlı raporlar (PLT-05, ILT-05, RAP-05)
+| Yöntem | Yol | İzin | Durum | Not |
+|---|---|---|---|---|
+| GET · PUT | `/sites/{slug}/communication-settings` | GET site üyesi · PUT `notifications.manage` | Y | `{quiet_from: "22:00", quiet_to: "08:00"}` (servis isteği 71 biçimi). Aynı saatler 422 |
+| GET · PUT | `/sites/{slug}/settings/sms` | `notifications.manage` | Y | `{mode: platform\|own, sender, provider, api_key_last4, monthly_quota, quota_source, providers, test_provider, platform_sender}`. PUT `{mode, sender?, provider?, api_key?}`; kendi hesabında başlık (3–11), sağlayıcı (`netgsm`·`iletimerkezi`·`verimor` — K5 adayları) ve anahtar zorunlu; anahtar şifreli, yanıtta yalnız son 4 karakter |
+| POST | `/sites/{slug}/settings/sms/test` | `notifications.manage` | Y | `{phone?}` (boş → kendi numaram) → `Written[{delivery_id, recipient, status, segments, test_provider}]` |
+| GET | `/sites/{slug}/settings/sms/usage` | `notifications.manage` | Y | bu ay: `{month, quota, used, remaining, overage, percent, forecast, messages, queued, by_category, warn_percents}`. Kota dolunca gönderim durmaz, aşım işaretlenir; %80/%100'de yöneticiye bildirim |
+| GET | `/sites/{slug}/notification-deliveries?channel=&status=` | `notifications.manage` | Y | sayfalı teslim kayıtları: `{channel, category, kind, recipient (maskeli), subject, body, status, status_label, is_critical, deferred, scheduled_for, sent_at, provider, cost_units, is_overage, is_fallback, error}` |
+| GET | `/sites/{slug}/scheduled-reports/options` | `reports.schedule` | Y | rapor türleri + tür başına **yetkili** alıcı adayları |
+| GET · POST | `/sites/{slug}/scheduled-reports` | `reports.schedule` | Y | tanım: `{name, report_key, frequency: daily\|weekly\|monthly, weekday?, day_of_month? (1–28), send_time "SS:DD", format: pdf\|xlsx, recipient_user_ids, is_active}`. Yetkisiz alıcı 422 (RAP-05 adım 2) |
+| PUT · DELETE | `/sites/{slug}/scheduled-reports/{id}` | `reports.schedule` | Y | güncelle / pasifleştir (204; geçmiş korunur) |
+| POST | `/sites/{slug}/scheduled-reports/{id}/run` | `reports.schedule` | Y | "Şimdi gönder" → `Written[{run_at, period_label, status: sent\|skipped\|failed, recipient_count}]` |
+| GET | `/sites/{slug}/scheduled-reports/{id}/runs` | `reports.schedule` | Y | çalışma geçmişi (sayfalı) |
+| GET | `/platform/test-inbox?to=` | platform yöneticisi | Y | test sağlayıcısının son 100 mesajı (kodlar ve davet bağlantıları dahil, süreç belleği). **Yalnız geliştirme/demo**; üretimde ya da `TEST_INBOX_ENABLED=false` iken 404 |
+
+Zamanlanmış işler: `run-notification-jobs` (dakikalık: kritik SMS yedeği + sessiz saat kuyruğu +
+yeniden deneme), `run-scheduled-reports` (dakikalık). Rapor içerikleri sonra bağlanır; e-posta
+şimdilik rapor adı, dönem ve panel bağlantısını taşır.
 
 ### 2.22 Onay mekanizması (Yazılım Dokümanı Bölüm 6, ONY-01..03)
 Tüm modüllerin onayları tek servisten geçer (`services/approvals.request_approval`); modül komutu

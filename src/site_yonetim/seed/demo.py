@@ -217,6 +217,7 @@ async def _seed_demo(
         users = {
             spec.email: User(
                 email=spec.email,
+                phone=spec.phone,
                 password_hash=password_hash,
                 full_name=spec.full_name,
                 is_platform_admin=spec.is_platform_admin,
@@ -832,6 +833,7 @@ async def _seed_resident(
     async with factory() as session, session.begin():
         user = User(
             email=RESIDENT.email,
+            phone=RESIDENT.phone,
             password_hash=password_hash,
             full_name=f"{person.first_name} {person.last_name}",
             kind=UserKind.RESIDENT.value,
