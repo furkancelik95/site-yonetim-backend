@@ -242,8 +242,11 @@ def test_secretbox() -> None:
     assert seal(b"anahtar", "x") != seal(b"anahtar", "x")  # rastgele nonce
     with pytest.raises(SecretBoxError):
         unseal(b"baska", sealed)
+    # Ortadaki bir karakteri değiştir: son karakterlerin bazı bitleri base64'te yok sayılabilir.
+    middle = len(sealed) // 2
+    tampered = sealed[:middle] + ("B" if sealed[middle] != "B" else "C") + sealed[middle + 1 :]
     with pytest.raises(SecretBoxError):
-        unseal(b"anahtar", sealed[:-2] + "AA")
+        unseal(b"anahtar", tampered)
 
 
 def test_telefon_bicimi() -> None:
