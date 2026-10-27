@@ -23,7 +23,6 @@ from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from site_yonetim.domain.approvals import ActionType
-from site_yonetim.domain.charging.periods import DUE_AFTER_DAYS
 from site_yonetim.domain.finance import LedgerSource
 from site_yonetim.domain.money import round_money
 from site_yonetim.domain.operations import (
@@ -58,6 +57,9 @@ from site_yonetim.services import ledger, period_lock
 from site_yonetim.services import requests as requests_svc
 
 NAME_MAX, UNIT_MAX, NOTE_MAX = 60, 20, 200
+# Ücretli hizmet borcunun vadesi (aidat vadesi K25 ile değişti; bu sabit kalır — dönem dışı ücret
+# ayarına taşınınca oradan okunacak).
+DUE_AFTER_DAYS = 14
 
 
 # --- Tarife ----------------------------------------------------------------------------------

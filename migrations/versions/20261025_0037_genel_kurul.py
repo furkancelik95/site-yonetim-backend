@@ -8,7 +8,7 @@
 - Mevcut tablo ve CHECK kısıtı değişmez; veri silinmez.
 
 Revision ID: 0037
-Revises: 0043
+Revises: 0033
 Create Date: 2026-10-27 17:15:38.761884
 """
 
@@ -21,7 +21,7 @@ from sqlalchemy.dialects import postgresql
 from site_yonetim.db.rls import disable_tenant_rls, enable_tenant_rls
 
 revision: str = "0037"
-down_revision: str | None = "0043"
+down_revision: str | None = "0033"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

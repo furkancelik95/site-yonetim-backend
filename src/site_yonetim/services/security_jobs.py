@@ -20,6 +20,7 @@ from site_yonetim.db.tenancy import all_sites_scope, site_scope
 from site_yonetim.domain.gatehouse import months_before
 from site_yonetim.domain.modules import ModuleKey
 from site_yonetim.domain.notifications import NotificationCategory
+from site_yonetim.domain.retention import BY_KEY, VISITORS, RunTrigger
 from site_yonetim.models import (
     GateLog,
     ParcelDelegate,
@@ -32,6 +33,7 @@ from site_yonetim.models import (
 from site_yonetim.models.audit import Actor, AuditAction, record, set_actor
 from site_yonetim.services import notifications as notify_svc
 from site_yonetim.services import patrol as patrol_svc
+from site_yonetim.services import retention
 from site_yonetim.services.charging import BUSINESS_TZ
 from site_yonetim.services.gatehouse import (
     load_settings,
@@ -90,7 +92,12 @@ async def remind_long_waiting(session: AsyncSession, site: Site, *, now: datetim
 
 async def anonymize(session: AsyncSession, *, months: int, today: date, now: datetime) -> int:
     """Saklama süresi dolan kişisel veriyi siler; kaydın kendisi (sayılar, tarih) kalır."""
-    cutoff = months_before(today, months)
+    return await anonymize_before(session, months_before(today, months), now=now)
+
+
+async def anonymize_before(session: AsyncSession, cutoff: date, *, now: datetime) -> int:
+    """`cutoff` tarihinden önceki ziyaretçi/plaka kayıtlarını anonimleştirir (KVKK saklama
+    ekranındaki "şimdi uygula" da bunu çağırır)."""
     cutoff_at = datetime.combine(cutoff, time.min, BUSINESS_TZ)
     statements = (
         update(Visitor)
@@ -152,6 +159,15 @@ async def run_daily(
                     if settings.auto_anonymize:
                         anonymized = await anonymize(
                             session, months=settings.retention_months, today=today, now=now
+                        )
+                        # Silme/anonimleştirme raporu (KVKK saklama ekranı, K8)
+                        retention.log_run(
+                            session,
+                            BY_KEY[VISITORS],
+                            months_before(today, settings.retention_months),
+                            anonymized,
+                            trigger=RunTrigger.JOB,
+                            actor="Güvenlik gece işi",
                         )
             results.append(DailyResult(site.id, reminded, anonymized))
         except Exception:

@@ -112,15 +112,31 @@ Her hata aynı gövdeyi döner:
 ### 2.1 Kimlik
 | Yöntem | Yol | İzin | Durum | Not |
 |---|---|---|---|---|
-| POST | `/auth/login` | — | R | `{email, password}` → `{access_token, token_type: "bearer", expires_in, must_change_password}` + `sy_refresh` çerezi. Hatalı: 401 `invalid_credentials`; 5 hatada 15 dk kilit: 429 `account_locked`; aynı adresten 15 dk'da 20 hatalı deneme: 429 `too_many_attempts` (+ `Retry-After`, parola denenmez) |
+| POST | `/auth/login` | — | R | `{email, password}` → `{access_token, token_type: "bearer", expires_in, must_change_password, mfa_required, mfa_setup_deadline}` + `sy_refresh` çerezi. **2FA kuruluysa** `mfa_required: true`: oturum beklemede (10 dk), kod `POST /auth/mfa/verify` ile girilene dek her uç 401 `mfa_required`. Yönetici rolünde 2FA kurulmamışsa `mfa_setup_deadline` (geçiş süresi, `MFA_GRACE_DAYS`); süre dolunca `/me`, `/me/security`, `/auth/mfa/setup|enable` dışında 403 `mfa_setup_required`. Hatalı: 401 `invalid_credentials`; 5 hatada 15 dk kilit: 429 `account_locked`; aynı adresten 15 dk'da 20 hatalı deneme: 429 `too_many_attempts` (+ `Retry-After`, parola denenmez) |
 | POST | `/auth/change-password` | giriş | R | `{current_password, new_password}` → 204. Geçici parolada (`must_change_password: true`) zorunlu; o zamana kadar `/me` dışındaki uçlar 403 `password_change_required`. Hatalar 422: `invalid_current_password` (hesap kilidi sayacını artırır), `weak_password` (en az 8), `password_unchanged`. Başarılıysa **diğer oturumlar iptal**, bu oturum sürer |
 | POST | `/auth/refresh` | çerez | Y | gövde yok; çerezle → yeni `access_token` + yeni çerez. Geçersiz/süresi dolmuş: 401 `session_expired`. Frontend `credentials: "include"` ile çağırır |
 | POST | `/auth/logout` | — | R | Bearer ve/veya çerez; oturumu iptal eder, çerezi siler. Her zaman 204 |
-| GET | `/me` | giriş | R | `UserAccess` — `05-yetki.md` §4 + `must_change_password`. Site başına `role` (ana rol), `roles[]` (`{key, name, level, scope_kind, block_id, ends_at}`), `permissions` (birleşim) ve `scoped_permissions` (blokla sınırlı izinler). `GET /sites/{slug}` aynı alanları taşır. Frontend yönlendirmesi buna bakar (geçici paroladayken de çalışır) |
+| GET | `/me` | giriş | R | `UserAccess` — `05-yetki.md` §4 + `must_change_password`. Site başına `role` (ana rol), `roles[]` (`{key, name, level, scope_kind, block_id, ends_at}`), `permissions` (birleşim) ve `scoped_permissions` (blokla sınırlı izinler). `GET /sites/{slug}` aynı alanları taşır. Frontend yönlendirmesi buna bakar (geçici paroladayken de çalışır) Ayrıca (P5) `email`, `phone`, `mfa_enabled`, `mfa_required`, `mfa_setup_deadline`, `mfa_setup_required`; 2FA kurulumu beklerken de çalışır |
+| POST | `/auth/otp/request` | — | Y | **P5, PLT-01.** `{phone}` (E.164 ya da 05XX…) → `Written[{sent_to (maskeli), expires_at, resend_after_seconds, test_code}]`. Numara kayıtlı olsun olmasın **aynı yanıt**. Sınır (§4.7, hedef başına, amaçtan bağımsız): 60 sn'de bir → 429 `code_too_soon`; günde 10 → 429 `code_daily_limit`; kilitliyken 429 `code_locked` (+ `Retry-After`). IP başına 15 dk'da 20 istek (429 `too_many_attempts`). `test_code` yalnız geliştirme/demo (test sağlayıcısı, K5); üretimde her zaman `null` |
+| POST | `/auth/otp/verify` | — | Y | `{phone, code}` → `TokenResponse` + çerez. 6 hane, 3 dk; hatalı 422 `invalid_code` ("Kalan deneme: N"), süresi dolmuş/kullanılmış 422 `code_expired`, 5. hata 429 `code_locked` (numara 15 dk). Kod doğru ama hesap yok → 404 `no_account` (kayıt başvurusuna yönlendir); pasif hesap 403 `account_disabled` |
+| POST | `/auth/mfa/verify` | bekleyen oturum | Y | girişin 2. adımı: `{code}` (TOTP 6 hane ya da yedek kod `xxxx-xxxx`) → `TokenResponse`. Hatalı 422 `invalid_code`; 5 hatada hesap 15 dk kilit (429 `account_locked`) ve bekleyen oturum kapanır |
+| POST | `/auth/mfa/setup` | giriş (kurulum kapısı açık) | Y | yeni sır → `{secret, otpauth_uri, account, issuer}` (QR'ı frontend çizer). Kurulu doğrulayıcı varsa 409 `mfa_already_enabled` |
+| POST | `/auth/mfa/enable` | giriş (kurulum kapısı açık) | Y | `{code}` → `Written[{codes: [10 yedek kod]}]` — kodlar **yalnız bu yanıtta**. Kurulum başlatılmadıysa 409 `mfa_setup_missing` |
+| POST | `/auth/mfa/recovery-codes` | giriş | Y | `{code}` (TOTP) → yeni 10 yedek kod; eskiler geçersiz |
+| POST | `/auth/mfa/disable` | giriş | Y | `{code}` → 204. Yönetici rolünde 409 `mfa_required_for_role` |
+| POST | `/auth/step-up` | giriş | Y | `{password?, code?}` (2FA kodu, yedek kod ya da `/auth/step-up/code` SMS kodu) → `Written[{verified_at, valid_until}]`; hassas uçlar 5 dk açılır (aksi 403 `step_up_required`) |
+| POST | `/auth/step-up/code` | giriş | Y | kayıtlı telefona step-up kodu (2FA'sı olmayan telefon kullanıcısı); sınırlar SMS koduyla aynı |
+| POST | `/auth/password/forgot` | — | Y | `{email}` ya da `{phone}` → aynı `Written[CodeSentOut]`; kod **yalnız kayıtlı hesaba** gider, yanıt hesabın varlığını sızdırmaz |
+| POST | `/auth/password/reset` | — | Y | `{email\|phone, code, new_password}` → `Written[{reset: true}]`. Parola değişir, kilit ve geçici parola işareti kalkar, **bütün oturumlar kapanır**. 422 `weak_password` / `invalid_code` / `code_expired` |
+| GET | `/auth/invitations/{token}` | — | Y | hesap daveti (PLT-09, 72 saat): `{full_name, login (maskeli), site_name, role_label, invited_by_name, expires_at, status: pending\|accepted\|expired}`; bilinmeyen 404 |
+| POST | `/auth/invitations/{token}/accept` | — | Y | `{password}` → `TokenResponse` (parola belirlenir, oturum açılır). Kullanılmış/süresi dolmuş 410 `invitation_gone` |
+| GET | `/me/security` | giriş (kurulum kapısı açık) | Y | `{email, phone, phone_changed_at, has_password, mfa: {enabled, enabled_at, required, setup_deadline, setup_required, recovery_codes_left}}` |
+| POST | `/me/phone-change` | giriş | Y | `{phone}` → yeni numaraya kod (`CodeSentOut`) |
+| POST | `/me/phone-change/confirm` | giriş | Y | `{phone, code}` → `Written[{phone, step_up_until}]`; eski numaraya bilgilendirme SMS'i; 24 saat finansal işlemde step-up. Numara başka hesaptaysa (kod doğrulandıktan sonra) 409 `phone_taken` |
 | GET | `/me/sessions` | giriş | R | açık oturumlarım, son kullanılan üstte: `[{id, device ("Chrome · Windows"), user_agent, ip, created_at, last_used_at, expires_at, is_current}]` (Yazılım Dokümanı PLT-10) |
 | DELETE | `/me/sessions/{id}` | giriş | R | bir cihazı kapatır → 204; o cihazın jetonu bir sonraki istekte 401. Başkasının ya da kapalı oturum 404 |
 | DELETE | `/me/sessions?keep_current=true` | giriş | R | "tüm cihazlardan çık" → `{revoked, current_revoked}`; `keep_current=false` bu oturumu da kapatır (frontend girişe döner) |
-| GET | `/me/security-events` | giriş | R | giriş geçmişim, son 50: `[{at, kind, label, device, ip}]`; `kind`: `login_succeeded` · `login_failed` · `account_locked` · `logout` · `password_changed` · `session_revoked` · `token_reused` |
+| GET | `/me/security-events` | giriş | R | giriş geçmişim, son 50: `[{at, kind, label, device, ip}]`; `kind`: `login_succeeded` · `login_failed` · `account_locked` · `logout` · `password_changed` · `session_revoked` · `token_reused` · `code_sent` · `code_failed` · `code_locked` · `mfa_enabled` · `mfa_disabled` · `mfa_failed` · `recovery_code_used` · `recovery_codes_regenerated` · `password_reset` · `phone_changed` · `step_up` · `invitation_sent` · `invitation_accepted` |
 
 ### 2.2 Platform (yalnız platform yöneticisi — değilse 404)
 | Yöntem | Yol | Durum | Not |
@@ -185,15 +201,29 @@ Her hata aynı gövdeyi döner:
 | POST | `/sites/{slug}/budget-plans` | `finance.budget.manage` | Y | `{fiscal_year, name}` → taslak |
 | POST · PUT · DELETE | `/sites/{slug}/budget-plans/{id}/items[/{item_id}]` | `finance.budget.manage` | Y | kalem ekle/güncelle/kaldır — **yalnız taslakta** (aksi 409). `{name, expense_category_id, charge_type_id, allocation_rule_id, annual_amount, frequency, scope_kind, scope_block_ids?, scope_unit_type_ids?, scope_usage?, sort_order}` |
 | POST | `/sites/{slug}/budget-plans/{id}/notify` | `finance.budget.manage` | Y | `{notified_on}` → `notified`, itiraz son günü = +7 gün |
-| POST | `/sites/{slug}/budget-plans/{id}/finalize` | `finance.budget.manage` | Y | itiraz süresi **dolduktan sonra** (son günün ertesi); öncekiler `superseded` |
+| POST | `/sites/{slug}/budget-plans/{id}/finalize` | `finance.budget.manage` | Y | itiraz süresi **dolduktan sonra** (son günün ertesi); öncekiler `superseded`. "Bütçe" onay kuralı varsa **202** ve `finalize_request_id` dolar, onaylanınca kesinleşir (D-16); 409 `finalize_pending` |
+| GET · POST | `/sites/{slug}/budgets[?fiscal_year=]` | `finance.read` · `finance.budget.manage` | Y | **yıllık bütçe** (FIN-17, B17) sayfalı · `{fiscal_year, name, income_target?, budget_plan_id?}` → taslak (proje verilirse kalemler kategori × aya `distribute`) |
+| GET · PUT | `/sites/{slug}/budgets/{id}` | `finance.read` · `finance.budget.manage` | Y | `{…, lines[{expense_category_id, category_name, months[12], total}], month_totals[12], total}` · `{name?, income_target?, lines?[{expense_category_id, months[12]}]}` yalnız taslak (409 `budget_not_editable`) |
+| POST | `/sites/{slug}/budgets/{id}/submit` · `/revise` | `finance.budget.manage` | Y | "Bütçe" onay kuralı varsa 202, yoksa yürürlüğe girer (aynı yılın öncekisi `superseded`); 409 `budget_empty` · revizyon yeni sürüm taslağı (409 `budget_not_active`, `budget_draft_exists`) |
+| GET | `/sites/{slug}/budgets/{id}/actuals?month=` | `finance.read` | Y | bütçe–gerçekleşme: `rows[{expense_category_id, category_name, month_budget, month_actual, cumulative_budget, cumulative_actual, annual_budget, remaining, usage_percent, deviation_percent, level ok/warn/over}]`, `totals`, `warn_percent` |
+| GET · POST | `/sites/{slug}/billing-rules` | `finance.read` · `finance.budget.manage` | Y | **aidat kuralları** (FIN-02, K23): kural + `current_version` + `versions[]` · `{name, charge_type_id, owner_item, version{effective_period, kind, area_basis, amount, frequency, components[], type_coefficients[], exemptions[], scope_kind, scope_*, discontinued, basis_note, basis_document_id?}}` → taslak |
+| GET · PATCH | `/sites/{slug}/billing-rules/{id}` | `finance.read` · `finance.budget.manage` | Y | ayrıntı · `{name, charge_type_id, owner_item}` (yürürlükteki kuralda tip değişmez: 409 `rule_in_use`) |
+| POST · PUT | `/sites/{slug}/billing-rules/{id}/versions[/{vid}]` | `finance.budget.manage` | Y | yeni sürüm taslağı (409 `open_version_exists`) · taslak/reddedilmiş sürümü düzenle |
+| POST | `/sites/{slug}/billing-rules/{id}/versions/{vid}/submit` | `finance.budget.manage` | Y | "Aidat kuralı" onay kuralı varsa 202, yoksa yürürlükte. 422 geçmiş dönem; 409 `period_locked`, `missing_unit_data` (eksik m²/arsa payı/tip), `scope_overlap` (aynı kalem tipinde çakışan kapsam) |
+| POST | `/sites/{slug}/billing-rules/trial` · `/{id}/versions/{vid}/trial` | `finance.read` | Y | **deneme hesabı** (kayıt yok): `{lines[{unit_id, unit_name, amount, explanation}], unit_count, period_total, pool, exempted, annual_total, budget_income_target, warnings}` |
 | GET | `/sites/{slug}/charge-types` · `/allocation-rules` · `/expense-categories` | `finance.read` | Y | seçim listeleri (site açılışında varsayılanlar kurulur — `10` §3) |
 | GET | `/sites/{slug}/charge-runs` · `/charge-runs/{id}` | `finance.read` | R | geçmiş koşular (sayfalı, en yeni üstte) · ayrıntı |
 | GET | `/sites/{slug}/charge-runs/{id}/charges` | `finance.read` | Y | koşunun borçları + kalem dökümü (sayfalı) |
-| GET | `/sites/{slug}/charge-runs/preview?charge_date=&due_date=` | `finance.charge.post` | R | varsayılan **sıradaki dönem** — `04` §4, §7.2. Hiçbir şey yazılmaz. Özet + uyarılar + kalem toplamları + `not_due_items` + sayfalı `charges` |
-| POST | `/sites/{slug}/charge-runs` | `finance.charge.post` | R | `{charge_date?, due_date?}` → kaydet (201). 409: dönem zaten kesilmiş, kesinleşmiş proje yok, kesilecek tahakkuk yok. `Idempotency-Key`. Büyük sitede arka plan işi (`202`) — **henüz yok**, istek içinde çalışır |
+| GET | `/sites/{slug}/charge-runs/preview?charge_date=&due_date=` | `finance.charge.post` | R | varsayılan **sıradaki dönem** — `04` §4, §7.2. Hiçbir şey yazılmaz. Özet + uyarılar + kalem toplamları (`exempted`) + `not_due_items` + sayfalı `charges` (`days`/`period_days` kıst). `source` (K23), `proration` (K9), `approval_required`, `open_draft_id`; `budget_plan` aidat kuralı kaynağında null. Vade varsayılanı `due_day` (K25) |
+| POST | `/sites/{slug}/charge-runs` | `finance.charge.post` | R | `{charge_date?, due_date?}` → "Tahakkuk" onay kuralı yoksa kaydet (201); varsa taslak onaya gider (**202**, `status: approval_pending`). 409: dönem zaten kesilmiş, kaynak yok (`no_finalized_budget`, `no_billing_rules`), kesilecek tahakkuk yok, `draft_exists`. `Idempotency-Key` |
+| POST | `/sites/{slug}/charge-runs/drafts` | `finance.charge.post` | R | taslak hazırla (201, deftere yazılmaz; önizleme saklanır) |
+| POST | `/sites/{slug}/charge-runs/{id}/refresh` · `/submit` · `/cancel` | `finance.charge.post` | R | taslağı yeniden hesapla · gönder (201 kesinleşti / 202 onaya gitti; `Idempotency-Key`) · iptal (onay bekleyen 409) |
+| GET | `/sites/{slug}/charge-runs/{id}/diff` · `/summary` | `finance.read` | R | taslağın fark raporu · uyarılar + kalem toplamları |
+| POST | `/sites/{slug}/charge-runs/lines/{line_id}/adjustments` | `finance.charge.post` | R | **satır düzeltmesi** (D-10): `{new_amount, reason}` → 201 uygulandı / 202 "Tahakkuk düzeltme" onayı. Kilitli dönemde `prior_period: true`. 409 `charge_not_posted`, `adjustment_pending`. `Idempotency-Key` |
+| GET | `/sites/{slug}/charge-runs/{id}/adjustments` | `finance.read` | R | koşunun düzeltmeleri; `/charges` satırlarında `id`, `current_amount` |
 | POST | `/sites/{slug}/charge-runs/{id}/reverse` | `finance.charge.post` | R | `{reason}` (3–500). 409: zaten ters kaydedilmiş / ters kayıt koşusu. `Idempotency-Key` |
-| GET | `/sites/{slug}/charge-schedule` | `finance.read` | R | **otomatik aylık tahakkuk**: `{enabled, charge_day, due_days, notify_on_run, next_run_on, last_run{run_id, period, ran_at, status, message}}`. Kaydedilmediyse varsayılan (kapalı, gün 1, vade 14). `next_run_on` kapalıyken null (İstanbul tarihi). `last_run.status`: `posted` · `skipped` · `failed`; `run_id` yalnız kesildiyse dolu |
-| PUT | `/sites/{slug}/charge-schedule` | `finance.charge.post` | R | `{enabled, charge_day (1–28), due_days (0–60), notify_on_run}` → aynı nesne + mesaj. Sınır dışı 422 `fields.charge_day` / `fields.due_days`. Kesimi gece işi yapar, **elle kaydetmeyle aynı servis**: dönem kesilmişse, proje yoksa ya da önizlemede uyarı varsa kesmez (`skipped`). Açıldığı günden önceki kesim günü geriye dönük kesilmez; sunucu kesim günü çalışmadıysa ay içinde ertesi gün yetişir |
+| GET | `/sites/{slug}/charge-schedule` | `finance.read` | R | **otomatik aylık tahakkuk**: `{enabled, charge_day, draft_lead_days, due_day (salt okunur, K25), approval_required, notify_on_run, next_run_on, last_run{run_id, period, ran_at, status, message}}`. Kaydedilmediyse varsayılan (kapalı, gün 1, taslak −5). `last_run.status`: `posted` · `drafted` · `skipped` · `failed` |
+| PUT | `/sites/{slug}/charge-schedule` | `finance.charge.post` | R | `{enabled, charge_day (1–28), draft_lead_days (0–15), notify_on_run}` → aynı nesne + mesaj (`due_days` kalktı — vade finans parametresi). Gece işi: onaylı taslakları tahakkuk tarihinde kesinleştirir; "Tahakkuk" kuralı varsa kesimden `draft_lead_days` gün önce taslağı ayarı açan adına onaya gönderir (`drafted`); yoksa kesim günü **elle kaydetmeyle aynı servis**le keser (uyarı varsa `skipped`) |
 | POST | `/sites/{slug}/payments` | `finance.payment.record` | R | `{ledger_account_id, amount, date, method, reference?, note?, cash_account_id?}` → `{payment, applied, unapplied, closed_debt_count, balance}` (201). `method`: `cash` · `bank_transfer` · `credit_card` · `other`. Kasa seçildiyse kasaya giriş hareketi de yazılır. `Idempotency-Key` |
 | GET | `/sites/{slug}/payments?account_id=&from=&to=` | `finance.read` | Y | sayfalı, en yeni üstte |
 | GET | `/sites/{slug}/payments/{id}` | `finance.read` veya kendi hesabı | Y | **makbuz verisi**: site, tahsilat, hesap, kapatılan borçlar (`allocations`), `applied`/`unapplied`. `receipt_number` şimdilik `null` (`12` K15) |
@@ -284,10 +314,17 @@ budget_plan` (K23), `late_fee_enabled false` · `late_fee_monthly_rate_percent "
 `late_fee_method daily` · `late_fee_grace_days 5` (K2), `allocation_order late_fee_first` (K24),
 `debtor_restriction_enabled false` · `_min_amount "0.00"` · `_min_days 90` (K11). Finansal etkili
 (sonraki dönemden, onaya tabi): kıst, vade günü, tahakkuk kaynağı, gecikme alanları, mahsup sırası,
-plan süresince gecikme. **Tahakkuk motoru bu parametreleri henüz okumuyor (P03b).**
+plan süresince gecikme, gecikme tavanı (`late_fee_cap_percent 0`) ve asgari tutarı
+(`late_fee_minimum_amount "0.00"`). Tahakkuk motoru (P03b) kaynak, kıst ve vade gününü; tahsilat
+mahsup sırasını; gecikme işi gecikme alanlarını dönemin sürümünden okur.
 
 Gece/saatlik iş `run-finance-jobs`: süresi dolan süreli açmayı kilitler, borç takibi kademelerini
-(aynı açık vade için bir kez; ödeme planındaki hesaba yazılmaz) kaydeder, bozulan planı bildirir.
+(aynı açık vade için bir kez; ödeme planındaki hesaba yazılmaz) kaydeder, bozulan planı bildirir,
+gecikme açıksa önceki ayın ay sonu gecikme kaydını bir kez yazar (`04` §6), bütçe %90/%100 eşik
+uyarısını kategori ve eşik başına bir kez bildirir (FIN-17).
+
+Cari ekstre satırı (`/accounts/{id}/statement`, sakin `/me/statement`): `allocated` (borca yapılan
+mahsup) ve `advance_applied` (önceden yatırılmış avanstan mahsup, D-6) alanları.
 
 ### 2.9 Rapor
 | Yöntem | Yol | İzin | Durum | Not |
@@ -344,12 +381,39 @@ Modül `requests`. Ayar yazma izni `requests.settings` (yalnız Yönetici).
 |---|---|---|---|---|
 | GET | `/sites/{slug}/announcements` | `announcements.read` | R | sabitlenmiş önce, sonra yayın tarihine göre. Yayınlayan hepsini (süresi geçenler dahil) + `recipient_count`/`read_count`; **sakin yalnız kendisine teslim edilen**, süresi geçmemiş olanları + `read_at`; diğer personel yürürlükteki hepsini |
 | GET | `/sites/{slug}/announcements/{id}` | `announcements.read` | Y | aynı görünürlük; görmediği 404 |
-| POST | `/sites/{slug}/announcements` | `announcements.publish` | R | `{title, body, importance, audience, audience_block_ids?, channels[], expires_on?, is_pinned}` → hedef kişiler için teslim kayıtları. **Gerçek gönderim: arka plan işi** — henüz yok (`12` K5): `in_app` hemen teslim, diğer kanallar bekler |
+| POST | `/sites/{slug}/announcements` | `announcements.publish` | R | `{title, body, importance, audience, audience_block_ids?, channels[], expires_on?, is_pinned, requires_ack?, ack_hours? (1–720), sms_fallback?, publish_at?}` → hedef kişiler için teslim kayıtları. `publish_at` ileride ise **zamanlanır** (`published_at` null, `scheduled_for`); sessiz saate (22:00–08:00, P16c ayarı gelene dek varsayılan) düşen zaman bitişe kayar, `critical` aşar. Geçmiş 422 `fields.publish_at`; süre 422 `fields.ack_hours`. **Gerçek gönderim: arka plan işi** — henüz yok (`12` K5): `in_app` hemen teslim, diğer kanallar bekler |
+| GET | `/sites/{slug}/announcements/{id}/read-report` | `announcements.publish` | Y | okuma raporu (servis isteği 71): `{recipient_count, read_count, requires_ack, ack_deadline, acks[{name, units, at, channel}], not_acked, sms_fallback{due, count, sent, note}, recipients[{name, units, delivered_at, read_at, acked_at, channel}], generated_at}` |
+| GET | `/sites/{slug}/scheduled-announcements` | `announcements.publish` | Y | yayın bekleyenler `{id, title, importance, publish_at, requested_at, shifted, requires_ack, created_by}` |
+| POST | `/sites/{slug}/scheduled-announcements/{id}/cancel` | `announcements.publish` | Y | yalnız yayınlanmamışsa; değilse 409 `invalid_status` |
+| GET | `/sites/{slug}/resident/pending-acks` | sakin | Y | onaylamadığım okuma onaylı duyurular `{announcement_id, title, deadline}` (ana sayfada sabit) |
+| POST | `/sites/{slug}/resident/announcements/{id}/acknowledge` | sakin | Y | "Okudum, anladım" (201); okundu da sayılır; tekrar 409 `already`; onay istemeyen 404 |
 | POST | `/sites/{slug}/announcements/{id}/read` | `announcements.read` | Y | sakin okundu işaretler (ilk okuma anı korunur); kendisine teslim edilmemişse 404 |
 
 Hedef kitle bugünkü etkin malik/kiracı/oturanlardan seçilir (vekil hariç): `blocks` seçilen
 blokların bölümleri, `owners_only` malikler, `tenants_only` kiracılar, `debtors_only` bakiyesi
 borçlu bir cari hesabı olanlar. Yayından sonra taraf değişse de teslim listesi değişmez.
+
+Okuma onayı (16.3): son onay = yayın + `ack_hours`; yalnız teslim kaydı olan kişi onaylar (hane
+üyesi teslim almaz). Süre dolunca onaylamayanlara **bir kez** SMS yedeği — `run-announcement-jobs`
+(dakikalık; zamanlanmış duyuruyu da yayınlar). SMS sağlayıcısı P16c ile bağlanacak
+(`services/outbound.register_sms_sender`); o zamana dek kişi sayısı kayda geçer, `sent=false`.
+
+### 2.11a İletişim ve acil durum (servis istekleri 72–74, ILT-02/04/06 — modül `announcements`)
+| Yöntem | Yol | İzin | Durum | Not |
+|---|---|---|---|---|
+| GET | `/sites/{slug}/notification-templates` | `announcements.publish` | Y | sistem + duyuru şablonları `{code, name, channel: push\|sms\|email\|announcement, variables, required, variants[{lang, subject, body}], version, history[{version, at, by}], customized, sms[{lang, encoding, chars, segments}]}` |
+| PUT | `/sites/{slug}/notification-templates/{code}` | `announcements.publish` | Y | `{variants[]}` → yeni sürüm (değişmez tablo). Türkçe zorunlu (422 `fields.variants`), zorunlu/tanımsız değişken ve SMS 3 parça sınırı 422 `fields.variants.{lang}` |
+| POST | `/sites/{slug}/notification-templates/{code}/reset` | `announcements.publish` | Y | sistem metnine dön (yeni sürüm) |
+| GET | `/sites/{slug}/emergency-info-card` · `/resident/emergency-info-card` | personel · sakin | Y | `{muster_points[{id, name, directions, map}], phones[{label, number}], instructions{earthquake, fire, flood, gas}, block_notes[{block_id, block_name, note}], version, updated_at, updated_by}`; `ETag` + `If-None-Match` → 304 (çevrimdışı önbellek) |
+| PUT | `/sites/{slug}/emergency-info-card` | `announcements.publish` | Y | yeni sürüm; ≥1 toplanma alanı, telefon 3–13 hane, kroki PNG/JPEG/WEBP data URL (≤ ~300 KB) |
+| POST | `/sites/{slug}/emergencies` | `announcements.publish` ya da `security.incidents` | Y | `{kind, scope: all\|blocks, block_ids, message}`; tek aktif (409 `already_active`); kapsam sabitlenir; onay gerekmez, denetime yazılır; kapsamdakilere `urgent` bildirim |
+| GET | `/sites/{slug}/emergencies/active` | + `security.visitors` | Y | pano: `rows[{unit_id, unit_name, block_id, block_name, status: safe\|muster\|help\|none, note, muster_point, by, method, at}]` (yardım isteyen üstte), `totals` · yoksa `null` |
+| GET | `/sites/{slug}/emergencies` | + `security.visitors` | Y | geçmiş: özet, `purge_on`, `purged` |
+| POST | `/sites/{slug}/emergencies/{id}/muster-checks` | + `security.visitors` | Y | `{unit_ids, muster_point}` (karttaki alan) → `{marked, skipped_help}`; yardım isteyen kapanmaz |
+| POST | `/sites/{slug}/emergencies/{id}/end` | başlatma izni | Y | özet + `purge_on` = bitiş + `retention_days`; aktif değilse 409 `not_active` |
+| GET · PUT | `/sites/{slug}/emergency-settings` | okuma başlatma izni · yazma `announcements.publish` | Y | `{retention_days (30), auto_purge (false)}` — K8; `run-emergency-purge` gece işi yalnız açıksa siler |
+| GET | `/sites/{slug}/resident/emergency` | sakin | Y | kapsamdaysam `{id, kind, kind_label, message, started_at, units[{unit_id, unit_name, status}], muster_points}` · yoksa `null` |
+| POST | `/sites/{slug}/resident/emergency/status` | sakin | Y | `{status: safe\|help\|muster, note?, muster_point?}` kapsamdaki tüm bölümlerime; kapsam dışı 403, aktif yok 409 `not_active` |
 
 ### 2.12 Güvenlik (modül: `visitors`, `packages`)
 | Yöntem | Yol | İzin | Durum | Not |
@@ -438,9 +502,8 @@ rapor; `auto_anonymize` açık sitelerde saklama süresi dolan ziyaretçi/plaka 
 | POST | `/sites/{slug}/resident/requests/{id}/cancel` | sakin (kendi talebi) | R | `{reason?}` — yalnız iş başlamadan (açık/atandı); yoksa 409 `not_cancellable` |
 | POST | `/sites/{slug}/resident/quotes/{id}/decision` | sakin (teklifin bölümünde) | R | `{decision: accept\|reject}` — teklif aşamasında onay/ret; ek tutar aşamasında onay → gerçekleşen, ret → teklif tutarı cariye yazılır; karar beklenmiyorsa 409 `invalid_status` |
 | GET · POST | `/sites/{slug}/resident/permits` | sakin | R | `{rules, items}` kendi bölümlerinin başvuruları / yeni başvuru `{unit_id?, type, date_from, date_to?, contractor?, description}` — tarih bugünden önce olamaz (422) |
-| GET | `/sites/{slug}/resident/expenses?year=` | sakin | **Y** | sitenin **gerçekleşen** gider dökümü (geri alınan ve düzeltmeler hariç) + `total_amount`; satırda `document_id`. Şeffaflık vaadinin karşılığı |
+| GET | `/sites/{slug}/resident/transparency-reports[/{id}]` | sakin | Y | **K32:** yayınlanmış şeffaflık raporları (kişi/bölüm yok). Eski `resident/expenses` ve `resident/files/{id}` (tüm giderler + fatura görüntüsü) **kaldırıldı** |
 | GET | `/sites/{slug}/resident/packages` | sakin | Y | dairelerine gelen, teslim bekleyen kargolar **teslim koduyla** (modül: `packages`) |
-| GET | `/sites/{slug}/resident/files/{id}` | sakin | Y | **fatura görüntüsü** — yalnız gerçekleşen bir giderin belgesi; başka dosya 404 |
 
 "Sakin" = üyeliğinde `person_id` olan kullanıcı; yoksa **403** ("Bu ekran yalnız sakinler
 içindir"). Sakin, `requests.read` izni olmadan da kendi taleplerini görür (`05` §6).
@@ -519,15 +582,26 @@ katılım/oy ve dijital vekâlet (B18) kapalı — hukuki teyit ve SMS doğrulam
 ### 2.19 Anket (servis isteği 15 — modül `surveys`)
 | Yöntem | Yol | İzin | Durum | Not |
 |---|---|---|---|---|
-| GET | `/sites/{slug}/polls?status=open\|closed` | `announcements.read` (sakin hariç) | R | sayfalı, yeni üstte: `{id, question, description, options[{id, label, votes}], audience, ends_on, status, total_votes, created_by, created_at}` — yalnız toplamlar |
-| POST | `/sites/{slug}/polls` | `polls.manage` | R | `{question, description?, options[2–8, tekrarsız], audience: all\|owners\|tenants, ends_on ≥ bugün}` |
+| GET | `/sites/{slug}/polls?status=open\|closed` | `announcements.read` (sakin hariç) | R | sayfalı, yeni üstte: `{id, question, description, options (ilk soru), questions[{id, order, text, kind, required, options[{id, label, votes}], answered, rating{average, counts}, texts}], audience, block_ids, is_anonymous, one_per_unit, ends_on, status, total_votes, created_by, created_at, notice}` — toplamlar; `texts` yalnız `polls.manage` |
+| POST | `/sites/{slug}/polls` | `polls.manage` | R | `{question (başlık), description?, options[2–8] **ya da** questions[{text, kind: single\|multiple\|rating\|text, options, required}] (≤20), audience: all\|owners\|tenants, block_ids?, ends_on ≥ bugün, is_anonymous (true), one_per_unit (true)}`; hedef kitleye bildirim |
+| GET | `/sites/{slug}/polls/{id}/responses` | `polls.manage` | Y | **K31:** isimli ankette kim ne yanıtladı `[{person_name, unit_name, at, answers[]}]`; açılış denetime yazılır; anonimde 409 `anonymous_poll` |
 | POST | `/sites/{slug}/polls/{id}/close` | `polls.manage` | R | erken kapatır; kapalıysa 409 `already_closed` |
-| GET | `/sites/{slug}/resident/polls` | sakin | R | açık + son 30 günde kapananlar, dizi; ek `my_votes[{unit_id, unit_name, option_id}]` (oy verebileceği bölümler). Oy vermeden ve anket açıkken `votes`/`total_votes` **null** |
-| POST | `/sites/{slug}/resident/polls/{id}/vote` | sakin | R | `{unit_id, option_id}` → `{option_id}`. **Bir bölüm = bir oy** (benzersiz kısıt; eşzamanlıda da). Kapalı 409 `poll_closed`, bölüm adına oy var 409 `already_voted`, bölüm sakinin değil 404, rol hedef kitle dışında 403 `not_eligible` |
+| GET | `/sites/{slug}/resident/polls` | sakin | R | açık + son 30 günde kapananlar, dizi; ek `my_votes[{unit_id, unit_name, option_id, voted}]` (bölüm başına ankette), `can_respond`, `responded`. Yanıt vermeden ve anket açıkken sonuç alanları **null** |
+| POST | `/sites/{slug}/resident/polls/{id}/vote` | sakin | R | `{unit_id?, option_id}` (eski) ya da `{unit_id?, answers[{question_id, option_ids, rating, text}]}` → `{option_id}`. Bölüm başına ankette `unit_id` zorunlu, **bir bölüm = bir yanıt**; değilse kişi başına bir. Kapalı 409 `poll_closed`, tekrar 409 `already_voted`, bölüm sakinin değil 404, hedef dışında 403 `not_eligible`, eksik/yanlış yanıt 422 `fields.answers.{question_id}` (eski biçimde `fields.option_id`) |
 
 `ends_on` günü dahil açık. `audience`: `all` bölümdeki malik/kiracı/oturan (ilk veren), `owners`
-malik, `tenants` kiracı ya da oturan; vekil oy vermez. **Gizli oy**: kimin neye oy verdiği hiçbir
-uçta yok, oy tablosu denetim kaydına yazılmaz. Sonuç danışma niteliğindedir.
+malik, `tenants` kiracı ya da oturan; vekil oy vermez. **Gizlilik anket bazında (K31):** anonim
+ankette kimin neye yanıt verdiği tutulmaz (kişi başına ankette yalnız katılım ayrı tabloda);
+isimli ankette yanıt veren kişi tutulur ve dökümü yalnız `polls.manage` görür. Yanıt tabloları
+denetim kaydına yazılmaz. Sonuç danışma niteliğindedir — resmî oylama değildir (`notice`).
+
+### 2.19a Şeffaflık raporu (RAP-02, K32 — modül `finance`)
+| Yöntem | Yol | İzin | Durum | Not |
+|---|---|---|---|---|
+| GET | `/sites/{slug}/transparency-reports[/{id}]` | `finance.reports.read` ya da `transparency.manage` | Y | `{year, month, period, status: draft\|pending\|published\|rejected, scope, content{period, income, expense, difference, categories[{name, amount, count, share}], collection{charged, collected, rate}, cash_balance}, note, prepared_by, approval_request_id, published_at, published_by, rejection_reason}` |
+| POST | `/sites/{slug}/transparency-reports` | `transparency.manage` | Y | `{year, month, scope{include_categories, include_collection, include_cash_balance}, note?}` → taslak; tutarlar o an donar. Gelecek ay 422 `fields.month`; dönemde reddedilmemiş rapor varsa 409 `exists` |
+| DELETE | `/sites/{slug}/transparency-reports/{id}` | `transparency.manage` | Y | yalnız taslak/reddedilen (204); değilse 409 |
+| POST | `/sites/{slug}/transparency-reports/{id}/publish` | `transparency.manage` | Y | "Şeffaflık raporu" onay kuralı varsa 202 `{status: approval_pending}`; yoksa yalnız `transparency.publish` (yönetici) doğrudan yayınlar, diğerine 403. Yayında sakinlere bildirim. Ret → `rejected` + gerekçe |
 
 ### 2.20 Sözleşme, demirbaş ve stok, personel (servis istekleri 16–18)
 | Yöntem | Yol | İzin | Durum | Not |
@@ -626,14 +700,37 @@ yerine her an hazır; gün kesinleşince `timesheet_lines` donar.
 | GET | `/sites/{slug}/notifications/unread-count` | site üyesi | R | sayı (zil rozeti) |
 | POST | `/sites/{slug}/notifications/read` | site üyesi | R | `{ids?: [..]}` → `{marked, unread_count}`; `ids` yoksa okunmamışların hepsi. Başkasının kimliği etkisiz (0) |
 | GET | `/me/notifications/summary` | giriş | R | erişebildiğim her site için `{site_id, slug, unread_count}` (site seçici rozeti) |
-| GET · PUT | `/me/notification-preferences` | giriş | R | kategori × kanal (`push` · `sms` · `email`) matrisi: `{in_app: true, delivery_enabled: false, categories: [{category, label, rule, channels: [{channel, enabled, locked}]}]}`. PUT `{changes: [{category, channel, enabled}]}`. Acil ve yönetişimin varsayılan kanalları kapatılamaz (`locked`), finansal ve güvenlikte en az bir kanal açık kalır; aksi 422 `preference_not_allowed` |
+| GET · PUT | `/me/notification-preferences` | giriş | R | kategori × kanal (`push` · `sms` · `email`) matrisi: `{in_app: true, delivery_enabled: true, test_provider: true, categories: [{category, label, rule, channels: [{channel, enabled, locked}]}]}`. PUT `{changes: [{category, channel, enabled}]}`. Acil ve yönetişimin varsayılan kanalları kapatılamaz (`locked`), finansal ve güvenlikte en az bir kanal açık kalır; aksi 422 `preference_not_allowed` |
 | POST | `/me/push-tokens` | giriş | R | `{token, platform: ios\|android\|web}` → 204; tekrar güvenli; aynı jeton başka hesapla gelirse ona taşınır |
 | POST | `/me/push-tokens/remove` | giriş | R | `{token}` → 204 (çıkışta); başkasınınki 404 |
 
-Uygulama içi bildirim **her zaman** yazılır. Push/SMS/e-posta gönderimi açık karar **K5**'e kadar
-yok (`delivery_enabled: false`); tercihler ve jetonlar şimdiden saklanır. Bildirimi modüller
-`services/notifications.notify()` ile, olayı üreten kayıtla aynı transaction'da yazar; aynı
-olay aynı kişiye ikinci kez yazılmaz (tekil anahtar). İlk üretici: onay mekanizması (§2.22).
+Uygulama içi bildirim **her zaman** yazılır. Modüller `services/notifications.notify()` ile,
+olayı üreten kayıtla aynı transaction'da yazar; aynı olay aynı kişiye ikinci kez yazılmaz (tekil
+anahtar). Aynı çağrı **gönderim katmanında** (`services/delivery.py`, NotificationService) dış
+kanal teslim kayıtlarını üretir: kişinin tercihi ve adresi (push jetonu, telefon, e-posta),
+sitenin sessiz saatleri (acil aşar). Kritik (acil) bildirimde push 2 dk'da teslim edilmezse SMS
+yedeği; push jetonu yoksa SMS hemen. Gönderim isteğin hemen ardından ve dakikalık
+`run-notification-jobs` ile yapılır. Sağlayıcı K5'e kadar **test sağlayıcısı** (kayda geçer,
+dışarı gitmez; `test_provider: true`).
+
+### 2.21a SMS hesabı, sessiz saatler, teslim kayıtları, planlı raporlar (PLT-05, ILT-05, RAP-05)
+| Yöntem | Yol | İzin | Durum | Not |
+|---|---|---|---|---|
+| GET · PUT | `/sites/{slug}/communication-settings` | GET site üyesi · PUT `notifications.manage` | Y | `{quiet_from: "22:00", quiet_to: "08:00"}` (servis isteği 71 biçimi). Aynı saatler 422 |
+| GET · PUT | `/sites/{slug}/settings/sms` | `notifications.manage` | Y | `{mode: platform\|own, sender, provider, api_key_last4, monthly_quota, quota_source, providers, test_provider, platform_sender}`. PUT `{mode, sender?, provider?, api_key?}`; kendi hesabında başlık (3–11), sağlayıcı (`netgsm`·`iletimerkezi`·`verimor` — K5 adayları) ve anahtar zorunlu; anahtar şifreli, yanıtta yalnız son 4 karakter |
+| POST | `/sites/{slug}/settings/sms/test` | `notifications.manage` | Y | `{phone?}` (boş → kendi numaram) → `Written[{delivery_id, recipient, status, segments, test_provider}]` |
+| GET | `/sites/{slug}/settings/sms/usage` | `notifications.manage` | Y | bu ay: `{month, quota, used, remaining, overage, percent, forecast, messages, queued, by_category, warn_percents}`. Kota dolunca gönderim durmaz, aşım işaretlenir; %80/%100'de yöneticiye bildirim |
+| GET | `/sites/{slug}/notification-deliveries?channel=&status=` | `notifications.manage` | Y | sayfalı teslim kayıtları: `{channel, category, kind, recipient (maskeli), subject, body, status, status_label, is_critical, deferred, scheduled_for, sent_at, provider, cost_units, is_overage, is_fallback, error}` |
+| GET | `/sites/{slug}/scheduled-reports/options` | `reports.schedule` | Y | rapor türleri + tür başına **yetkili** alıcı adayları |
+| GET · POST | `/sites/{slug}/scheduled-reports` | `reports.schedule` | Y | tanım: `{name, report_key, frequency: daily\|weekly\|monthly, weekday?, day_of_month? (1–28), send_time "SS:DD", format: pdf\|xlsx, recipient_user_ids, is_active}`. Yetkisiz alıcı 422 (RAP-05 adım 2) |
+| PUT · DELETE | `/sites/{slug}/scheduled-reports/{id}` | `reports.schedule` | Y | güncelle / pasifleştir (204; geçmiş korunur) |
+| POST | `/sites/{slug}/scheduled-reports/{id}/run` | `reports.schedule` | Y | "Şimdi gönder" → `Written[{run_at, period_label, status: sent\|skipped\|failed, recipient_count}]` |
+| GET | `/sites/{slug}/scheduled-reports/{id}/runs` | `reports.schedule` | Y | çalışma geçmişi (sayfalı) |
+| GET | `/platform/test-inbox?to=` | platform yöneticisi | Y | test sağlayıcısının son 100 mesajı (kodlar ve davet bağlantıları dahil, süreç belleği). **Yalnız geliştirme/demo**; üretimde ya da `TEST_INBOX_ENABLED=false` iken 404 |
+
+Zamanlanmış işler: `run-notification-jobs` (dakikalık: kritik SMS yedeği + sessiz saat kuyruğu +
+yeniden deneme), `run-scheduled-reports` (dakikalık). Rapor içerikleri sonra bağlanır; e-posta
+şimdilik rapor adı, dönem ve panel bağlantısını taşır.
 
 ### 2.22 Onay mekanizması (Yazılım Dokümanı Bölüm 6, ONY-01..03)
 Tüm modüllerin onayları tek servisten geçer (`services/approvals.request_approval`); modül komutu
@@ -732,7 +829,95 @@ için şemada `subject_type/subject_id` var; poliçe, hasar dosyası, teknik var
 Platform panelinden açılan site `setup` durumunda başlar (sakin daveti ve herkese açık kayıt
 kapalı); mevcut siteler ve demo `live`. Gece işi: `run-structure-jobs` (günde bir).
 
+### 2.24a Rezervasyon (servis istekleri 59–61, Yazılım Dokümanı §14 REZ-01..03, K11)
+Modül `reservations` (kapalıysa 404). Alanlar Yapı → Ortak alanlar'da `is_reservable && is_active`
+işaretli `common_areas` kayıtlarıdır. Saatler `"SS:DD"` metni, tarih `YYYY-AA-GG`, para metin.
+
+| Yöntem | Yol | İzin | Durum | Not |
+|---|---|---|---|---|
+| GET | `/sites/{slug}/reservable-areas` | `requests.assign` · `security.visitors` · `modules.manage` | R | dizi `{id, name, kind, block_name, rules}`; kuralı kaydedilmemiş alan varsayılanla döner |
+| PUT | `/sites/{slug}/reservable-areas/{id}/rules` | `modules.manage` | R | kuralın tamamı `{enabled, open_from, open_to, slot_minutes (30/60/90/120/180/240), capacity 1–200, max_people, max_guests, weekly_limit (0 = sınırsız), cancel_hours, late_cancel_refund, fee_type: free\|fixed\|hourly\|per_guest, fee_amount, channel: resident\|staff\|both, approval: auto\|manual, verify: none\|qr\|code\|staff, waitlist, waitlist_minutes 5–1440, noshow: {enabled, months, count, block_days}}`; no-show + doğrulama yok 422 `fields.noshow`; işaretsiz alan 404 |
+| GET · PUT | `/sites/{slug}/reservation-settings` | okuma `requests.assign` · `modules.manage`, yazma `modules.manage` | R | K11 `{debt_block_enabled (vars. false), debt_min_amount, debt_min_days}` — GEÇİCİ yer; finans parametreleri (SR 33) gelince oraya taşınır |
+| GET | `/sites/{slug}/reservable-areas/{id}/availability?date=` | `requests.assign` · `security.visitors` | R | dizi `{start, end, capacity, taken (canlı + süresi geçmemiş teklif), past, mine, waiting}` |
+| GET | `/sites/{slug}/reservations?date=&area_id=&status=` | `requests.assign` · `security.visitors` | R | sayfalı `{id, area_id, area_name, date, start, end, unit_id, unit_name, person_name, people, guests, status: pending\|approved\|rejected\|cancelled\|checked_in\|no_show\|completed, channel: resident\|staff, created_by, created_at, fee, charge_id, fee_refunded, approval_request_id, approval_status, reject_reason, cancel_reason, cancelled_late, checked_in_at, checked_in_by, decided_by}` — giriş kodu personel çıktısında yok |
+| POST | `/sites/{slug}/reservations` | `requests.assign` | R | sakin adına `{unit_id, person_name?, area_id, date, start, people, guests}` → 201/202 `{status: approved\|pending\|approval_pending, reservation, waitlist, position, approval_request_id}`; `Idempotency-Key` kabul eder; kanal `staff`, açan personel kaydedilir, bölüm sakinlerine bildirim |
+| POST | `/sites/{slug}/reservations/{id}/approve` · `/reject` · `/cancel` | `requests.assign` | R | onay kuralına bağlı ve açık talep varsa 409 `approval_pending`; ret `{reason}` (422 `fields.reason`); iptal `{reason?}` — son iptal süresinden önce ücret ters kayıt; sakine bildirim; boşalan yere bekleme listesi teklifi |
+| POST | `/sites/{slug}/reservations/{id}/check-in` | `requests.assign` · `security.visitors` | R | listeden "geldi": yalnız bugün ve `approved` (409 `not_today` · `invalid_status` · `already`) |
+| POST | `/sites/{slug}/reservations/check-in-code` | `requests.assign` · `security.visitors` | R | `{code}` (6 hane; `SY-REZ:123456` de olur) → bugünkü onaylı rezervasyona giriş; 422 `fields.code`, 404, 409 `already` |
+| GET | `/sites/{slug}/waitlist?date=` | `requests.assign` · `security.visitors` | R | sayfalı açık kayıtlar `{id, area_id, area_name, date, start, end, unit_id, unit_name, person_name, people, guests, status: waiting\|offered, offered_until, created_at}` |
+| GET | `/sites/{slug}/reservations/report?to=` | `requests.assign` | R | son 30 gün (`from` = `to` − 29) `{from, to, rows: [{area_id, area_name, total, cancelled, checked_in, no_show, no_show_rate (doğrulama yoksa null), occupancy (metin, %), revenue}]}` |
+| GET | `/sites/{slug}/resident/reservable-areas` | sakin | R | açık ve kanalı `staff` olmayan alanlar |
+| GET | `/sites/{slug}/resident/reservable-areas/{id}/availability?date=&unit_id=` | sakin | R | `{slots, blocked_until (no-show kısıtı), debt_block (K11 gerekçesi)}` |
+| GET | `/sites/{slug}/resident/reservations` | sakin | R | `{reservations: [... + code, verify, cancel_hours] (son 30), waitlist: [açık kayıtlar]}` |
+| POST | `/sites/{slug}/resident/reservations` | sakin | R | `{area_id, date, start, people, guests, waitlist, unit_id?}` → 201/202; hane üyesi "Rezervasyon" yetkisi yoksa 403; hata kodları: 422 `fields.area_id/date/start/people/guests`, 409 `area_closed` · `channel` · `debt_restricted` (K11) · `noshow_blocked` · `limit` · `duplicate` · `slot_full` (boş saatlerle) · `already_waiting` · `no_account` |
+| POST | `/sites/{slug}/resident/reservations/{id}/cancel` | sakin | R | kendi bölümü; ücret kuralı yukarıdaki gibi |
+| POST | `/sites/{slug}/resident/waitlist/{id}/accept` · `/leave` | sakin | R | teklifi kabul (akış yeniden işler; süresi dolmuşsa 409 `expired`) / listeden çık |
+
+Çakışma: yazan işlem alan satırını kilitler (`FOR UPDATE`); veritabanında canlı rezervasyon için
+(alan, yer, başlangıç) ve (alan, bölüm, başlangıç) kısmi benzersiz indeksleri, `btree_gist` varsa
+ayrıca `EXCLUDE` kısıtı. Eşzamanlı iki istekten biri 409 `slot_full`. Zamanlanmış iş:
+`run-reservation-jobs` (5 dakikada bir) — biten onaylı rezervasyon doğrulama yoksa `completed`,
+varsa `no_show` (kısıt eşiğinde sakine bildirim); süresi dolan teklif `expired`, sıradakine teklif.
+
 ---
+
+### 2.25 Raporlar, KVKK ve denetim paketi (servis istekleri 79–81, RAP-01/04/05, P6, K8)
+| Yöntem | Yol | İzin | Durum | Not |
+|---|---|---|---|---|
+| GET | `/sites/{slug}/reports/catalog` | site erişimi | Y | `[{key, name, group, permission, link, exportable, metrics: [{key, name, definition}]}]` — yalnız izni olan ve modülü açık raporlar; metrik sözlüğü tek kaynak (`domain/report_catalog.py`) |
+| GET | `/sites/{slug}/reports/requests-sla?from=&to=` | `requests.read`, modül `requests` | Y | varsayılan bitiş bugün, başlangıç bitişten 29 gün önce (en fazla 1 yıl). `{from, to, total: line, rows: [{category, category_name, …line}]}`; line = `{total, open, closed, sla_rate, avg_hours, satisfaction, rated}` — oran/saat/puan **metin** (`"92.5"`), veri yoksa `null`. Açılan/açık: dönemde açılan; çözülen/SLA/süre/puan: dönemde çözülen. Çözüm zamanı açılıştan önce olan kayıt ortalamaya girmez |
+| GET | `/sites/{slug}/reports/{key}/export.xlsx?from=&to=` | raporun izni | Y | içerik üreticisi olan katalog raporu (`requests_sla`, `income_expense`, `collections`, `cash`): Özet (+ metrik tanımları) + tablolar. Denetim kaydı `export`. Planlı rapor (P16c) aynı üreticiyi kullanır: `services/report_catalog.produce` |
+| GET / POST | `/sites/{slug}/audit-packages` | liste `finance.charge.post` ya da `audit.read`; hazırlama `finance.charge.post` | Y | sayfalı. POST `{title (3–120), from, to, document_ids[]}` → 201; dönemde yapılmış toplantıların kararları (`decisions`) ve dönem finans özeti (`snapshot`: gelir, gider, aylar, kategori, bütçe, tahsilat, kasa — para metin) **dondurulur**. Gizli belgeyi yalnız `documents.confidential` ekler. 422 `fields.title/from/to/document_ids` |
+| POST | `/sites/{slug}/audit-packages/{id}/report` | `audit.read` | Y | `{document_id, note?}` → `status: reviewed`; ikinci rapor 409 `invalid_status`; denetçi değil 403 "Denetim raporunu denetçi yükler." |
+| GET | `/sites/{slug}/audit-packages/{id}/export.xlsx` | liste izni | Y | dondurulmuş özet Excel |
+| GET / POST | `/sites/{slug}/privacy-notices` | okuma site erişimi; yayın `privacy.manage` | Y | sayfalı, yeni sürüm üstte `{id, version, text, summary, published_at, published_by}`. POST `{text (≥200), summary (5–200)}` → 201; eski sürümler değişmez; herkes yeniden onaylar (P6) |
+| GET | `/public/privacy-notice/{slug}` | **herkese açık** (IP başına 60/10 dk) | Y | `{site_name, version, text, published_at}`; yayın yoksa `version: null` |
+| GET / POST | `/me/consents` | oturum (onay beklerken de) | Y | GET `{consent_required, pending: [{notice_id, site_id, site_name, site_slug, version, text, summary, published_at}], given: [...]}`. POST `{notice_ids}` → 200 `Written`; güncel olmayan sürüm 409 `consent_outdated`. `GET /me` yanıtında `consent_required` |
+| GET | `/sites/{slug}/my-privacy` | site erişimi | Y | `{notice, accepted[], explicit: [{purpose, label, granted, changed_at}]}` |
+| PUT | `/sites/{slug}/my-privacy/explicit-consents/{purpose}` | site erişimi | Y | `{granted}` — açık rıza (isteğe bağlı, aydınlatmadan ayrı; her değişiklik yeni satır) |
+| GET | `/sites/{slug}/my-privacy/data-export` | site erişimi | Y | "verilerimi indir": JSON ek (kişi, bölümler, hesaplar ve son 100 hareket, talepler, araçlar, hane, ziyaretçi davetleri, kayıt başvuruları, onaylar, KVKK başvuruları); `export` denetim kaydı |
+| POST / GET | `/sites/{slug}/resident/privacy-requests` | sakin (`person_id`) | Y | POST `{kind: access/rectify/erase/object, detail}` → 201 `{…, due_on}` (+30 gün); erişim dışında açıklama ≥10 (422 `fields.detail`); aynı türde açık başvuru 409 `already_open`; sakin değil 403. GET sayfalı, kendi başvuruları |
+| GET | `/sites/{slug}/privacy-requests?status=` | `privacy.manage` | Y | sayfalı; açıklar önce, son güne göre; `{…, name, units, days_left, answered_by}` |
+| GET | `/sites/{slug}/privacy-requests/{id}/data-package` | `privacy.manage` | Y | kişisel veri paketi (JSON ek, yukarıdaki içerik); `export` denetim kaydı |
+| POST | `/sites/{slug}/privacy-requests/{id}/answer` | `privacy.manage` | Y | `{response (≥10), outcome: fulfilled/partial/rejected, retained?}` — silmede sonuç "yerine getirildi" değilse `retained` zorunlu (422). Yanıtlanmış 409 `invalid_status`. Kişiye bildirim |
+| GET / PUT | `/sites/{slug}/settings/retention` | `privacy.manage` | Y | `{categories: [{key, label, data, kvkk_category, subjects, value, unit, default_value, max_value, action, adjustable, auto_apply, needs_legal_review, legal_basis, cutoff, pending, last_run}]}`. PUT `{items: [{key, value, auto_apply}]}`; `visitors` = `security_settings.retention_months/auto_anonymize` (aynı ayar). 422 `fields.<key>` |
+| POST | `/sites/{slug}/settings/retention/{key}/apply` | `privacy.manage` | Y | süresi dolanı şimdi işler; silme raporuna yazar (etkilenen 0 olsa da) |
+| GET | `/sites/{slug}/settings/retention/runs` | `privacy.manage` | Y | silme/anonimleştirme raporu, sayfalı |
+| GET | `/sites/{slug}/data-inventory` · `/data-inventory/export?format=xlsx/csv` | `privacy.manage` | Y | VERBİS envanteri: `{category, category_label, data, subjects, purpose, legal_basis, retention, recipients, source, records}`; özel alanlar KVKK kategorisiyle eklenir. CSV `;` ayraçlı, UTF-8 BOM |
+
+Gece işi `run-kvkk-jobs` (03:30): otomatik uygulaması açık saklama kategorileri + başvuru son 7
+gün/gecikme uyarısı (günde bir). Ziyaretçi kategorisini `run-security-daily` (03:00) uygular;
+rapor aynı `retention_runs` tablosuna yazılır.
+### 2.25 Satın alma (servis istekleri 62–67, Yazılım Dokümanı SAT-01..06)
+Modül kapısı yok (finans çekirdeği; `docs/12` K-SAT). Okuma `expenses.read`. "Alıcı" =
+`expenses.read` + (`requests.assign` ya da `expenses.manage`). Listeler sayfalı; miktar **metin**
+(`"2.5"`, en çok 3 ondalık), para metin.
+
+| Yöntem | Yol | İzin | Durum | Not |
+|---|---|---|---|---|
+| GET | `/sites/{slug}/vendors?q=&status=` | `expenses.read` | R | sayfalı `{id, name, tax_no, phone, email, iban_masked ("TR33 •••• •••• 1326"), category, status: active\|passive\|blacklist, note, rating_avg ("4.5"), rating_count, order_count}`; IBAN hiçbir okumada açık dönmez |
+| POST · PATCH | `/sites/{slug}/vendors[/{id}]` | `expenses.manage` | R | `{name 2–120, tax_no (10 VKN / 11 TCKN, site içinde tekil → 422 fields.tax_no), phone?, email?, iban? (TR + mod-97), category?, status, note?}`; düzenlemede boş IBAN mevcut olanı korur |
+| GET · PUT | `/sites/{slug}/purchase-settings` | okuma `expenses.read`, yazma `expenses.manage` | R | `{thresholds: [{max, quotes}], above_quotes, tolerance_percent ("1.00"), link_days}`; varsayılan < 10.000 → 1, < 100.000 → 2, üstü 3; %1; 7 gün |
+| GET | `/sites/{slug}/purchase-budget?category_id=` | `expenses.read` | R | `{has_budget, annual, spent, committed, remaining}` — yürürlükteki işletme projesi kalemleri; bu yılın gerçekleşen gideri; onay bekleyen/onaylı talepler (seçilen teklif tutarı) + açık siparişlerin ödenmemiş kısmı |
+| GET | `/sites/{slug}/purchase-requests?status=` | `expenses.read` | R | sayfalı satır `{id, number "ST-2026-0001", title, category_name, over_budget, estimated_total, quote_count, required_quotes, status, order_number, …}` |
+| GET | `/sites/{slug}/purchase-requests/{id}` | `expenses.read` | R | kalemler, bütçe anlık görüntüsü, teklifler (`lines[].unit_price`, `source: staff\|vendor_link`, `file_id`, puan), linkler (`id, vendor_name, expires_at, used_at, state: open\|used\|expired` — belirteç dönmez), kararlar (`stage: exception\|purchase\|order`), `approval` (açık onay talebi), `order_id/number` |
+| POST | `/sites/{slug}/purchase-requests` | alıcı | R | `{title, reason, category_id, items: [{description, qty, unit?, est_unit_price, stock_item_id?}]}`; 422 `fields.items.{k}.qty` … |
+| POST | `/sites/{slug}/purchase-requests/{id}/quotes` | alıcı | R | `{vendor_id, lines: [{unit_price}], delivery_days, payment_terms, valid_until, note?}`; yalnız `quoting` (409 `invalid_status`); pasif/kara liste ya da ikinci teklif 422 `fields.vendor_id`; toplam kalemlerden |
+| POST | `/sites/{slug}/purchase-requests/{id}/quote-links` | alıcı | R | `{vendor_id}` → `{token, expires_at, vendor_name, vendor_email}` (belirteç yalnız bu yanıtta; e-posta K5); açık link 409 `link_open`, teklif var 409 `quoted` |
+| GET · POST | `/public/quote-links/{token}` | **herkese açık** | R | IP başına 30/5 dk⁻¹; bilinmeyen 404, kullanılmış/süresi dolmuş/talep kapanmış 410 `link_closed`. GET yalnız `{site_name, vendor_name, number, title, items: [{description, qty, unit}], expires_at}`; POST teklif alanları + `terms_ack` |
+| POST | `/public/quote-links/{token}/file` | **herkese açık** | R | multipart `file`; gönderimden sonraki 1 saat, bir kez (410) |
+| POST | `/sites/{slug}/purchase-requests/{id}/select-quote` | alıcı | R | `{quote_id, exception_reason?}`; eksik teklif → gerekçe ≥ 10 (422 `quote_exception` + `fields.exception_reason`) → `exception_pending`; yeterli → `approval_pending`. Onay kuralı varsa onay talebi açılır (`approval`) |
+| POST | `/sites/{slug}/purchase-requests/{id}/decide` | onay kuralı varsa onaycı; yoksa `expenses.manage` | R | `{decision: approve\|reject, note}`; talep eden 403 `self_approval`; ret gerekçesi 422 `fields.note`; kural varsa karar onay mekanizmasına iletilir (403 `not_an_approver`) |
+| POST | `/sites/{slug}/purchase-requests/{id}/cancel` | alıcı (açan ya da `expenses.manage`) | R | açık linkler kapanır, bekleyen onay talebi geri çekilir; sipariş/ret/iptal 409 |
+| GET | `/sites/{slug}/purchase-orders?status=` · `/{id}` | `expenses.read` | R | ayrıntı: kalemler (`qty, received, invoiced`), kabuller (`lines[].qty`, `rating`, `file_id`), faturalar |
+| POST | `/sites/{slug}/purchase-orders` | `expenses.manage` | R | `{pr_id}` → `{status: created\|approval_pending, order, approval_request_id}`; onaysız 409 `not_approved`, tedarikçi pasif 409 `vendor_inactive`; "Sipariş" kuralı varsa **202** |
+| POST | `/sites/{slug}/purchase-orders/{id}/receipts` | `expenses.read` + (`requests.assign` \| `inventory.manage` \| `expenses.manage`) | R | `{lines: [{qty}], note?, rating? 1–5}`; kalandan fazlası 422 `fields.lines.{k}`; stoklu kalem **sistem adına** stoğa girer (stok yetkisi aranmaz) |
+| POST | `/sites/{slug}/purchase-quotes/{id}/file` · `/purchase-receipts/{id}/file` · `/vendor-invoices/{id}/file` | alıcı · kabul · `expenses.manage` | R | multipart `file` (PDF/JPG/PNG/WEBP ≤ 10 MB, içerik imzası); kayda bir kez (409 `file_exists`); indirme `GET …/files/{id}` |
+| GET | `/sites/{slug}/vendor-invoices?status=` | `expenses.read` | R | sayfalı `{…, lines, total, expected_total, diffs[], status: matched\|diff_pending\|disputed\|paid, decision, approval_request_id, file_id, paid_on, expense_id, overdue}` |
+| POST | `/sites/{slug}/vendor-invoices` | `expenses.manage` | R | `{order_id, number, date, due_date, lines: [{qty, unit_price}]}`; numara büyük harf, tedarikçide tekil; teslim alınmamış (faturalanmamış) miktar yoksa 409 `no_receipt`; bekleyen fark varken 409 `invoice_pending`; eşleşme: miktar tam, toplam ± tolerans |
+| POST | `/sites/{slug}/vendor-invoices/{id}/decide` | kural varsa onaycı; yoksa `expenses.manage` | R | `{decision, note (≥ 5)}`; faturayı giren 403 `self_approval`; onay → `matched`, ret → `disputed` |
+| GET | `/sites/{slug}/payables` | `expenses.read` | R | `{invoices (eşleşmiş, vadeye göre, overdue), direct_expenses {count, total}, total}` |
+| POST | `/sites/{slug}/vendor-invoices/{id}/mark-paid` | `expenses.manage` | R | `{paid_on, cash_account_id}` + **Idempotency-Key**; aynı işlemde gider (talebin kategorisi, tedarikçi, belge no, fatura görüntüsü) + hesaptan çıkış (`expenses.create(paid=True)`); eşleşmemiş/ödenmiş 409 `not_matched`; dönem kapalı 409 `period_closed` |
 
 ## 3. Sıralama önerisi
 

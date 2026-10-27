@@ -55,6 +55,7 @@ SENSITIVE_COLUMNS: dict[str, Callable[[str], str]] = {
     "leave_type": mask_all,  # IK-03: raporlu izin özel nitelikli veri sayılabilir
     "leave_note": mask_all,
     "qr_code": mask_all,  # giriş-çıkış doğrulama kodu
+    "sms_api_key_sealed": mask_all,  # §4.7: sağlayıcı anahtarı (şifreli bile olsa) yazılmaz
     "to_phone": mask_phone,  # OPS-01: anahtarı teslim alanın telefonu
     "authorized": mask_all,  # OPS-01: emanet anahtar yetkili kişileri (ad + telefon listesi)
 }

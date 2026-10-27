@@ -73,6 +73,7 @@ async def test_davet_olustur_kabul_et_giris_yap(world: World) -> None:
 
     assert info.json() == {
         "site_name": "Aksu Konakları",
+        "site_slug": "aksu-konaklari",
         "full_name": "Test Deneme",
         "unit_name": "A-1",
         "relation": "tenant",

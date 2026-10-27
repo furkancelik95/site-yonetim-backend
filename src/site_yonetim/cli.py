@@ -15,6 +15,13 @@ uv run python -m site_yonetim.cli run-approval-jobs      # onay hatırlatma/eska
 uv run python -m site_yonetim.cli run-structure-jobs     # öznitelik yürürlüğü, davet (günde bir)
 uv run python -m site_yonetim.cli run-staff-jobs         # ayrılan personelin erişimini kapat (gece)
 uv run python -m site_yonetim.cli run-document-expiry    # belge geçerlilik uyarısı (günde bir)
+uv run python -m site_yonetim.cli run-reservation-jobs   # no-show, bekleme teklifi (5 dk)
+uv run python -m site_yonetim.cli run-kvkk-jobs          # KVKK saklama + 30 gün sayacı (03:30)
+uv run python -m site_yonetim.cli run-notification-jobs  # bildirim gönderimi, sessiz saat
+                                                         # kuyruğu, kritik SMS yedeği (dakikalık)
+uv run python -m site_yonetim.cli run-scheduled-reports  # planlı rapor e-postası (dakikalık)
+uv run python -m site_yonetim.cli run-announcement-jobs # duyuru zamanlama, SMS yedeği (dakika)
+uv run python -m site_yonetim.cli run-emergency-purge    # acil durum yoklama verisi saklama (gece)
 """
 
 import argparse
@@ -29,24 +36,32 @@ from site_yonetim.db.session import create_engine_from_settings, create_session_
 from site_yonetim.domain.finance import ScheduleRunStatus
 from site_yonetim.seed.demo import DemoSeedRefusedError, ensure_demo_allowed, seed_demo
 from site_yonetim.services import (
+    announcements,
     approvals,
     bank_imports,
     charge_schedule,
+    delivery,
     documents,
+    emergencies,
     finance_jobs,
     insurance,
     keys,
     login_throttle,
+    privacy,
     rate_limit,
     reconciliation,
     recurring_expenses,
+    reservations,
+    retention,
     routine_tasks,
+    scheduled_reports,
     security_jobs,
     service_desk,
     staff,
     structure_jobs,
     technical_assets,
 )
+from site_yonetim.services.channels import channels_from_settings
 from site_yonetim.services.charging import BUSINESS_TZ
 from site_yonetim.services.imports import ImportStore
 
@@ -213,6 +228,25 @@ async def _run_request_jobs() -> int:
     return 0
 
 
+async def _run_reservation_jobs() -> int:
+    """Rezervasyon işleri (REZ-03): biten onaylı rezervasyonu kapatır (doğrulama yoksa
+    tamamlandı, varsa gelinmedi + kısıt bildirimi); süresi dolan bekleme teklifini sıradakine
+    geçirir. 5 dakikada bir (teklif süresi en az 5 dakika)."""
+    engine = create_engine_from_settings(get_settings())
+    now = datetime.now(UTC)
+    try:
+        results = await reservations.run_all_jobs(create_session_factory(engine), now=now)
+    finally:
+        await engine.dispose()
+    for site_id, r in results:
+        print(
+            f"{site_id}: tamamlanan {r.completed}, gelinmeyen {r.no_show} (kısıt {r.restricted}), "
+            f"süresi dolan teklif {r.expired_offers}, yeni teklif {r.new_offers}"
+        )
+    print(f"{len(results)} sitede rezervasyon işleri çalıştı.")
+    return 0
+
+
 async def _run_charge_schedules() -> int:
     """Otomatik aylık tahakkuk (servis isteği 04); günde bir, gece. Başarısız site varsa 1."""
     engine = create_engine_from_settings(get_settings())
@@ -341,6 +375,103 @@ async def _run_document_expiry() -> int:
     return 0
 
 
+async def _run_kvkk_jobs() -> int:
+    """KVKK gece işi (Yazılım Dokümanı §4.6, 03:30): otomatik uygulaması **açık** saklama
+    kategorilerinde süresi dolanı siler/anonimleştirir ve silme raporu yazar (K8; hukuki teyit
+    bekleyenlerde varsayılan kapalı); ilgili kişi başvurularının son 7 gün / gecikme uyarısı."""
+    engine = create_engine_from_settings(get_settings())
+    now = datetime.now(UTC)
+    today = now.astimezone(BUSINESS_TZ).date()
+    try:
+        factory = create_session_factory(engine)
+        applied = await retention.run_nightly(factory, today=today, now=now)
+        warned = await privacy.run_due_warnings(factory, today=today)
+    finally:
+        await engine.dispose()
+    for r in applied:
+        print(f"{r.site_id}: {r.category} — {r.affected} kayıt")
+    for site_id, count in warned.items():
+        print(f"{site_id}: {count} KVKK başvurusu uyarısı")
+    print(f"Saklama: {len(applied)} uygulama; başvuru uyarısı {sum(warned.values())}.")
+    return 0
+
+
+async def _run_notification_jobs() -> int:
+    """Bildirim gönderim katmanı (PLT-05, §4.6): kritik push için 2 dk SMS yedeği, sonra zamanı
+    gelen bütün teslimler (sessiz saat kuyruğu dahil). Dakikalık; tekrar güvenli."""
+    settings = get_settings()
+    engine = create_engine_from_settings(settings)
+    now = datetime.now(UTC)
+    try:
+        factory = create_session_factory(engine)
+        fallbacks = await delivery.run_critical_fallbacks(factory, now=now)
+        results = await delivery.dispatch_due(
+            factory,
+            channels_from_settings(settings),
+            now=now,
+            default_quota=settings.sms_default_monthly_quota,
+        )
+    finally:
+        await engine.dispose()
+    for site_id, r in results:
+        print(f"{site_id}: gönderildi {r.sent}, başarısız {r.failed}, SMS yedeği {r.fallbacks}")
+    print(f"{fallbacks} kritik bildirim için SMS yedeği üretildi; {len(results)} sitede gönderim.")
+    return 0
+
+
+async def _run_scheduled_reports() -> int:
+    """Planlı rapor gönderimi (RAP-05): zamanı gelen tanımlar için e-posta kuyruğa alınır ve
+    gönderilir. Dakikalık; aynı zaman dilimi iki kez çalışmaz."""
+    settings = get_settings()
+    engine = create_engine_from_settings(settings)
+    now = datetime.now(UTC)
+    try:
+        factory = create_session_factory(engine)
+        results = await scheduled_reports.run_due(factory, now=now, web_url=settings.web_url)
+        await delivery.dispatch_due(
+            factory,
+            channels_from_settings(settings),
+            now=now,
+            default_quota=settings.sms_default_monthly_quota,
+            site_ids=[site_id for site_id, _ in results],
+        )
+    finally:
+        await engine.dispose()
+    for site_id, count in results:
+        print(f"{site_id}: {count} planlı rapor")
+    print(f"{len(results)} sitede planlı rapor çalıştı.")
+    return 0
+
+
+async def _run_announcement_jobs() -> int:
+    """ILT-01: vakti gelen zamanlanmış duyuruyu yayınlar; son onay süresi dolan okuma onaylı
+    duyuruda onaylamayanlara bir kez SMS yedeği (sağlayıcı P16c ile). Dakikalık."""
+    engine = create_engine_from_settings(get_settings())
+    try:
+        results = await announcements.run_jobs(
+            create_session_factory(engine), now=datetime.now(UTC)
+        )
+    finally:
+        await engine.dispose()
+    for r in results:
+        print(f"{r.site_id}: yayınlanan {r.published}, SMS yedeği {r.fallbacks}")
+    return 0
+
+
+async def _run_emergency_purge() -> int:
+    """ILT-06 / K8: `auto_purge` açık sitelerde bitişten `retention_days` gün sonra acil durum
+    yoklama ayrıntısını siler (özet kalır). Varsayılan kapalı — hukuk teyidi bekliyor. Gece."""
+    engine = create_engine_from_settings(get_settings())
+    try:
+        results = await emergencies.run_purge(create_session_factory(engine), now=datetime.now(UTC))
+    finally:
+        await engine.dispose()
+    for r in results:
+        print(f"{r.site_id}: {r.purged} acil durumun yoklama verisi silindi")
+    print(f"{len(results)} sitede acil durum verisi temizlendi.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="site_yonetim.cli")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -365,6 +496,18 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("run-structure-jobs", help="Öznitelik yürürlüğü, davet süresi (günde bir)")
     sub.add_parser("run-staff-jobs", help="Ayrılan personelin site erişimini kapat (gece)")
     sub.add_parser("run-document-expiry", help="Belge geçerlilik uyarısı (günde bir)")
+    sub.add_parser(
+        "run-reservation-jobs", help="Rezervasyon no-show ve bekleme teklifi (5 dakikada bir)"
+    )
+    sub.add_parser("run-kvkk-jobs", help="KVKK saklama politikası + başvuru süresi (03:30)")
+    sub.add_parser(
+        "run-notification-jobs", help="Bildirim gönderimi ve kritik SMS yedeği (dakikalık)"
+    )
+    sub.add_parser("run-scheduled-reports", help="Planlı rapor e-postaları (dakikalık)")
+    sub.add_parser(
+        "run-announcement-jobs", help="Zamanlanmış duyuru + okuma onayı SMS yedeği (dakikalık)"
+    )
+    sub.add_parser("run-emergency-purge", help="Acil durum yoklama verisi saklama (gece)")
     reconcile = sub.add_parser("reconcile", help="Özet bakiyeleri defterle karşılaştır")
     reconcile.add_argument("--fix", action="store_true", help="Farklı siteleri onar")
     args = parser.parse_args(argv)
@@ -393,8 +536,20 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_run_structure_jobs())
     if args.command == "run-staff-jobs":
         return asyncio.run(_run_staff_jobs())
+    if args.command == "run-announcement-jobs":
+        return asyncio.run(_run_announcement_jobs())
+    if args.command == "run-emergency-purge":
+        return asyncio.run(_run_emergency_purge())
     if args.command == "run-document-expiry":
         return asyncio.run(_run_document_expiry())
+    if args.command == "run-reservation-jobs":
+        return asyncio.run(_run_reservation_jobs())
+    if args.command == "run-kvkk-jobs":
+        return asyncio.run(_run_kvkk_jobs())
+    if args.command == "run-notification-jobs":
+        return asyncio.run(_run_notification_jobs())
+    if args.command == "run-scheduled-reports":
+        return asyncio.run(_run_scheduled_reports())
     if args.command == "run-recurring-expenses":
         return asyncio.run(_run_recurring_expenses())
     if args.command == "run-charge-schedules":

@@ -20,7 +20,6 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from site_yonetim.core.errors import ApiError, UnauthorizedError
-from site_yonetim.core.logging import request_id_var
 from site_yonetim.core.security import (
     hash_password,
     hash_refresh_token,
@@ -30,6 +29,9 @@ from site_yonetim.core.security import (
 )
 from site_yonetim.domain.login import LoginState, normalize_email, password_problem
 from site_yonetim.models import AuthEvent, AuthEventKind, AuthSession, User
+from site_yonetim.services.auth_events import NO_CLIENT, Client, event
+
+__all__ = ["NO_CLIENT", "Client"]
 
 logger = logging.getLogger(__name__)
 
@@ -72,36 +74,7 @@ class SessionExpiredError(UnauthorizedError):
         )
 
 
-@dataclass(frozen=True, slots=True)
-class Client:
-    """İsteğin geldiği yer: oturum listesi ve kimlik olayı için (Yazılım Dokümanı PLT-10, M-24)."""
-
-    ip: str | None = None
-    user_agent: str | None = None
-
-
-NO_CLIENT = Client()
-
-
-def _event(
-    session: AsyncSession,
-    kind: AuthEventKind,
-    client: Client,
-    *,
-    user_id: uuid.UUID | None = None,
-    session_id: uuid.UUID | None = None,
-) -> None:
-    """Kimlik olayını aynı transaction'a ekler; çağıran commit eder."""
-    session.add(
-        AuthEvent(
-            user_id=user_id,
-            kind=kind.value,
-            session_id=session_id,
-            ip=client.ip,
-            user_agent=client.user_agent,
-            request_id=request_id_var.get(),
-        )
-    )
+_event = event  # kısa ad (bu modülde çok kullanılır)
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +82,10 @@ class IssuedSession:
     user: User
     auth_session: AuthSession
     refresh_token: str  # yalnız çereze yazılır; saklanmaz, loglanmaz
+    mfa_setup_deadline: datetime | None = None  # yönetici rolünde 2FA kurulmamış: son gün
+
+
+PENDING_MFA_MINUTES = 10  # parola/kod doğru, iki adımlı kod bekleniyor
 
 
 def _new_auth_session(
@@ -125,15 +102,16 @@ def _new_auth_session(
     )
 
 
-async def login(
+async def check_password(
     session: AsyncSession,
     *,
     email: str,
     password: str,
     now: datetime,
-    session_hours: int,
     client: Client = NO_CLIENT,
-) -> IssuedSession:
+) -> User:
+    """E-posta + parola doğrulaması (kilit kuralıyla). Başarılıysa kullanıcı satırı kilitli
+    döner (transaction açık); `open_session` kapatır. Hatada olay yazılır ve commit edilir."""
     user = await session.scalar(
         select(User).where(User.email == normalize_email(email)).with_for_update()
     )
@@ -152,16 +130,7 @@ async def login(
         raise AccountLockedError
 
     if not password_ok:
-        new_state = state.after_failure(now)
-        user.failed_login_count = new_state.failed_count
-        user.locked_until = new_state.locked_until
-        _event(session, AuthEventKind.LOGIN_FAILED, client, user_id=user.id)
-        if new_state.is_locked(now):
-            _event(session, AuthEventKind.ACCOUNT_LOCKED, client, user_id=user.id)
-        await session.commit()
-        if new_state.is_locked(now):
-            logger.warning("Hesap kilitlendi: user_id=%s", user.id)
-            raise AccountLockedError
+        await register_failure(session, user, now=now, client=client)
         raise InvalidCredentialsError
 
     if not user.is_active:
@@ -171,15 +140,68 @@ async def login(
         await session.commit()
         raise InvalidCredentialsError
 
+    if user.password_hash is not None and password_needs_rehash(user.password_hash):
+        user.password_hash = hash_password(password)
+    return user
+
+
+async def register_failure(
+    session: AsyncSession,
+    user: User,
+    *,
+    now: datetime,
+    client: Client,
+    kind: AuthEventKind = AuthEventKind.LOGIN_FAILED,
+) -> None:
+    """Hatalı parola / iki adımlı kod: sayaç artar, 5. hatada 15 dk kilit (commit eder)."""
+    state = LoginState(user.failed_login_count, user.locked_until)
+    new_state = state.after_failure(now)
+    user.failed_login_count = new_state.failed_count
+    user.locked_until = new_state.locked_until
+    _event(session, kind, client, user_id=user.id)
+    locked = new_state.is_locked(now)
+    if locked:
+        _event(session, AuthEventKind.ACCOUNT_LOCKED, client, user_id=user.id)
+    await session.commit()
+    if locked:
+        logger.warning("Hesap kilitlendi: user_id=%s", user.id)
+        raise AccountLockedError
+
+
+async def open_session(
+    session: AsyncSession,
+    user: User,
+    *,
+    now: datetime,
+    session_hours: int,
+    client: Client = NO_CLIENT,
+    mfa_role: bool = False,
+    mfa_grace_days: int = 0,
+) -> IssuedSession:
+    """Kimliği doğrulanmış kullanıcıya oturum açar (parola, SMS kodu ya da davet).
+
+    - İki adımlı doğrulama kuruluysa oturum **beklemede** açılır: 10 dakika içinde kod
+      girilmezse düşer; o zamana dek her uç 401 `mfa_required` (PLT-01 S2).
+    - Yönetici rolünde kurulu değilse geçiş süresi ilk girişte başlar (`mfa_grace_days`)."""
     success = LoginState.after_success()
     user.failed_login_count = success.failed_count
     user.locked_until = success.locked_until
     user.last_login_at = now
-    if password_needs_rehash(user.password_hash):
-        user.password_hash = hash_password(password)
+    pending = user.mfa_enabled_at is not None
+    deadline = None
+    if mfa_role and not pending:
+        if user.mfa_grace_until is None:
+            user.mfa_grace_until = now + timedelta(days=mfa_grace_days)
+        deadline = user.mfa_grace_until
 
     token = new_refresh_token()
-    auth_session = _new_auth_session(user, token, now, session_hours, client)
+    hours = session_hours
+    auth_session = _new_auth_session(user, token, now, hours, client)
+    if pending:
+        auth_session.mfa_pending = True
+        auth_session.expires_at = now + timedelta(minutes=PENDING_MFA_MINUTES)
+    else:
+        auth_session.verified_at = now
     session.add(auth_session)
     _event(
         session,
@@ -189,7 +211,7 @@ async def login(
         session_id=auth_session.id,
     )
     await session.commit()
-    return IssuedSession(user, auth_session, token)
+    return IssuedSession(user, auth_session, token, deadline)
 
 
 async def refresh(
@@ -233,7 +255,8 @@ async def refresh(
     auth_session.previous_token_hash = auth_session.token_hash
     auth_session.token_hash = hash_refresh_token(token)
     auth_session.last_used_at = now
-    auth_session.expires_at = now + timedelta(hours=session_hours)  # kayan pencere
+    if not auth_session.mfa_pending:  # beklemedeki oturum uzamaz
+        auth_session.expires_at = now + timedelta(hours=session_hours)  # kayan pencere
     if client.ip is not None:
         auth_session.ip = client.ip  # cihaz ağ değiştirmiş olabilir: listede son adres
     if client.user_agent is not None:
@@ -273,7 +296,7 @@ async def logout(
 
 async def authenticate(
     session: AsyncSession, *, user_id: uuid.UUID, session_id: uuid.UUID, now: datetime
-) -> User:
+) -> tuple[User, AuthSession]:
     """Erişim jetonunu taşıyan isteğin oturumu ve kullanıcısı hâlâ geçerli mi?"""
     auth_session = await session.get(AuthSession, session_id)
     if (
@@ -286,7 +309,7 @@ async def authenticate(
     user = await session.get(User, user_id)
     if user is None or not user.is_active:
         raise SessionExpiredError
-    return user
+    return user, auth_session
 
 
 async def change_password(
@@ -437,3 +460,29 @@ async def recent_events(session: AsyncSession, *, user_id: uuid.UUID) -> list[Au
         .limit(EVENTS_LIMIT)
     )
     return list(rows)
+
+
+async def set_new_password(
+    session: AsyncSession,
+    *,
+    user: User,
+    new_password: str,
+    now: datetime,
+    client: Client,
+    kind: AuthEventKind,
+) -> None:
+    """Kodla sıfırlama ya da daveti kabul: kural kontrolü, kilit ve geçici parola işareti
+    kalkar, **bütün açık oturumlar** kapanır. Commit etmez."""
+    problem = password_problem(new_password)
+    if problem is not None:
+        raise PasswordChangeError("weak_password", "new_password", problem)
+    user.password_hash = hash_password(new_password)
+    user.must_change_password = False
+    user.failed_login_count = 0
+    user.locked_until = None
+    await session.execute(
+        update(AuthSession)
+        .where(AuthSession.user_id == user.id, AuthSession.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
+    _event(session, kind, client, user_id=user.id)

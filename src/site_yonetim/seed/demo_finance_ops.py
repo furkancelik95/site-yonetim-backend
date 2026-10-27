@@ -6,6 +6,8 @@
   edilmiş bir ihtarname.
 - Dönem dışı ücretler: anında yazılan iki ücret, sonraki tahakkuku bekleyen bir ücret, iptal
   edilmiş bir ücret.
+- Finans motoru (P03b): işletme projesinden önerilmiş, yürürlükte bu yılın bütçesi
+  (bütçe–gerçekleşme ekranı dolu) ve taslak bir aidat kuralı (site kaynağı işletme projesi kalır).
 Hepsi gerçek servislerden geçer (defter, kilit ve onay kuralları aynı).
 """
 
@@ -56,6 +58,43 @@ async def seed_finance_ops(
     await _close_month(session, site, first_month)
     await _plans_and_follow_up(session, site, today)
     await _ad_hoc(session, site, today)
+    await _budget_and_rule(session, site, today)
+
+
+async def _budget_and_rule(session: AsyncSession, site: Site, today: date) -> None:
+    from site_yonetim.domain.charging.billing_rules import VersionFields
+    from site_yonetim.domain.finance import AllocationKind
+    from site_yonetim.services import annual_budgets, billing_rules, budget
+
+    plan = await budget.current_plan(session)
+    actor = _actor(ACCOUNTANT)
+    created = await annual_budgets.create(
+        session,
+        fiscal_year=today.year,
+        name=f"{today.year} gider bütçesi",
+        income_target=None,
+        budget_plan_id=plan.id if plan else None,
+        actor=actor,
+    )
+    if plan is not None:
+        await annual_budgets.submit(
+            session, site, created, actor=actor, today=today, now=_at(today, 9)
+        )
+    types = await budget.charge_types(session)
+    aidat = next((t for t in types if t.payer_rule == "occupant"), None)
+    if aidat is not None:
+        await billing_rules.create(
+            session,
+            billing_rules.RuleInput(f"{today.year + 1} aylık aidat (taslak)", aidat.id, False),
+            VersionFields(
+                effective=YearMonth(today.year + 1, 1),
+                kind=AllocationKind.BY_LAND_SHARE,
+                amount=Decimal("150000.00"),
+                basis_note="Yönetim planı md. 12 — genel kurul öncesi taslak",
+            ),
+            document_id=None,
+            actor=actor,
+        )
 
 
 async def _close_month(session: AsyncSession, site: Site, month: YearMonth) -> None:

@@ -21,7 +21,9 @@ from tests.integration.helpers import add_site_membership, create_user, login_he
 DEFAULT = {
     "enabled": False,
     "charge_day": 1,
-    "due_days": 14,
+    "draft_lead_days": 5,
+    "due_day": 10,
+    "approval_required": False,
     "notify_on_run": True,
     "next_run_on": None,
     "last_run": None,
@@ -36,7 +38,8 @@ async def schedule(w: World, slug: str = "aksu-konaklari") -> dict[str, Any]:
 
 
 async def put(w: World, **overrides: Any) -> Any:
-    body = {"enabled": True, "charge_day": 1, "due_days": 14, "notify_on_run": True, **overrides}
+    body = {"enabled": True, "charge_day": 1, "draft_lead_days": 5, "notify_on_run": True}
+    body.update(overrides)
     return await w.api.put(w.url("/charge-schedule"), json=body, headers=w.headers)
 
 
@@ -55,7 +58,7 @@ async def test_ayar_varsayilan_kayit_ve_mesajlar(world: World) -> None:
     assert opened.json()["message"] == "Otomatik tahakkuk açıldı; her ayın 25. günü kesilecek."
     assert opened.json()["data"]["next_run_on"] == "2026-06-25"
 
-    updated = await put(world, charge_day=1, due_days=10)
+    updated = await put(world, charge_day=1, draft_lead_days=3)
     assert updated.json()["message"] == "Otomatik tahakkuk güncellendi; her ayın 1. günü kesilecek."
     # 20 Haziran'da açılan takvim Haziran'ın 1'ini geriye dönük kesmez
     assert updated.json()["data"]["next_run_on"] == "2026-07-01"
@@ -74,8 +77,16 @@ async def test_ayar_varsayilan_kayit_ve_mesajlar(world: World) -> None:
     [
         ({"charge_day": 0}, "charge_day", "Gün 1–28 arasında olmalı (her ayda olsun diye)."),
         ({"charge_day": 29}, "charge_day", "Gün 1–28 arasında olmalı (her ayda olsun diye)."),
-        ({"due_days": 61}, "due_days", "Vade 0–60 gün olmalı."),
-        ({"due_days": -1}, "due_days", "Vade 0–60 gün olmalı."),
+        (
+            {"draft_lead_days": 16},
+            "draft_lead_days",
+            "Taslak, kesimden 0–15 gün önce hazırlanabilir.",
+        ),
+        (
+            {"draft_lead_days": -1},
+            "draft_lead_days",
+            "Taslak, kesimden 0–15 gün önce hazırlanabilir.",
+        ),
     ],
 )
 async def test_ayar_dogrulama(
@@ -89,7 +100,7 @@ async def test_ayar_dogrulama(
 
 async def test_gece_isi_keser_ve_ikinci_kez_kesmez(world: World) -> None:
     await finalized_plan(world)
-    await put(world, charge_day=1, due_days=14)
+    await put(world, charge_day=1)
     assert await run(world, date(2026, 6, 20)) == []  # kesim günü bu ay geçti, açılmadan önce
 
     [result] = await run(world, date(2026, 7, 1))
@@ -97,7 +108,10 @@ async def test_gece_isi_keser_ve_ikinci_kez_kesmez(world: World) -> None:
     assert result.outcome.status == "posted"
     assert await world.balance() == Decimal("1000.00")
     [charge_run] = (await world.get("/charge-runs")).json()["items"]
-    assert (charge_run["charge_date"], charge_run["due_date"]) == ("2026-07-01", "2026-07-15")
+    assert (charge_run["charge_date"], charge_run["due_date"]) == (
+        "2026-07-01",
+        "2026-07-10",
+    )  # K25 vade günü
 
     body = await schedule(world)
     assert body["last_run"]["status"] == "posted"
@@ -186,7 +200,7 @@ async def test_yetki(world: World) -> None:
     await add_site_membership(world.factory, world.site_id, user.id, "Denetçi")
     auditor = await login_headers(world.api, "denetci@test.local")
     assert (await world.api.get(world.url("/charge-schedule"), headers=auditor)).status_code == 200
-    body = {"enabled": True, "charge_day": 1, "due_days": 14, "notify_on_run": True}
+    body = {"enabled": True, "charge_day": 1, "draft_lead_days": 5, "notify_on_run": True}
     put_response = await world.api.put(world.url("/charge-schedule"), json=body, headers=auditor)
     assert put_response.status_code == 403
     assert await schedule(world) == DEFAULT

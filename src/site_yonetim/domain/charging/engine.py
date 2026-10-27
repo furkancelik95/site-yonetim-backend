@@ -3,17 +3,25 @@
 Kalemleri kapsamdaki bölümlere dağıtım kuralıyla paylaştırır ve borcu doğru kişinin doğru cari
 hesabına yazar. Veritabanına dokunmaz; aynı girdi her zaman aynı önizlemeyi verir. Eksik veri
 koşuyu durdurmaz: uyarı üretir, o kalemi/bölümü atlar, diğerleri devam eder.
+
+Girdi iki kaynaktan gelebilir (K23): işletme projesi kalemleri ya da aidat kuralları (FIN-02).
+Kural kaleminin dönem tutarı hazır gelir (`ItemData.pool`), bölüm tipi katsayıları, bölüm
+muafiyetleri ve "malik kalemi" işareti taşıyabilir.
+
+Kıst (K9, FIN-05): `proration = day` (varsayılan) ise dönem içindeki her ilişki dilimi gün oranında
+pay alır (15/31 kiracıya, 16/31 malike); kuruş farkı `distribute` ile — satır toplamı korunur.
+`month` ise tahakkuk tarihinde etkin olan kişi ayın tamamını öder.
 """
 
 import uuid
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
-from datetime import date
+from dataclasses import dataclass, field, replace
+from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
 
-from site_yonetim.domain.charging.periods import period_amount
+from site_yonetim.domain.charging.periods import YearMonth, period_amount
 from site_yonetim.domain.finance import (
     AllocationKind,
     AreaBasis,
@@ -21,13 +29,21 @@ from site_yonetim.domain.finance import (
     PayerRule,
     ScopeKind,
 )
+from site_yonetim.domain.finance_params import Proration
 from site_yonetim.domain.money import ZERO, distribute, is_positive, round_money
 from site_yonetim.domain.structure import AccountKind, PartyRole, is_active_on
-from site_yonetim.domain.text import format_money_tr, format_ratio_tr
+from site_yonetim.domain.text import format_date_tr, format_money_tr, format_ratio_tr
 
 MAX_LISTED_UNITS = 5
 HUNDRED = Decimal(100)
 _RATIO_DISPLAY = Decimal("0.000001")
+
+
+class ItemSource(StrEnum):
+    """Satırın dayanağı (K23): işletme projesi kalemi ya da aidat kuralı sürümü."""
+
+    BUDGET_ITEM = "budget_item"
+    BILLING_RULE = "billing_rule"
 
 
 class WarningKind(StrEnum):
@@ -93,6 +109,17 @@ class RuleData:
     fixed_amount: Decimal | None = None
     components: tuple[ComponentData, ...] = ()
     unit_weights: Mapping[uuid.UUID, Decimal] = field(default_factory=dict)
+    # Aidat kuralı: bölüm tipi katsayıları (dükkan 1,5 · daire 1,0). Bölüm tipi ağırlığında
+    # tipin ağırlığı yerine, sabit tutarda tutar çarpanı olarak kullanılır (tipte yoksa 1).
+    type_coefficients: Mapping[uuid.UUID, Decimal] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class Exemption:
+    """Bölüm muafiyeti (FIN-02): payın `percent`'i kadar indirim; gerekçe açıklamaya yazılır."""
+
+    percent: Decimal
+    reason: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,6 +134,10 @@ class ItemData:
     scope_block_ids: frozenset[uuid.UUID] = frozenset()
     scope_unit_type_ids: frozenset[uuid.UUID] = frozenset()
     scope_usage: str | None = None
+    # Aidat kuralı alanları (işletme projesi kaleminde boş):
+    source: ItemSource = ItemSource.BUDGET_ITEM
+    pool: Decimal | None = None  # dönem tutarı hazırsa (kuralın "dağıtılacak toplam"ı)
+    exemptions: Mapping[uuid.UUID, Exemption] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +149,11 @@ class ChargeInput:
     parties: Sequence[PartyData]  # tümü; motor tarihe göre süzer
     accounts: Sequence[AccountData]
     meter: Mapping[tuple[uuid.UUID, uuid.UUID], Decimal] = field(default_factory=dict)
+    proration: Proration = Proration.DAY  # K9 — finans parametresi
+
+    @property
+    def period(self) -> YearMonth:
+        return YearMonth.of(self.charge_date)
 
 
 # --- Çıktı --------------------------------------------------------------------------
@@ -133,6 +169,7 @@ class PreviewLine:
     weight_total: Decimal | None
     source_amount: Decimal
     explanation: str
+    source: ItemSource = ItemSource.BUDGET_ITEM  # `budget_item_id` kural kaleminde sürüm kimliği
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,6 +182,8 @@ class PreviewCharge:
     person_name: str
     account_kind: AccountKind
     lines: tuple[PreviewLine, ...]
+    days: int | None = None  # kıst dilimi: ödeyenin dönemdeki gün sayısı (tam dönemde None)
+    period_days: int | None = None
 
     @property
     def amount(self) -> Decimal:
@@ -164,7 +203,8 @@ class ItemTotal:
     budget_item_id: uuid.UUID
     name: str
     amount: Decimal  # kalemin bu dönemdeki tutarı
-    distributed: Decimal  # bölümlere dağıtılan — `amount`'a kuruşu kuruşuna eşit olmalı
+    distributed: Decimal  # bölümlere dağıtılan — `amount − exempted`'e kuruşu kuruşuna eşit
+    exempted: Decimal = ZERO  # muafiyetle yazılmayan
 
 
 @dataclass(frozen=True, slots=True)
@@ -227,6 +267,12 @@ def _weight(
             area = unit.gross_area if basis is AreaBasis.GROSS else unit.net_area
             return area or ZERO
         case AllocationKind.BY_UNIT_TYPE_WEIGHT:
+            if rule.type_coefficients:
+                return (
+                    rule.type_coefficients.get(unit.unit_type_id, ZERO)
+                    if unit.unit_type_id
+                    else ZERO
+                )
             return unit.unit_type_weight or ZERO
         case AllocationKind.BY_CUSTOM_WEIGHT:
             return rule.unit_weights.get(unit.id, ZERO)
@@ -279,6 +325,14 @@ def _names(units: Sequence[UnitData]) -> str:
 
 
 # --- Motor --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class _Slice:
+    payer: tuple[PartyData, AccountKind] | None
+    days: int
+    first: date
+    last: date
 
 
 @dataclass(frozen=True, slots=True)
@@ -448,21 +502,38 @@ class _Engine:
                     item=item,
                 )
                 return None
-            return {
-                u.id: _Share(fixed, None, None, "Bağımsız bölüm başına sabit tutar") for u in units
-            }
+            if not rule.type_coefficients:
+                return {
+                    u.id: _Share(fixed, None, None, "Bağımsız bölüm başına sabit tutar")
+                    for u in units
+                }
+            shares: dict[uuid.UUID, _Share] = {}
+            for u in units:
+                coefficient = (
+                    rule.type_coefficients.get(u.unit_type_id, Decimal(1))
+                    if u.unit_type_id
+                    else Decimal(1)
+                )
+                text = "Bağımsız bölüm başına sabit tutar"
+                if coefficient != Decimal(1):
+                    text = (
+                        f"Bölüm başına {format_money_tr(fixed)} × bölüm tipi katsayısı "
+                        f"{format_ratio_tr(coefficient)}"
+                    )
+                shares[u.id] = _Share(round_money(fixed * coefficient), coefficient, None, text)
+            return shares
         if rule.kind is AllocationKind.COMPOSITE:
             return self.composite(item, rule, units, pool)
         return self.weighted(item, rule, rule.kind, rule.area_basis, units, pool)
 
-    def payer(
-        self, unit: UnitData, rule: PayerRule, parties: Sequence[PartyData]
+    @staticmethod
+    def _pick(
+        parties: Sequence[PartyData], day: date, rule: PayerRule
     ) -> tuple[PartyData, AccountKind] | None:
-        """§4.5: oturan kuralı → aktif kiracı, yoksa malik (oturan hesabı); malik kuralı → malik.
+        """§4.5: oturan kuralı → etkin kiracı, yoksa malik (oturan hesabı); malik kuralı → malik.
 
-        Birden çok aktif malik/kiracı varsa hissesi büyük, sonra başlangıcı eski olan ödeyendir.
+        Birden çok etkin malik/kiracı varsa hissesi büyük, sonra başlangıcı eski olan ödeyendir.
         """
-        day = self.data.charge_date
         active = [p for p in parties if is_active_on(p.start_date, p.end_date, day)]
 
         def first(role: PartyRole) -> PartyData | None:
@@ -473,9 +544,92 @@ class _Engine:
         owner = first(PartyRole.OWNER)
         if rule is PayerRule.OWNER:
             return (owner, AccountKind.OWNER) if owner else None
-        tenant = first(PartyRole.TENANT)
-        chosen = tenant or owner
+        chosen = first(PartyRole.TENANT) or owner
         return (chosen, AccountKind.OCCUPANT) if chosen else None
+
+    def slices(self, rule: PayerRule, parties: Sequence[PartyData]) -> list[_Slice]:
+        """Dönemin ödeyen dilimleri (K9). Ay bazlıda tek dilim: tahakkuk tarihinde etkin kişi.
+
+        Gün bazlıda dönemin her günü için ödeyen bulunur; aynı kişinin günleri tek dilimde
+        toplanır. Etkin kimsenin olmadığı günler `payer = None` dilimidir (o pay yazılmaz).
+        """
+        data = self.data
+        if data.proration is Proration.MONTH:
+            found = self._pick(parties, data.charge_date, rule)
+            return [_Slice(found, 1, data.charge_date, data.charge_date)]
+        period = data.period
+        day, last = period.first_day, period.last_day
+        order: list[tuple[uuid.UUID, AccountKind] | None] = []
+        by_key: dict[tuple[uuid.UUID, AccountKind] | None, _Slice] = {}
+        while day <= last:
+            found = self._pick(parties, day, rule)
+            key = (found[0].person_id, found[1]) if found else None
+            current = by_key.get(key)
+            if current is None:
+                order.append(key)
+                by_key[key] = _Slice(found, 1, day, day)
+            else:
+                by_key[key] = _Slice(current.payer, current.days + 1, current.first, day)
+            day += timedelta(days=1)
+        return [by_key[k] for k in order]
+
+    def item_lines(
+        self, item: ItemData, units: list[UnitData]
+    ) -> tuple[list[tuple[UnitData, PreviewLine]], ItemTotal]:
+        """Bir kalemin bölüm satırları (kapsam → dağıtım → muafiyet) ve kalem toplamı."""
+        pool = (
+            item.pool
+            if item.pool is not None
+            else period_amount(item.annual_amount, item.frequency, self.data.charge_date.month)
+        )
+        scoped = self.in_scope(item, units)
+        if not scoped:
+            self.warn(
+                WarningKind.EMPTY_SCOPE,
+                f"'{item.name}' kaleminin kapsamında aktif bağımsız bölüm yok; kalem atlandı.",
+                item=item,
+            )
+            return [], ItemTotal(item.id, item.name, pool, ZERO)
+        shares = self.allocate(item, scoped, pool) or {}
+        distributed = exempted = ZERO
+        kind = item.rule.kind if item.rule else AllocationKind.EQUAL
+        fixed = kind is AllocationKind.FIXED_PER_UNIT
+        out: list[tuple[UnitData, PreviewLine]] = []
+        for unit in scoped:
+            share = shares.get(unit.id)
+            if share is None or share.amount == ZERO:
+                continue
+            amount, explanation = share.amount, share.explanation
+            exemption = item.exemptions.get(unit.id)
+            if exemption is not None and exemption.percent > ZERO:
+                discount = round_money(amount * exemption.percent / HUNDRED)
+                amount -= discount
+                exempted += discount
+                explanation += (
+                    f" · %{format_ratio_tr(exemption.percent)} muafiyet ({exemption.reason})"
+                )
+                if amount == ZERO:
+                    continue
+            distributed += amount
+            out.append(
+                (
+                    unit,
+                    PreviewLine(
+                        budget_item_id=item.id,
+                        description=item.name,
+                        amount=amount,
+                        allocation_kind=kind,
+                        weight=share.weight,
+                        weight_total=share.weight_total,
+                        source_amount=share.amount if fixed else pool,
+                        explanation=explanation,
+                        source=item.source,
+                    ),
+                )
+            )
+        # Sabit tutarda havuz yoktur: beklenen = bölüm başına tutar × bölüm sayısı.
+        expected = distributed + exempted if fixed else pool
+        return out, ItemTotal(item.id, item.name, expected, distributed, exempted)
 
     def run(self) -> Preview:
         data = self.data
@@ -484,42 +638,11 @@ class _Engine:
             lambda: defaultdict(list)
         )
         item_totals: list[ItemTotal] = []
-
         for item in data.items:
-            pool = period_amount(item.annual_amount, item.frequency)
-            scoped = self.in_scope(item, units)
-            if not scoped:
-                self.warn(
-                    WarningKind.EMPTY_SCOPE,
-                    f"'{item.name}' kaleminin kapsamında aktif bağımsız bölüm yok; kalem atlandı.",
-                    item=item,
-                )
-                item_totals.append(ItemTotal(item.id, item.name, pool, ZERO))
-                continue
-            shares = self.allocate(item, scoped, pool) or {}
-            distributed = ZERO
-            kind = item.rule.kind if item.rule else AllocationKind.EQUAL
-            fixed = kind is AllocationKind.FIXED_PER_UNIT
-            for unit in scoped:
-                share = shares.get(unit.id)
-                if share is None or share.amount == ZERO:
-                    continue
-                distributed += share.amount
-                lines_by_unit[unit.id][item.payer_rule].append(
-                    PreviewLine(
-                        budget_item_id=item.id,
-                        description=item.name,
-                        amount=share.amount,
-                        allocation_kind=kind,
-                        weight=share.weight,
-                        weight_total=share.weight_total,
-                        source_amount=share.amount if fixed else pool,
-                        explanation=share.explanation,
-                    )
-                )
-            # Sabit tutarda havuz yoktur: beklenen = bölüm başına tutar × bölüm sayısı.
-            expected = distributed if fixed else pool
-            item_totals.append(ItemTotal(item.id, item.name, expected, distributed))
+            unit_lines, total = self.item_lines(item, units)
+            item_totals.append(total)
+            for unit, line in unit_lines:
+                lines_by_unit[unit.id][item.payer_rule].append(line)
 
         parties_by_unit: dict[uuid.UUID, list[PartyData]] = defaultdict(list)
         for party in data.parties:
@@ -532,46 +655,105 @@ class _Engine:
                 continue
             for payer_rule in (PayerRule.OCCUPANT, PayerRule.OWNER):
                 lines = groups.get(payer_rule)
-                if not lines:
-                    continue
-                amount = sum((line.amount for line in lines), ZERO)
-                found = self.payer(unit, payer_rule, parties_by_unit[unit.id])
-                if found is None:
-                    who = "malik" if payer_rule is PayerRule.OWNER else "malik veya kiracı"
-                    self.warn(
-                        WarningKind.NO_ACTIVE_PARTY,
-                        f"{unit.name}: tahakkuk tarihinde etkin {who} yok; "
-                        f"{format_money_tr(amount)} borç yazılmadı.",
-                        unit_id=unit.id,
+                if lines:
+                    charges.extend(
+                        self.charges_for(
+                            unit, payer_rule, lines, parties_by_unit[unit.id], accounts
+                        )
                     )
+        return Preview(charges, self.warnings, item_totals)
+
+    def charges_for(
+        self,
+        unit: UnitData,
+        payer_rule: PayerRule,
+        lines: list[PreviewLine],
+        parties: Sequence[PartyData],
+        accounts: Mapping[tuple[uuid.UUID, uuid.UUID, AccountKind], AccountData],
+    ) -> list[PreviewCharge]:
+        """Bölümün bir ödeyen grubundaki satırlarını dilimlere böler ve hesaplara yazar."""
+        slices = self.slices(payer_rule, parties)
+        total_days = sum(s.days for s in slices)
+        whole = len(slices) == 1
+        split: list[list[PreviewLine]] = [[] for _ in slices]
+        for line in lines:
+            if whole:
+                split[0].append(line)
+                continue
+            parts = distribute(line.amount, [Decimal(s.days) for s in slices])
+            for index, (piece, part) in enumerate(zip(slices, parts, strict=True)):
+                if part == ZERO:
                     continue
-                party, account_kind = found
-                account = accounts.get((unit.id, party.person_id, account_kind))
-                if account is None:
-                    label = "malik" if account_kind is AccountKind.OWNER else "oturan"
-                    self.warn(
-                        WarningKind.MISSING_LEDGER_ACCOUNT,
-                        f"{unit.name}: {party.person_name} için açık {label} hesabı yok; "
-                        f"{format_money_tr(amount)} borç yazılmadı.",
-                        unit_id=unit.id,
-                    )
-                    continue
-                if not is_positive(abs(amount)):
-                    continue
-                charges.append(
-                    PreviewCharge(
-                        unit_id=unit.id,
-                        unit_name=unit.name,
-                        ledger_account_id=account.id,
-                        reference_code=account.reference_code,
-                        person_id=party.person_id,
-                        person_name=party.person_name,
-                        account_kind=account_kind,
-                        lines=tuple(lines),
+                split[index].append(
+                    replace(
+                        line,
+                        amount=part,
+                        explanation=f"{line.explanation} · kıst {piece.days}/{total_days} gün",
                     )
                 )
-        return Preview(charges, self.warnings, item_totals)
+        out: list[PreviewCharge] = []
+        for piece, piece_lines in zip(slices, split, strict=True):
+            if not piece_lines:
+                continue
+            amount = sum((line.amount for line in piece_lines), ZERO)
+            if piece.payer is None:
+                who = "malik" if payer_rule is PayerRule.OWNER else "malik veya kiracı"
+                when = (
+                    "tahakkuk tarihinde"
+                    if whole
+                    else f"{format_date_tr(piece.first)}–{format_date_tr(piece.last)} arasında"
+                )
+                self.warn(
+                    WarningKind.NO_ACTIVE_PARTY,
+                    f"{unit.name}: {when} etkin {who} yok; "
+                    f"{format_money_tr(amount)} borç yazılmadı.",
+                    unit_id=unit.id,
+                )
+                continue
+            party, account_kind = piece.payer
+            account = accounts.get((unit.id, party.person_id, account_kind))
+            if account is None:
+                label = "malik" if account_kind is AccountKind.OWNER else "oturan"
+                self.warn(
+                    WarningKind.MISSING_LEDGER_ACCOUNT,
+                    f"{unit.name}: {party.person_name} için açık {label} hesabı yok; "
+                    f"{format_money_tr(amount)} borç yazılmadı.",
+                    unit_id=unit.id,
+                )
+                continue
+            if not is_positive(abs(amount)):
+                continue
+            out.append(
+                PreviewCharge(
+                    unit_id=unit.id,
+                    unit_name=unit.name,
+                    ledger_account_id=account.id,
+                    reference_code=account.reference_code,
+                    person_id=party.person_id,
+                    person_name=party.person_name,
+                    account_kind=account_kind,
+                    lines=tuple(piece_lines),
+                    days=None if whole else piece.days,
+                    period_days=None if whole else total_days,
+                )
+            )
+        return out
 
 
 def build_preview(data: ChargeInput) -> Preview:
     return _Engine(data).run()
+
+
+@dataclass(frozen=True, slots=True)
+class Simulation:
+    """Deneme hesabı (FIN-02): kayıt oluşturmadan bölüm bazında tutar — ödeyenden bağımsız."""
+
+    lines: list[tuple[UnitData, PreviewLine]]
+    warnings: list[PreviewWarning]
+    total: ItemTotal
+
+
+def simulate(data: ChargeInput, item: ItemData) -> Simulation:
+    engine = _Engine(data)
+    lines, total = engine.item_lines(item, [u for u in data.units if u.is_active])
+    return Simulation(lines, engine.warnings, total)

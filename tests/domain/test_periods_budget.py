@@ -15,6 +15,7 @@ from site_yonetim.domain.charging.periods import (
     already_posted_message,
     charge_description,
     default_dates,
+    due_date_for,
     is_item_due,
     next_period,
     period_amount,
@@ -40,14 +41,19 @@ def test_3_10_sonraki_donem_ters_kayittan_etkilenmez() -> None:
     assert next_period(YearMonth(2026, 8), date(2026, 9, 30)) == YearMonth(2026, 9)
 
 
-def test_default_dates() -> None:
-    assert default_dates(YearMonth(2026, 9)) == (date(2026, 9, 1), date(2026, 9, 15))
+def test_k25_vade_ayin_10u() -> None:
+    """K25: sabit +14 gün kalktı; vade dönemin `due_day`'i (varsayılan 10)."""
+    assert default_dates(YearMonth(2026, 9)) == (date(2026, 9, 1), date(2026, 9, 10))
+    assert default_dates(YearMonth(2026, 9), 20) == (date(2026, 9, 1), date(2026, 9, 20))
+    # kesim 15'inde, vade günü 10 → sonraki ayın 10'u (vade kesimden önce olamaz)
+    assert due_date_for(date(2026, 12, 15), 10) == date(2027, 1, 10)
+    assert due_date_for(date(2026, 12, 10), 10) == date(2026, 12, 10)
 
 
 @pytest.mark.parametrize(
     ("frequency", "expected"),
     [
-        (Frequency.MONTHLY, "83.33"),
+        (Frequency.MONTHLY, "83.34"),
         (Frequency.QUARTERLY, "250.00"),
         (Frequency.YEARLY, "1000.00"),
         (Frequency.ONE_TIME, "1000.00"),
@@ -55,6 +61,26 @@ def test_default_dates() -> None:
 )
 def test_period_amount(frequency: Frequency, expected: str) -> None:
     assert period_amount(Decimal(1000), frequency) == Decimal(expected)
+
+
+@pytest.mark.parametrize(
+    ("annual", "frequency", "periods"),
+    [
+        ("1000.00", Frequency.MONTHLY, 12),
+        ("12345.67", Frequency.MONTHLY, 12),
+        ("0.05", Frequency.MONTHLY, 12),
+        ("1000.00", Frequency.QUARTERLY, 4),
+        ("999.99", Frequency.QUARTERLY, 4),
+    ],
+)
+def test_d5_yillik_toplam_birebir_korunur(annual: str, frequency: Frequency, periods: int) -> None:
+    """D-5: yıllık / 12 her ay ayrı yuvarlanmaz; 12 ayın toplamı yıllık tutara kuruşu
+    kuruşuna eşit."""
+    months = range(1, 13) if periods == 12 else (1, 4, 7, 10)
+    parts = [period_amount(Decimal(annual), frequency, m) for m in months]
+    assert sum(parts, Decimal(0)) == Decimal(annual)
+    assert max(parts) - min(parts) <= Decimal("0.01")
+    assert parts == sorted(parts, reverse=True)  # kuruş farkı ilk dönemlere
 
 
 @pytest.mark.parametrize(
