@@ -11,6 +11,7 @@ uv run python -m site_yonetim.cli run-approval-jobs      # onay hatırlatma/eska
 uv run python -m site_yonetim.cli run-structure-jobs     # öznitelik yürürlüğü, davet (günde bir)
 uv run python -m site_yonetim.cli run-staff-jobs         # ayrılan personelin erişimini kapat (gece)
 uv run python -m site_yonetim.cli run-document-expiry    # belge geçerlilik uyarısı (günde bir)
+uv run python -m site_yonetim.cli run-kvkk-jobs          # KVKK saklama + 30 gün sayacı (03:30)
 """
 
 import argparse
@@ -30,9 +31,11 @@ from site_yonetim.services import (
     charge_schedule,
     documents,
     login_throttle,
+    privacy,
     rate_limit,
     reconciliation,
     recurring_expenses,
+    retention,
     security_jobs,
     service_desk,
     staff,
@@ -275,6 +278,27 @@ async def _run_document_expiry() -> int:
     return 0
 
 
+async def _run_kvkk_jobs() -> int:
+    """KVKK gece işi (Yazılım Dokümanı §4.6, 03:30): otomatik uygulaması **açık** saklama
+    kategorilerinde süresi dolanı siler/anonimleştirir ve silme raporu yazar (K8; hukuki teyit
+    bekleyenlerde varsayılan kapalı); ilgili kişi başvurularının son 7 gün / gecikme uyarısı."""
+    engine = create_engine_from_settings(get_settings())
+    now = datetime.now(UTC)
+    today = now.astimezone(BUSINESS_TZ).date()
+    try:
+        factory = create_session_factory(engine)
+        applied = await retention.run_nightly(factory, today=today, now=now)
+        warned = await privacy.run_due_warnings(factory, today=today)
+    finally:
+        await engine.dispose()
+    for r in applied:
+        print(f"{r.site_id}: {r.category} — {r.affected} kayıt")
+    for site_id, count in warned.items():
+        print(f"{site_id}: {count} KVKK başvurusu uyarısı")
+    print(f"Saklama: {len(applied)} uygulama; başvuru uyarısı {sum(warned.values())}.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="site_yonetim.cli")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -294,6 +318,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("run-structure-jobs", help="Öznitelik yürürlüğü, davet süresi (günde bir)")
     sub.add_parser("run-staff-jobs", help="Ayrılan personelin site erişimini kapat (gece)")
     sub.add_parser("run-document-expiry", help="Belge geçerlilik uyarısı (günde bir)")
+    sub.add_parser("run-kvkk-jobs", help="KVKK saklama politikası + başvuru süresi (03:30)")
     reconcile = sub.add_parser("reconcile", help="Özet bakiyeleri defterle karşılaştır")
     reconcile.add_argument("--fix", action="store_true", help="Farklı siteleri onar")
     args = parser.parse_args(argv)
@@ -318,6 +343,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_run_staff_jobs())
     if args.command == "run-document-expiry":
         return asyncio.run(_run_document_expiry())
+    if args.command == "run-kvkk-jobs":
+        return asyncio.run(_run_kvkk_jobs())
     if args.command == "run-recurring-expenses":
         return asyncio.run(_run_recurring_expenses())
     if args.command == "run-charge-schedules":

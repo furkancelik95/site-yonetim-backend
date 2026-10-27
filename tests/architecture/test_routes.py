@@ -14,7 +14,13 @@ from fastapi import FastAPI
 from fastapi.dependencies.models import Dependant
 from fastapi.routing import APIRoute, iter_route_contexts
 
-from site_yonetim.api.deps import current_user, password_changed, platform_admin, site_context
+from site_yonetim.api.deps import (
+    consent_given,
+    current_user,
+    password_changed,
+    platform_admin,
+    site_context,
+)
 from site_yonetim.main import create_app
 from tests.conftest import SettingsFactory
 
@@ -32,9 +38,13 @@ PUBLIC_ROUTES = {
     # telefon davetteki numarayla tam eşleşmeli; yanıt yalnız site/bölüm adı ve son 4 hane.
     "/api/v1/public/invitations/{token}",
     "/api/v1/public/invitations/{token}/accept",
+    # Aydınlatma metni (RAP-04, P6): yalnız site adı ve yayımlanmış metin; IP başına istek sınırı.
+    "/api/v1/public/privacy-notice/{slug}",
 }
 # Geçici parolalı oturumun erişebildiği uçlar (docs/05 §8.1). Gerisi `password_changed` ister.
 PASSWORD_PENDING_ROUTES = {"/api/v1/me", "/api/v1/auth/change-password"}
+# Aydınlatma onayı bekleyen oturumun erişebildiği uçlar (PM kararı P6). Gerisi `consent_given`.
+CONSENT_PENDING_ROUTES = PASSWORD_PENDING_ROUTES | {"/api/v1/me/consents"}
 
 
 def _calls(dependant: Dependant) -> set[object]:
@@ -85,6 +95,21 @@ def test_gecici_parolada_yalniz_me_ve_parola_degisikligi(
 
     assert paths >= PASSWORD_PENDING_ROUTES
     assert offenders == [], "Bu uç geçici parolalı oturuma açık: CurrentUserDep kullanın"
+
+
+def test_onay_beklerken_yalniz_me_ve_onay_uclari(
+    routes: list[tuple[str, set[object]]],
+) -> None:
+    """P6: güncel aydınlatma metni onaylanmadan yalnız /me, /auth/* ve /me/consents çalışır."""
+    offenders = [
+        path
+        for path, calls in routes
+        if path not in PUBLIC_ROUTES | CONSENT_PENDING_ROUTES and consent_given not in calls
+    ]
+    paths = {path for path, _ in routes}
+
+    assert paths >= CONSENT_PENDING_ROUTES
+    assert offenders == [], "Bu uç onay beklerken çalışır: CurrentUserDep kullanın"
 
 
 def test_site_uclari_site_baglamindan_gecer(routes: list[tuple[str, set[object]]]) -> None:

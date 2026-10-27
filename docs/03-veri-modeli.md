@@ -762,6 +762,18 @@ UPDATE/DELETE tetikleyiciyle reddedilir.
 `visitors.anonymized_at` eklendi. Kişisel veri (ziyaretçi adı, plaka, not) saklama süresi dolunca
 gece işiyle silinir ya da "Anonim" olur; kaydın kendisi (tarih, sayı) kalır.
 
+## 9b. Raporlar, KVKK ve denetim paketi (göç 0038 — servis istekleri 79–81, P6, K8) [K]
+
+| Tablo | Amaç | Not |
+|---|---|---|
+| `privacy_notices` | Aydınlatma metni sürümü (`version`, `text` ≥200, `summary`, yayınlayan) | site başına artan sürüm; **değişmez** |
+| `privacy_consents` | Kullanıcı × sürüm onayı (`source`: login/registration/invitation/publisher/seed, IP, tarayıcı) | `UNIQUE (site_id, user_id, notice_id)`; **değişmez**. Onay kapısı: erişilen her sitenin son sürümü |
+| `explicit_consents` | Açık rıza (amaç, `granted`, kaynak) | her değişiklik yeni satır, en sonuncusu geçerli; **değişmez** |
+| `privacy_requests` | İlgili kişi başvurusu (tür, açıklama, `due_on` = +30 gün, yanıt, sonuç, saklananlar, `warned_on`) | aynı kişinin aynı türde tek açık başvurusu (kısmi benzersiz indeks) |
+| `retention_policies` | Saklama kategorisi × süre, `auto_apply` | yalnız politika tablosundaki kategoriler; ziyaretçi süresi `security_settings`'te |
+| `retention_runs` | Silme/anonimleştirme raporu (kategori, eylem, tetikleyici, kesim tarihi, etkilenen) | **değişmez** |
+| `audit_packages` | Denetim kurulu paketi (dönem, `document_ids`, dondurulmuş `decisions` ve `snapshot`, durum, denetim raporu belgesi) | `report_document_id` → `documents` (bileşik FK) |
+
 ## 10. Eksik ama gerekecek
 
 Referans uygulamada yok, PRD'de MVP işaretli. Tasarlanırken bunlara yer bırak:

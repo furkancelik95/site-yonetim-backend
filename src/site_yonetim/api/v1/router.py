@@ -5,6 +5,7 @@ from site_yonetim.api.v1 import (
     announcements,
     approvals,
     audit,
+    audit_packages,
     auth,
     bank_imports,
     budget,
@@ -37,8 +38,10 @@ from site_yonetim.api.v1 import (
     platform,
     polls,
     portfolio,
+    privacy,
     recurring_expenses,
     registrations,
+    report_catalog,
     reports,
     requests,
     resident,
@@ -64,6 +67,8 @@ api_router = APIRouter(prefix=API_V1_PREFIX)
 api_router.include_router(health.router)
 api_router.include_router(auth.router)
 api_router.include_router(me.router)
+api_router.include_router(privacy.me_router)  # /me/consents — onay beklerken de çalışır
+api_router.include_router(privacy.public_router)
 api_router.include_router(sessions.router)
 api_router.include_router(notifications.me_router)
 api_router.include_router(sites.router)
@@ -98,6 +103,10 @@ api_router.include_router(cash.router)
 api_router.include_router(recurring_expenses.router)
 api_router.include_router(expenses.router)
 api_router.include_router(reports.router)
+# Rapor kataloğu (SR 79): /reports/{key}/export.xlsx, /reports/income-expense/…'ten sonra
+api_router.include_router(report_catalog.router)
+api_router.include_router(audit_packages.router)
+api_router.include_router(privacy.router)
 api_router.include_router(dashboard.router)
 api_router.include_router(resident.router)
 api_router.include_router(polls.resident_router)

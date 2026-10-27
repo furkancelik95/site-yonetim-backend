@@ -65,6 +65,9 @@ from site_yonetim.models import (
     OrganizationMembership,
     Person,
     Plan,
+    PrivacyConsent,
+    PrivacyNotice,
+    PrivacyRequest,
     Request,
     ServiceTariff,
     Site,
@@ -253,6 +256,7 @@ async def _seed_demo(
     if aksu is not None:
         await _seed_resident(factory, aksu, password_hash, store, today)
         await _seed_staff(factory, aksu, user_ids, today)
+    await _seed_privacy(factory, today)
 
     logger.info("Demo verisi yüklendi: %d site, %d hesap.", len(SITES), len(ACCOUNTS) + 1)
     return True
@@ -930,6 +934,71 @@ async def _seed_staff(
                     await timesheets_svc.finalize(
                         session, day, today=today, actor_name="Demo verisi"
                     )
+
+
+DEMO_NOTICE = "\n".join(
+    (
+        "KİŞİSEL VERİLERİN KORUNMASI AYDINLATMA METNİ (demo)",
+        "",
+        "Veri sorumlusu: site yönetimi. İşlenen veriler: ad, soyad, cep telefonu, e-posta, "
+        "bağımsız bölüm ve malik/kiracı bilgisi, cari hesap hareketleri, araç plakası, "
+        "ziyaretçi kayıtları.",
+        "Amaç: aidat ve ortak gider takibi, duyuru ve talep hizmetleri, site güvenliği (634 "
+        "sayılı Kat Mülkiyeti Kanunu kapsamındaki yükümlülükler).",
+        "Hukuki sebep: sözleşmenin ifası ve kanuni yükümlülük (KVKK m.5/2). Ticari ileti için "
+        "ayrıca açık rıza istenir.",
+        "Saklama: finansal kayıtlar kanuni süre (10 yıl); ziyaretçi kayıtları 6 ay.",
+        "Haklarınız: KVKK m.11 kapsamındaki başvurularınızı uygulamadaki 'Kişisel verilerim' "
+        "ekranından yapabilirsiniz; 30 gün içinde yanıtlanır.",
+        "",
+        "Bu metin demo içindir; canlıda hukukçu onaylı metin yayınlanmalıdır.",
+    )
+)
+
+
+async def _seed_privacy(factory: async_sessionmaker[AsyncSession], today: date) -> None:
+    """Her sitede aydınlatma metni sürüm 1 ve bütün demo hesaplarının onayı (P6) — giriş onay
+    ekranına takılmasın; akışı görmek için yeni sürüm yayınlanır. Aksu'da sakinin açık bir KVKK
+    başvurusu."""
+    async with factory() as session:
+        sites = list(await session.scalars(select(Site).order_by(Site.name)))
+        users = list(
+            await session.scalars(select(User.id).where(User.is_platform_admin.is_(False)))
+        )
+    for site in sites:
+        with site_scope(site.id):
+            async with factory() as session, session.begin():
+                notice = PrivacyNotice(
+                    version=1, text=DEMO_NOTICE, summary="İlk yayın",
+                    published_by_name="Site yönetimi",
+                )  # fmt: skip
+                session.add(notice)
+                await session.flush()
+                session.add_all(
+                    PrivacyConsent(user_id=uid, notice_id=notice.id, version=1, source="seed")
+                    for uid in users
+                )
+                config = await session.scalar(select(StructureSettings))
+                if config is not None:
+                    config.kvkk_published = True
+                if site.slug != RESIDENT.site_slug:
+                    continue
+                member = await session.scalar(
+                    select(SiteMembership).where(SiteMembership.person_id.is_not(None)).limit(1)
+                )
+                if member is None or member.person_id is None:
+                    continue
+                person = await session.get(Person, member.person_id)
+                session.add(
+                    PrivacyRequest(
+                        user_id=member.user_id, person_id=member.person_id,
+                        requester_name=f"{person.first_name} {person.last_name}"
+                        if person else "Sakin",
+                        unit_names=[], kind="access",
+                        detail="Hakkımdaki kayıtları görmek istiyorum.",
+                        due_on=today + timedelta(days=24),
+                    )
+                )  # fmt: skip
 
 
 def _person(first: str, last: str) -> Person:

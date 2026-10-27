@@ -48,18 +48,31 @@ kümesi tanımlanmalı.
 | `documents.read` | Belge arşivi: gizli dışındaki belgeleri görür ve indirir (RAP-03) |
 | `documents.manage` | Belge yükler, yeni sürüm ekler |
 | `documents.confidential` | Gizli belgeleri görür ve açar; her açılış kayda geçer, açılış kaydını görür |
+| `privacy.manage` | KVKK: ilgili kişi başvurularını yanıtlar, kişisel veri paketini indirir, aydınlatma metni sürümü yayınlar, saklama politikası ve VERBİS envanteri (RAP-04, servis isteği 80) — yalnız Yönetici |
 | `approvals.rules.manage` | Onay kurallarını yönetir; sitedeki tüm onay taleplerini görür (gözetim). Onay **kararı** izin istemez: talebe onaycı olarak atanmış (ya da onaycının etkin vekili) olmak yeter |
 
 Son yedi izin servis istekleri 09–18 için eklendi (karar: Furkan, 05.10.2026).
 Belge izinleri (`documents.*`) belge arşivi için eklendi (servis isteği 78, 25.10.2026): yükleme
 yalnız Yönetici; gizli belge Yönetici ve Denetçi; okuma Yönetici, YK üyesi, Denetçi, Muhasebe.
 Sakin belgeyi izinle değil kendi ucuyla görür (sakinlere açık + bölümüne özel).
+`privacy.manage` KVKK için eklendi (servis isteği 80, 27.10.2026; SR 80'deki "ayrı
+`privacy.manage`" önerisi). Rapor kataloğu yeni izin istemez: her rapor kendi verisinin iznine
+bağlıdır (`domain/report_catalog.py`). Denetim paketi: hazırlama `finance.charge.post`, rapor
+ekleme `audit.read`, liste ikisinden biri.
+
+**Aydınlatma onayı kapısı (PM kararı P6, 27.10.2026):** kullanıcının erişebildiği bir sitede
+yayınlanmış **son** aydınlatma metni sürümü onaylanmamışsa, parola kapısından sonra ikinci kapı
+çalışır: yalnız `GET /me`, `/auth/*`, `GET/POST /me/consents` ve herkese açık
+`/public/privacy-notice/{slug}` yanıt verir; diğer her uç **403 `consent_required`**
+(`api/deps.consent_given`, `tests/architecture/test_routes.py`). Yeni sürüm yayınlanınca herkes
+yeniden onaylar (yayınlayan yönetici yayınla birlikte onaylamış sayılır). Sitede yayınlanmış
+metin yoksa onay istenmez.
 
 ## 3. Site rolleri (şablon)
 
 | Rol | İzinler |
 |---|---|
-| **Yönetici** | `finance.read`, `finance.charge.post`, `finance.payment.record`, `finance.budget.manage`, `finance.cash.read`, `finance.cash.manage`, `finance.reports.read`, `units.read`, `units.manage`, `people.read`, `people.manage`, `requests.read`, `requests.create`, `requests.assign`, `announcements.read`, `announcements.publish`, `expenses.read`, `expenses.manage`, `security.visitors`, `security.packages`, `modules.manage`, `members.manage`, `audit.read`, `security.incidents`, `meetings.read`, `meetings.manage`, `polls.manage`, `contracts.manage`, `inventory.read`, `inventory.manage`, `staff.manage`, `approvals.rules.read`, `approvals.rules.manage`, `documents.read`, `documents.manage`, `documents.confidential`, `people.contact`, `requests.settings` |
+| **Yönetici** | `finance.read`, `finance.charge.post`, `finance.payment.record`, `finance.budget.manage`, `finance.cash.read`, `finance.cash.manage`, `finance.reports.read`, `units.read`, `units.manage`, `people.read`, `people.manage`, `requests.read`, `requests.create`, `requests.assign`, `announcements.read`, `announcements.publish`, `expenses.read`, `expenses.manage`, `security.visitors`, `security.packages`, `modules.manage`, `members.manage`, `audit.read`, `security.incidents`, `meetings.read`, `meetings.manage`, `polls.manage`, `contracts.manage`, `inventory.read`, `inventory.manage`, `staff.manage`, `approvals.rules.read`, `approvals.rules.manage`, `documents.read`, `documents.manage`, `documents.confidential`, `people.contact`, `requests.settings`, `privacy.manage` |
 | **Yönetim Kurulu Üyesi** — her şeyi görür, hiçbirini değiştirmez | `finance.read`, `units.read`, `people.read`, `requests.read`, `announcements.read`, `expenses.read`, `finance.cash.read`, `finance.reports.read`, `meetings.read`, `inventory.read`, `approvals.rules.read`, `documents.read` |
 | **Denetçi** (KMK m.41) — salt okunur finans, **kişisel veri görmez** | `finance.read`, `expenses.read`, `audit.read`, `finance.cash.read`, `finance.reports.read`, `meetings.read`, `documents.read`, `documents.confidential` |
 | **Muhasebe** | `finance.read`, `finance.charge.post`, `finance.payment.record`, `finance.budget.manage`, `expenses.read`, `expenses.manage`, `finance.cash.read`, `finance.cash.manage`, `finance.reports.read`, `units.read`, `people.read`, `contracts.manage`, `inventory.read`, `documents.read` |

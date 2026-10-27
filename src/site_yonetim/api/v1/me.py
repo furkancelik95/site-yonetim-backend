@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from site_yonetim.api.deps import AuthenticatedUserDep, FactoryDep, TodayDep
 from site_yonetim.domain.access import SiteAccess, UserAccess
+from site_yonetim.services import privacy as privacy_svc
 from site_yonetim.services.access import load_user_access
 
 router = APIRouter(tags=["kimlik"])
@@ -51,10 +52,21 @@ class MeResponse(BaseModel):
     must_change_password: bool = Field(
         description="true: geçici parola — önce `POST /auth/change-password`"
     )
+    consent_required: bool = Field(
+        default=False,
+        description="true: erişilen bir sitenin güncel aydınlatma metni onaylanmadı — önce "
+        "`GET/POST /me/consents` (P6). Bu sürede diğer uçlar 403 `consent_required`",
+    )
     sites: list[SiteAccessOut]
 
     @classmethod
-    def of(cls, access: UserAccess, *, must_change_password: bool = False) -> MeResponse:
+    def of(
+        cls,
+        access: UserAccess,
+        *,
+        must_change_password: bool = False,
+        consent_required: bool = False,
+    ) -> MeResponse:
         return cls(
             user_id=access.user_id,
             full_name=access.full_name,
@@ -62,12 +74,23 @@ class MeResponse(BaseModel):
             is_platform_admin=access.is_platform_admin,
             can_see_portfolio=access.can_see_portfolio,
             must_change_password=must_change_password,
+            consent_required=consent_required,
             sites=[SiteAccessOut.of(site) for site in access.sites],
         )
 
 
 @router.get("/me", summary="Oturumdaki kullanıcı ve erişimleri")
 async def me(current: AuthenticatedUserDep, factory: FactoryDep, today: TodayDep) -> MeResponse:
-    """Geçici paroladayken de çalışır (frontend yönlendirmeyi buradan yapar)."""
+    """Geçici paroladayken ve aydınlatma onayı beklerken de çalışır (frontend yönlendirmeyi
+    buradan yapar)."""
     access = await load_user_access(factory, current.user, today=today)
-    return MeResponse.of(access, must_change_password=current.user.must_change_password)
+    pending = bool(access.sites) and bool(
+        await privacy_svc.pending_notices(
+            factory, current.user.id, [s.site_id for s in access.sites]
+        )
+    )
+    return MeResponse.of(
+        access,
+        must_change_password=current.user.must_change_password,
+        consent_required=pending,
+    )

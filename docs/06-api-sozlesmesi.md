@@ -595,6 +595,34 @@ kapalı); mevcut siteler ve demo `live`. Gece işi: `run-structure-jobs` (günde
 
 ---
 
+### 2.25 Raporlar, KVKK ve denetim paketi (servis istekleri 79–81, RAP-01/04/05, P6, K8)
+| Yöntem | Yol | İzin | Durum | Not |
+|---|---|---|---|---|
+| GET | `/sites/{slug}/reports/catalog` | site erişimi | Y | `[{key, name, group, permission, link, exportable, metrics: [{key, name, definition}]}]` — yalnız izni olan ve modülü açık raporlar; metrik sözlüğü tek kaynak (`domain/report_catalog.py`) |
+| GET | `/sites/{slug}/reports/requests-sla?from=&to=` | `requests.read`, modül `requests` | Y | varsayılan bitiş bugün, başlangıç bitişten 29 gün önce (en fazla 1 yıl). `{from, to, total: line, rows: [{category, category_name, …line}]}`; line = `{total, open, closed, sla_rate, avg_hours, satisfaction, rated}` — oran/saat/puan **metin** (`"92.5"`), veri yoksa `null`. Açılan/açık: dönemde açılan; çözülen/SLA/süre/puan: dönemde çözülen. Çözüm zamanı açılıştan önce olan kayıt ortalamaya girmez |
+| GET | `/sites/{slug}/reports/{key}/export.xlsx?from=&to=` | raporun izni | Y | içerik üreticisi olan katalog raporu (`requests_sla`, `income_expense`, `collections`, `cash`): Özet (+ metrik tanımları) + tablolar. Denetim kaydı `export`. Planlı rapor (P16c) aynı üreticiyi kullanır: `services/report_catalog.produce` |
+| GET / POST | `/sites/{slug}/audit-packages` | liste `finance.charge.post` ya da `audit.read`; hazırlama `finance.charge.post` | Y | sayfalı. POST `{title (3–120), from, to, document_ids[]}` → 201; dönemde yapılmış toplantıların kararları (`decisions`) ve dönem finans özeti (`snapshot`: gelir, gider, aylar, kategori, bütçe, tahsilat, kasa — para metin) **dondurulur**. Gizli belgeyi yalnız `documents.confidential` ekler. 422 `fields.title/from/to/document_ids` |
+| POST | `/sites/{slug}/audit-packages/{id}/report` | `audit.read` | Y | `{document_id, note?}` → `status: reviewed`; ikinci rapor 409 `invalid_status`; denetçi değil 403 "Denetim raporunu denetçi yükler." |
+| GET | `/sites/{slug}/audit-packages/{id}/export.xlsx` | liste izni | Y | dondurulmuş özet Excel |
+| GET / POST | `/sites/{slug}/privacy-notices` | okuma site erişimi; yayın `privacy.manage` | Y | sayfalı, yeni sürüm üstte `{id, version, text, summary, published_at, published_by}`. POST `{text (≥200), summary (5–200)}` → 201; eski sürümler değişmez; herkes yeniden onaylar (P6) |
+| GET | `/public/privacy-notice/{slug}` | **herkese açık** (IP başına 60/10 dk) | Y | `{site_name, version, text, published_at}`; yayın yoksa `version: null` |
+| GET / POST | `/me/consents` | oturum (onay beklerken de) | Y | GET `{consent_required, pending: [{notice_id, site_id, site_name, site_slug, version, text, summary, published_at}], given: [...]}`. POST `{notice_ids}` → 200 `Written`; güncel olmayan sürüm 409 `consent_outdated`. `GET /me` yanıtında `consent_required` |
+| GET | `/sites/{slug}/my-privacy` | site erişimi | Y | `{notice, accepted[], explicit: [{purpose, label, granted, changed_at}]}` |
+| PUT | `/sites/{slug}/my-privacy/explicit-consents/{purpose}` | site erişimi | Y | `{granted}` — açık rıza (isteğe bağlı, aydınlatmadan ayrı; her değişiklik yeni satır) |
+| GET | `/sites/{slug}/my-privacy/data-export` | site erişimi | Y | "verilerimi indir": JSON ek (kişi, bölümler, hesaplar ve son 100 hareket, talepler, araçlar, hane, ziyaretçi davetleri, kayıt başvuruları, onaylar, KVKK başvuruları); `export` denetim kaydı |
+| POST / GET | `/sites/{slug}/resident/privacy-requests` | sakin (`person_id`) | Y | POST `{kind: access/rectify/erase/object, detail}` → 201 `{…, due_on}` (+30 gün); erişim dışında açıklama ≥10 (422 `fields.detail`); aynı türde açık başvuru 409 `already_open`; sakin değil 403. GET sayfalı, kendi başvuruları |
+| GET | `/sites/{slug}/privacy-requests?status=` | `privacy.manage` | Y | sayfalı; açıklar önce, son güne göre; `{…, name, units, days_left, answered_by}` |
+| GET | `/sites/{slug}/privacy-requests/{id}/data-package` | `privacy.manage` | Y | kişisel veri paketi (JSON ek, yukarıdaki içerik); `export` denetim kaydı |
+| POST | `/sites/{slug}/privacy-requests/{id}/answer` | `privacy.manage` | Y | `{response (≥10), outcome: fulfilled/partial/rejected, retained?}` — silmede sonuç "yerine getirildi" değilse `retained` zorunlu (422). Yanıtlanmış 409 `invalid_status`. Kişiye bildirim |
+| GET / PUT | `/sites/{slug}/settings/retention` | `privacy.manage` | Y | `{categories: [{key, label, data, kvkk_category, subjects, value, unit, default_value, max_value, action, adjustable, auto_apply, needs_legal_review, legal_basis, cutoff, pending, last_run}]}`. PUT `{items: [{key, value, auto_apply}]}`; `visitors` = `security_settings.retention_months/auto_anonymize` (aynı ayar). 422 `fields.<key>` |
+| POST | `/sites/{slug}/settings/retention/{key}/apply` | `privacy.manage` | Y | süresi dolanı şimdi işler; silme raporuna yazar (etkilenen 0 olsa da) |
+| GET | `/sites/{slug}/settings/retention/runs` | `privacy.manage` | Y | silme/anonimleştirme raporu, sayfalı |
+| GET | `/sites/{slug}/data-inventory` · `/data-inventory/export?format=xlsx/csv` | `privacy.manage` | Y | VERBİS envanteri: `{category, category_label, data, subjects, purpose, legal_basis, retention, recipients, source, records}`; özel alanlar KVKK kategorisiyle eklenir. CSV `;` ayraçlı, UTF-8 BOM |
+
+Gece işi `run-kvkk-jobs` (03:30): otomatik uygulaması açık saklama kategorileri + başvuru son 7
+gün/gecikme uyarısı (günde bir). Ziyaretçi kategorisini `run-security-daily` (03:00) uygular;
+rapor aynı `retention_runs` tablosuna yazılır.
+
 ## 3. Sıralama önerisi
 
 Frontend bu sırayla istek açacak:

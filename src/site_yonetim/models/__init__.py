@@ -107,6 +107,15 @@ from site_yonetim.models.people import (
     Vehicle,
 )
 from site_yonetim.models.platform import Organization, Plan, PropertyKind, Site
+from site_yonetim.models.privacy import (
+    ExplicitConsent,
+    PrivacyConsent,
+    PrivacyNotice,
+    PrivacyRequest,
+    RetentionPolicy,
+    RetentionRun,
+)
+from site_yonetim.models.reporting import AuditPackage
 from site_yonetim.models.security import Incident, LostItem, Package, Visitor
 from site_yonetim.models.service_desk import (
     Outage,
@@ -159,6 +168,7 @@ __all__ = [
     "AttendanceEvent",
     "AttendanceSettings",
     "AuditLog",
+    "AuditPackage",
     "AuthEvent",
     "AuthEventKind",
     "AuthSession",
@@ -186,6 +196,7 @@ __all__ = [
     "DocumentVersion",
     "Expense",
     "ExpenseCategory",
+    "ExplicitConsent",
     "Gate",
     "GateLog",
     "HouseholdMember",
@@ -225,6 +236,9 @@ __all__ = [
     "Poll",
     "PollOption",
     "PollVote",
+    "PrivacyConsent",
+    "PrivacyNotice",
+    "PrivacyRequest",
     "PropertyKind",
     "PushToken",
     "RateLimit",
@@ -241,6 +255,8 @@ __all__ = [
     "RequestFeedback",
     "RequestInternalNote",
     "RequestSettings",
+    "RetentionPolicy",
+    "RetentionRun",
     "SecuritySettings",
     "ServiceQuote",
     "ServiceQuoteLine",

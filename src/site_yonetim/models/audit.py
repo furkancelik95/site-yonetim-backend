@@ -216,6 +216,11 @@ AUDITED_TABLES = frozenset(
         # belge arşivi (gizli belge açılışı ayrıca document_access_logs'ta)
         "documents",
         "document_versions",
+        # KVKK (RAP-04): metin sürümü, başvuru ve yanıtı, saklama politikası (onay ve rıza
+        # satırları kendisi değişmez kayıttır; denetim paketi özetle `record` ile yazılır)
+        "privacy_notices",
+        "privacy_requests",
+        "retention_policies",
         # yetki / üyelik
         "site_memberships",
     }
