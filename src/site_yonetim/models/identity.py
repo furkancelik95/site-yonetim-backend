@@ -5,10 +5,12 @@ from datetime import datetime
 from enum import StrEnum
 
 from sqlalchemy import (
+    ARRAY,
     CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
+    SmallInteger,
     Text,
     UniqueConstraint,
     false,
@@ -17,7 +19,13 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from site_yonetim.db.base import Base, TenantMixin, enum_check, tenant_fk, tenant_table_args
-from site_yonetim.domain.access import OrganizationRole, SiteRole, UserKind
+from site_yonetim.domain.access import (
+    LEVEL_MAX,
+    LEVEL_MIN,
+    OrganizationRole,
+    RoleScope,
+    UserKind,
+)
 
 
 class User(Base):
@@ -60,20 +68,75 @@ class OrganizationMembership(Base):
 
 
 class SiteMembership(TenantMixin, Base):
-    """[K] Açık site üyeliği. Türetilmiş erişimi ezer."""
+    """[K] Açık site üyeliği (kullanıcı ↔ site). Türetilmiş erişimi ezer. Roller üyelikte değil,
+    `site_role_assignments`'tadır (P18: birden çok rol, kapsam, süre)."""
 
     __tablename__ = "site_memberships"
     __table_args__ = tenant_table_args(
         UniqueConstraint("site_id", "user_id"),
-        CheckConstraint(enum_check("role", SiteRole), name="role"),
         tenant_fk("person_id", "persons"),
     )
 
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
-    role: Mapped[str] = mapped_column(Text)
     # Sakin üyeliğinde dolu: kullanıcının bu sitedeki kişi kaydı (bileşik FK).
     person_id: Mapped[uuid.UUID | None]
     is_active: Mapped[bool] = mapped_column(default=True)
+
+
+class SiteRoleDefinition(TenantMixin, Base):
+    """[K] Siteye özel rol (şablon kopyası + izin seti) ya da hazır şablonun sitedeki düzeyi
+    (`is_system`, izinler koddan). Ad onay kurallarında rolü tanıtır — değişmez. Silinmez,
+    arşivlenir (`is_active = false`)."""
+
+    __tablename__ = "site_roles"
+    __table_args__ = tenant_table_args(
+        UniqueConstraint("site_id", "key"),
+        UniqueConstraint("site_id", "name"),
+        CheckConstraint(f"level BETWEEN {LEVEL_MIN} AND {LEVEL_MAX}", name="level"),
+        CheckConstraint("is_system OR permissions IS NOT NULL", name="permissions"),
+    )
+
+    key: Mapped[str] = mapped_column(Text)
+    name: Mapped[str] = mapped_column(Text)
+    description: Mapped[str | None] = mapped_column(Text)
+    base_key: Mapped[str | None] = mapped_column(Text)  # kopyalandığı rol
+    is_system: Mapped[bool] = mapped_column(default=False)
+    permissions: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    level: Mapped[int] = mapped_column(SmallInteger)
+    is_active: Mapped[bool] = mapped_column(default=True)
+    created_by_name: Mapped[str | None] = mapped_column(Text)
+
+
+class SiteRoleAssignment(TenantMixin, Base):
+    """[K] Rol ataması: kişi × rol × kapsam × (başlangıç–bitiş) — PLT-09, P18. Silinmez; kaldırma
+    bitiş zamanını doldurur (atama geçmişi). Etkin: başlangıç ≤ şimdi < bitiş."""
+
+    __tablename__ = "site_role_assignments"
+    __table_args__ = tenant_table_args(
+        tenant_fk("block_id", "blocks"),
+        CheckConstraint(enum_check("scope_kind", RoleScope), name="scope_kind"),
+        CheckConstraint(
+            "(scope_kind = 'site' AND block_id IS NULL AND gate_id IS NULL)"
+            " OR (scope_kind = 'block' AND block_id IS NOT NULL AND gate_id IS NULL)"
+            " OR (scope_kind = 'gate' AND gate_id IS NOT NULL AND block_id IS NULL)",
+            name="scope",
+        ),
+        CheckConstraint(
+            "starts_at IS NULL OR ends_at IS NULL OR ends_at >= starts_at", name="period"
+        ),
+        Index("ix_site_role_assignments_site_id_user_id", "site_id", "user_id"),
+    )
+
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
+    role_key: Mapped[str] = mapped_column(Text)
+    scope_kind: Mapped[str] = mapped_column(Text, default=RoleScope.SITE.value)
+    block_id: Mapped[uuid.UUID | None]
+    gate_id: Mapped[uuid.UUID | None]  # kapı tablosu (GUV-08) gelince bileşik FK olur
+    starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    assigned_by_name: Mapped[str | None] = mapped_column(Text)
+    removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    removed_by_name: Mapped[str | None] = mapped_column(Text)
 
 
 class AuthSession(Base):

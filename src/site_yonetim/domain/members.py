@@ -1,6 +1,6 @@
 """Site kullanıcıları ve sakin kayıt başvurusu — saf kurallar (servis istekleri 12, 13).
 
-Roller sabittir (docs/05 §3); burada yalnız ekranın kullandığı anahtar ve açıklamalar var.
+Roller ve şablonları `domain/roles.py`.
 Kayıt başvurusu alanları kurumsal iletişim formu standardıyla doğrulanır; ekran aynı kuralları
 uygular, sunucu **yine** doğrular.
 """
@@ -10,35 +10,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 
-from site_yonetim.domain.access import SiteRole
 from site_yonetim.domain.text import normalize_person_name
 from site_yonetim.domain.validation import (
     normalize_email_address,
     normalize_name_part,
     normalize_tr_mobile,
 )
-
-# --- Roller -------------------------------------------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class RoleInfo:
-    key: str
-    role: SiteRole
-    description: str
-
-
-STAFF_ROLES: tuple[RoleInfo, ...] = (
-    RoleInfo("manager", SiteRole.MANAGER, "Sitenin bütün işlemleri; kullanıcı ve modül yönetimi"),
-    RoleInfo("board", SiteRole.BOARD_MEMBER, "Finans, gider ve talepleri okur; değişiklik yapmaz"),
-    RoleInfo("auditor", SiteRole.AUDITOR, "Finansı ve denetim kaydını okur; kişisel veri görmez"),
-    RoleInfo("accounting", SiteRole.ACCOUNTING, "Tahakkuk, tahsilat, gider, kasa ve raporlar"),
-    RoleInfo("security", SiteRole.SECURITY, "Ziyaretçi, kargo ve olay kayıtları; borç görmez"),
-    RoleInfo("technical", SiteRole.TECHNICIAN, "Kendisine atanan talepleri yürütür"),
-)
-BY_KEY = {r.key: r for r in STAFF_ROLES}
-BY_ROLE = {r.role.value: r for r in STAFF_ROLES}
-
 
 # --- Doğrulama ----------------------------------------------------------------------
 

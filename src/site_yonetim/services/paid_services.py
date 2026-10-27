@@ -54,7 +54,7 @@ from site_yonetim.models import (
 )
 from site_yonetim.models.approvals import ApprovalRequest
 from site_yonetim.services import approvals as approvals_svc
-from site_yonetim.services import ledger
+from site_yonetim.services import ledger, period_lock
 from site_yonetim.services import requests as requests_svc
 
 NAME_MAX, UNIT_MAX, NOTE_MAX = 60, 20, 200
@@ -311,6 +311,7 @@ async def get_quote(session: AsyncSession, quote_id: uuid.UUID) -> ServiceQuote 
 async def _bill(
     session: AsyncSession, quote: ServiceQuote, request: Request, amount: Decimal, today: date
 ) -> None:
+    await period_lock.ensure_writable(session, today)
     await ledger.lock_accounts(session, [quote.account_id])
     entry = LedgerEntry(
         id=uuid.uuid7(),

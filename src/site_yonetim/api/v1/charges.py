@@ -9,7 +9,8 @@
 import uuid
 from collections import defaultdict
 from datetime import date, datetime
-from typing import Annotated, Any
+from decimal import Decimal
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query, status
 from fastapi.responses import JSONResponse
@@ -44,6 +45,7 @@ from site_yonetim.models import (
     Person,
     Unit,
 )
+from site_yonetim.services import charge_diff
 from site_yonetim.services import charging as svc
 
 router = APIRouter(prefix="/sites/{slug}/charge-runs", tags=["tahakkuk"])
@@ -195,6 +197,68 @@ async def preview(
             page_size=paging.page_size,
             total=len(result.charges),
         ),
+    )
+
+
+class ChargeDiffCountsOut(BaseModel):
+    increase: int
+    decrease: int
+    new: int
+    missing: int
+
+
+class ChargeDiffRowOut(BaseModel):
+    account_id: uuid.UUID
+    unit_name: str
+    person_name: str
+    account_kind: AccountKind
+    previous: Money | None
+    current: Money | None
+    change_percent: Decimal | None = Field(description="yüzde, 1 ondalık (ör. 12.4)")
+    flag: Literal["increase", "decrease", "new", "missing"]
+
+
+class ChargeDiffOut(BaseModel):
+    period: str = Field(description='"11/2026"')
+    base_period: str | None = Field(description="karşılaştırılan son kesinleşmiş dönem")
+    threshold: int = Field(description="finans parametresi `diff_threshold_percent`")
+    compared: int = Field(description="önizlemedeki hesap sayısı")
+    counts: ChargeDiffCountsOut
+    rows: list[ChargeDiffRowOut]
+
+
+@router.get("/preview/diff", summary="Tahakkuk fark raporu (önizleme ↔ son kesinleşmiş dönem)")
+async def preview_diff(
+    ctx: FinanceRead,
+    today: TodayDep,
+    charge_date: Annotated[date | None, Query(description="önizlemeyle aynı")] = None,
+    due_date: Annotated[date | None, Query(description="önizlemeyle aynı")] = None,
+) -> ChargeDiffOut:
+    """Salt okuma; eşik üstü artan/azalan, yeni ve bu dönem olmayan hesaplar (FIN-05)."""
+    try:
+        prepared = await svc.prepare(ctx.session, today, charge_date=charge_date, due_date=due_date)
+    except FinanceRuleError as exc:
+        raise finance_error(exc) from exc
+    report = await charge_diff.report(ctx.session, prepared)
+    return ChargeDiffOut(
+        period=report.period.name,
+        base_period=report.base_period.name if report.base_period else None,
+        threshold=report.threshold,
+        compared=report.compared,
+        counts=ChargeDiffCountsOut(**report.counts()),
+        rows=[
+            ChargeDiffRowOut(
+                account_id=r.account_id,
+                unit_name=r.unit_name,
+                person_name=r.person_name,
+                account_kind=AccountKind(r.account_kind),
+                previous=r.previous,
+                current=r.current,
+                change_percent=r.change_percent,
+                flag=r.flag,  # type: ignore[arg-type]
+            )
+            for r in report.rows
+        ],
     )
 
 

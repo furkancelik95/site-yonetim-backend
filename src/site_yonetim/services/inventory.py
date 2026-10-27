@@ -10,24 +10,30 @@ yönetir.
 
 import uuid
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from sqlalchemy import Select, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from site_yonetim.db.tenancy import current_scope
+from site_yonetim.domain.approvals import ActionType, ApprovalStatus
+from site_yonetim.domain.facility import STOCK_COUNT_NOTE, OpsError, StockCountStatus
 from site_yonetim.domain.management import (
     AssetStatus,
     StockDirection,
     asset_code,
+    format_quantity,
     format_quantity_tr,
     parse_quantity,
 )
 from site_yonetim.domain.members import FormFieldError
 from site_yonetim.domain.operations import OperationRuleError
 from site_yonetim.domain.text import ascii_fold
-from site_yonetim.models import Asset, StockItem, StockMove
+from site_yonetim.models import Asset, Site, StockCount, StockCountLine, StockItem, StockMove
+from site_yonetim.models.approvals import ApprovalRequest
+from site_yonetim.services import approvals as approvals_svc
+from site_yonetim.services.approvals import ExecutionError
 
 _NUMBER_LOCK = text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))")
 QUANTITY_ERROR = "Sıfırdan büyük bir miktar girin (en çok 3 ondalık)."
@@ -235,3 +241,210 @@ async def move(
     session.add(record)
     await session.flush()
     return record
+
+
+# --- Stok sayımı (OPS-02; servis isteği 54) -----------------------------------------
+#
+# Yalnız girilen malzemeler sayılır. Fark ≠ 0 olan satırlar "Sayım farkı" notlu düzeltme
+# hareketi olur (fazla → giriş, eksik → çıkış), tek işlemde ve malzeme satırları kilitliyken.
+# Sitede "Stok sayım farkı" onay kuralı yürürlükteyse hareketler **onaydan sonra** yazılır
+# (K21; ONY-01): sayım `approval_pending` kalır, onaylanınca yürütücü farkı uygular. Fark, sayım
+# anındaki sistem miktarına göre hesaplanır ve onayda **fark olarak** uygulanır; stok bu arada
+# düşüp çıkış yetmezse "onaylandı – yürütülemedi".
+
+
+@dataclass(frozen=True, slots=True)
+class CountLineData:
+    item_id: uuid.UUID
+    counted: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class CountResult:
+    count: StockCount
+    lines: list[StockCountLine]
+    request: ApprovalRequest | None
+
+
+def signed_quantity(value: Decimal) -> str:
+    """signed_quantity(Decimal("-2.500")) → "-2.5" """
+    return format_quantity(value) if value >= 0 else "-" + format_quantity(-value)
+
+
+async def _locked_items(session: AsyncSession, ids: list[uuid.UUID]) -> dict[uuid.UUID, StockItem]:
+    if not ids:
+        return {}
+    rows = await session.scalars(
+        select(StockItem).where(StockItem.id.in_(ids)).order_by(StockItem.id).with_for_update()
+    )
+    return {i.id: i for i in rows}
+
+
+async def _apply_count(
+    session: AsyncSession, lines: list[StockCountLine], *, moved_by: str
+) -> None:
+    changed = [line for line in lines if line.diff != 0]
+    items = await _locked_items(session, [line.stock_item_id for line in changed])
+    for line in changed:
+        await move(
+            session,
+            items[line.stock_item_id],
+            direction=(StockDirection.IN if line.diff > 0 else StockDirection.OUT).value,
+            quantity=format_quantity(abs(line.diff)),
+            note=STOCK_COUNT_NOTE,
+            moved_by=moved_by,
+        )
+
+
+async def count_stock(
+    session: AsyncSession,
+    site: Site,
+    lines: list[CountLineData],
+    *,
+    requester: approvals_svc.Person,
+    today: date,
+    now: datetime,
+) -> CountResult:
+    entered = list({line.item_id: line for line in lines if (line.counted or "").strip()}.values())
+    if not entered:
+        raise FormFieldError({"lines": "En az bir malzeme."})
+    items = await _locked_items(session, [line.item_id for line in entered])
+    if len(items) != len(entered):
+        raise OpsError(404, "not_found", "Malzeme bulunamadı.")
+    errors: dict[str, str] = {}
+    counted: dict[uuid.UUID, Decimal] = {}
+    for line in entered:
+        try:
+            counted[line.item_id] = parse_quantity(line.counted, allow_zero=True)
+        except ValueError:
+            errors[f"lines.{line.item_id}"] = "Geçersiz miktar."
+    if errors:
+        raise FormFieldError(errors)
+    record = StockCount(
+        id=uuid.uuid7(),
+        status=StockCountStatus.APPLIED.value,
+        created_by_name=requester.name,
+        created_by_user_id=requester.user_id,
+    )
+    session.add(record)
+    await session.flush()
+    rows = [
+        StockCountLine(
+            id=uuid.uuid7(),
+            count_id=record.id,
+            stock_item_id=items[line.item_id].id,
+            item_name=items[line.item_id].name,
+            system_quantity=items[line.item_id].quantity,
+            counted_quantity=counted[line.item_id],
+            diff=counted[line.item_id] - items[line.item_id].quantity,
+        )
+        for line in entered
+    ]
+    session.add_all(rows)
+    await session.flush()
+    differences = [r for r in rows if r.diff != 0]
+    rule = await approvals_svc.match_rule(
+        session, ActionType.STOCK_COUNT_DIFFERENCE, amount=None, source=None, today=today
+    )
+    if differences and rule is not None:
+        request = await approvals_svc.request_approval(
+            session,
+            site,
+            approvals_svc.NewRequest(
+                action_type=ActionType.STOCK_COUNT_DIFFERENCE,
+                title=f"Stok sayım farkı — {len(differences)} malzeme",
+                summary={
+                    "lines": [
+                        {
+                            "name": r.item_name,
+                            "system": format_quantity(r.system_quantity),
+                            "counted": format_quantity(r.counted_quantity),
+                            "diff": signed_quantity(r.diff),
+                        }
+                        for r in differences
+                    ]
+                },
+                payload={"stock_count_id": str(record.id)},
+                subject_type="stock_counts",
+                subject_id=record.id,
+            ),
+            requester=requester,
+            today=today,
+            now=now,
+        )
+        record.status = StockCountStatus.APPROVAL_PENDING.value
+        record.approval_request_id = request.id
+        await session.flush()
+        return CountResult(record, rows, request)
+    await _apply_count(session, rows, moved_by=requester.name)
+    record.applied_at = now
+    await session.flush()
+    return CountResult(record, rows, None)
+
+
+def counts_query() -> Select[StockCount]:
+    return select(StockCount).order_by(StockCount.created_at.desc(), StockCount.id.desc())
+
+
+async def count_lines(
+    session: AsyncSession, count_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, list[StockCountLine]]:
+    out: dict[uuid.UUID, list[StockCountLine]] = {i: [] for i in count_ids}
+    if count_ids:
+        for line in await session.scalars(
+            select(StockCountLine)
+            .where(StockCountLine.count_id.in_(count_ids))
+            .order_by(StockCountLine.item_name)
+        ):
+            out[line.count_id].append(line)
+    return out
+
+
+async def approval_statuses(
+    session: AsyncSession, request_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, str]:
+    if not request_ids:
+        return {}
+    rows = await session.execute(
+        select(ApprovalRequest.id, ApprovalRequest.status).where(
+            ApprovalRequest.id.in_(request_ids)
+        )
+    )
+    return {row[0]: row[1] for row in rows}
+
+
+async def _count_of(session: AsyncSession, request: ApprovalRequest) -> StockCount | None:
+    raw = (request.payload or {}).get("stock_count_id")
+    if not raw:
+        return None
+    found: StockCount | None = await session.scalar(
+        select(StockCount).where(StockCount.id == uuid.UUID(str(raw))).with_for_update()
+    )
+    return found
+
+
+async def _execute_count(session: AsyncSession, request: ApprovalRequest) -> None:
+    record = await _count_of(session, request)
+    if record is None or record.status != StockCountStatus.APPROVAL_PENDING.value:
+        raise ExecutionError("Sayım kaydı artık onay beklemiyor.")
+    lines = (await count_lines(session, [record.id]))[record.id]
+    try:
+        await _apply_count(session, lines, moved_by=f"{record.created_by_name} (onaylı sayım)")
+    except OperationRuleError as exc:
+        raise ExecutionError(f"Sayım farkı yazılamadı: {exc.message}") from exc
+    record.status = StockCountStatus.APPLIED.value
+    record.applied_at = request.decided_at
+    await session.flush()
+
+
+async def _close_count(session: AsyncSession, request: ApprovalRequest) -> None:
+    record = await _count_of(session, request)
+    if record is None or record.status != StockCountStatus.APPROVAL_PENDING.value:
+        return
+    rejected = ApprovalStatus(request.status) is ApprovalStatus.REJECTED
+    record.status = (StockCountStatus.REJECTED if rejected else StockCountStatus.WITHDRAWN).value
+    await session.flush()
+
+
+approvals_svc.register_executor(ActionType.STOCK_COUNT_DIFFERENCE, _execute_count)
+approvals_svc.register_closer(ActionType.STOCK_COUNT_DIFFERENCE, _close_count)

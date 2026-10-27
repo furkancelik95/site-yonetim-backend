@@ -3,8 +3,6 @@
 import pytest
 
 from site_yonetim.domain.members import (
-    BY_KEY,
-    STAFF_ROLES,
     FormFieldError,
     Relation,
     check_applicant,
@@ -66,6 +64,7 @@ def test_personel_adi() -> None:
             check_full_name(bad)
 
 
-def test_roller_sabit() -> None:
-    assert [r.key for r in STAFF_ROLES] == list(BY_KEY)
-    assert "resident" not in BY_KEY
+def test_roller_sablon_listesinde() -> None:
+    from site_yonetim.domain.roles import TEMPLATE_BY_KEY
+
+    assert {"manager", "hr", "attendant", "resident"} <= set(TEMPLATE_BY_KEY)

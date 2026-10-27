@@ -42,7 +42,7 @@ kümesi tanımlanmalı.
 | `meetings.read` / `meetings.manage` | Toplantı ve genel kurul görüntüleme / planlama, karar, iptal |
 | `polls.manage` | Anket açma ve kapatma (okuma: `announcements.read`) |
 | `contracts.manage` | Hizmet sözleşmesi ekleme, düzenleme, arşivleme (okuma: `expenses.read`) |
-| `inventory.read` / `inventory.manage` | Demirbaş ve stok görüntüleme / yönetimi (stok giriş-çıkışı dahil) |
+| `inventory.read` / `inventory.manage` | Demirbaş ve stok görüntüleme / yönetimi (stok giriş-çıkışı ve sayım dahil); **teknik varlık**, yasal muayene ve periyodik bakım (K28 — ayrı liste, aynı izin) |
 | `staff.manage` | Site personeli kaydı; vardiya planı, izin, puantaj, aktarım ve giriş-çıkış ayarı (okuma: `people.read` — personel listesi ve vardiya planı; izin listesi ve puantaj yalnız `staff.manage`, raporlu izin sağlık verisi olabilir). Puantaj aktarımını `finance.read` de okur. Kartı bağlı personel (K29) kendi vardiyasını, izin talebini ve giriş-çıkışını `/me/*` ile kullanır — izin gerekmez |
 | `approvals.rules.read` | Onay kurallarını görür (Yazılım Dokümanı ONY-01) |
 | `documents.read` | Belge arşivi: gizli dışındaki belgeleri görür ve indirir (RAP-03) |
@@ -65,15 +65,48 @@ Sakin belgeyi izinle değil kendi ucuyla görür (sakinlere açık + bölümüne
 | **Muhasebe** | `finance.read`, `finance.charge.post`, `finance.payment.record`, `finance.budget.manage`, `expenses.read`, `expenses.manage`, `finance.cash.read`, `finance.cash.manage`, `finance.reports.read`, `units.read`, `people.read`, `contracts.manage`, `inventory.read`, `documents.read` |
 | **Güvenlik** — yalnızca kapıdaki işi. Borç, kişi listesi, muhasebe **yok** | `security.visitors`, `security.packages`, `security.incidents`, `requests.create`, `announcements.read` |
 | **Teknik Personel** | `requests.read`, `requests.assign`, `requests.create`, `announcements.read`, `inventory.read`, `inventory.manage` (stok çıkışı) |
+| **İK Sorumlusu** (P18 ile eklendi; Ürün Dokümanı 5.1) | `staff.manage`, `people.read`, `announcements.read`, `requests.create` |
+| **Görevli** (kapıcı; P18 ile eklendi) | `security.packages`, `requests.create`, `announcements.read` |
 | **Sakin** | `announcements.read`, `requests.create` + kendi dairesine ait okuma (§6) |
 
-Rol adları Türkçe saklanır (yukarıdaki gibi); kodda sabit olarak tanımlanır.
+Hazır şablonların izinleri kodda **tek yerdedir**: `domain/access.py` `ROLE_PERMISSIONS`
+(`TEMPLATE_PERMISSIONS`). Yeni izin eklenince ilgili şablona oradan eklenir. API'de şablon anahtarı
+(`role_key`): `manager` · `board` · `auditor` · `accounting` · `hr` · `security` · `technical` ·
+`attendant` · `resident`.
+
+### 3.1 Siteye özel roller (P18, PLT-09)
+
+- Hazır şablonlar salt okunurdur. **Kopyala ve özelleştir**: şablonun (ya da başka özel rolün)
+  kopyası; ad, açıklama, izin seti ve düzey sitenindir (`site_roles`). Ad sitede benzersizdir ve
+  **değişmez** (onay kurallarında rolü tanıtır). Özel rol silinmez, arşivlenir; etkin ataması
+  varken arşivlenemez.
+- İzin ağacı `GET /permissions`: grup → izin, açıklama, hassasiyet (`normal` · `sensitive` ·
+  `critical`). Kritik: `members.manage`, `approvals.rules.manage`, `finance.charge.post`,
+  `modules.manage` — atanması P16b'de onaydan geçecek (K21 4. adım; yürütücü
+  `services/roles.assign_role(check_actor=False)` ile atar).
+- **Kendi izninden fazlası yok:** atayan, kendinde (tesis genelinde) olmayan bir izni içeren rolü
+  atayamaz, kaldıramaz, tanımlayamaz, özel rolün izin setine ekleyemez → 403
+  `exceeds_own_permissions`. Kişi kendi rolünü değiştiremez (409 `self_change`).
+
+### 3.2 Rol sırası (K20)
+
+Her rolün **düzeyi** vardır (1 en üst). Varsayılan: Yönetici 1 > YK Üyesi 2 > Muhasebe = Denetçi =
+İK Sorumlusu 3 > Teknik = Güvenlik = Görevli 4 (Sakin 9). Sıra **veridir**: site, şablonun ve özel
+rolün düzeyini değiştirir (PM notu). Kullanıldığı yer:
+- **Yetki devri** (ONY-03): devralan, devredilen rolle aynı ya da daha üst düzeyde bir role sahip
+  olmalı; karar anında yeniden denetlenir.
+- **Eskalasyon önerisi**: adımlardaki en üst rolün hemen üst düzeyinden bir rol önerilir; hedef
+  kuralda yine açıkça seçilir (otomatik seçim yok).
 
 ## 4. Üyelik: iki kaynak
 
 Bir kullanıcının bir sitedeki erişimi iki yoldan gelir:
 
-1. **Açık site üyeliği** — `site_memberships(site_id, user_id, role, person_id?)`
+1. **Açık site üyeliği** — `site_memberships(site_id, user_id, person_id?, is_active)` + **rol
+   atamaları** `site_role_assignments(user_id, role_key, scope_kind, block_id?, starts_at?, ends_at?)`
+   (P18). Bir kişinin birden çok rolü olabilir; **izinler birleşir**. Yalnız o anda etkin atamalar
+   sayılır (başlangıç ≤ şimdi < bitiş): süresi dolan atama bir sonraki istekte yetki vermez;
+   etkin ataması kalmamış açık üyelik erişim vermez.
 2. **Yönetim şirketi üyeliğinden türetilmiş** — `organization_memberships(organization_id, user_id, role)`:
    kullanıcı, şirketin **bütün sitelerine** aşağıdaki eşlemeyle erişir.
 
@@ -93,10 +126,22 @@ Pasif üyelik (`is_active = false`) ve pasif kullanıcı hiç erişim vermez.
 ```
 UserAccess
   user_id, full_name, kind (staff|resident), is_platform_admin
-  sites: [ SiteAccess(site_id, name, slug, role, permissions[], person_id?,
-                      is_derived, organization_id?, organization_role?) ]
+  sites: [ SiteAccess(site_id, name, slug, roles[] (ana rol önce), role = ana rol adı,
+                      permissions[] (tesis geneli, birleşim), scoped{izin → blok kümesi},
+                      person_id?, is_derived, organization_id?, organization_role?) ]
   can_see_portfolio = len(sites) > 1
 ```
+
+### 4.1 Kapsam: tesis, blok, kapı
+
+Rol ataması tesis geneline ya da bir **bloğa** yapılır (kapı kapsamı GUV-08 kapı tanımlarıyla
+bağlanacak; şimdilik 422). Blok kapsamlı atama **yalnız kapsamı uygulayan uçlarda** izin verir
+(`SCOPABLE_PERMISSIONS`: `security.visitors`, `security.packages`): kargo/ziyaretçi listesi,
+kaydı, teslim/giriş/çıkış ve güvenlik daire araması o blokların bölümleriyle sınırlanır; dışındaki
+bölüm 403 "Bu bölüm yetkili olduğunuz blokların dışında.". Diğer izinler blok kapsamında hiç
+verilmez — kapsamı bilmeyen bir uç blok iznini tesis geneli sanmasın (`SiteAccess.can` yalnız tesis
+genelini sayar, kapsamlı uçlar `blocks_for` kullanır). `/me` `permissions` ekranı açabilmek için
+birleşimi, `scoped_permissions` sınırı taşır.
 
 ## 5. Platform yöneticisi
 

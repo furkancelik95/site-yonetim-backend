@@ -94,7 +94,7 @@ def _module(ctx: SiteContext, key: ModuleKey) -> None:
         raise NotFoundError
 
 
-async def _my_accounts(ctx: SiteContext) -> list[accounts_svc.AccountRow]:
+async def my_accounts(ctx: SiteContext) -> list[accounts_svc.AccountRow]:
     rows = await ctx.session.execute(
         accounts_svc.accounts_query()
         .where(LedgerAccount.person_id == _person(ctx))
@@ -184,7 +184,7 @@ async def _units(ctx: SiteContext, today: dt.date) -> list[MyUnit]:
 
 @router.get("/home", summary="Sakin ana sayfası")
 async def home(ctx: Resident, today: TodayDep) -> HomeOut:
-    accounts = await _my_accounts(ctx)
+    accounts = await my_accounts(ctx)
     account_ids = [a.account.id for a in accounts]
     entries = list(
         await ctx.session.scalars(
@@ -254,7 +254,7 @@ async def statement(
         uuid.UUID | None, Query(description="birden çok hesabı varsa; boşsa oturan hesabı")
     ] = None,
 ) -> StatementOut:
-    accounts = await _my_accounts(ctx)
+    accounts = await my_accounts(ctx)
     if account_id is not None:
         chosen = next((a for a in accounts if a.account.id == account_id), None)
     else:  # varsayılan: oturan hesabı (aidat), yoksa ilk hesap

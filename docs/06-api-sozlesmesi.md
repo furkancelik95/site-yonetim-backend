@@ -116,7 +116,7 @@ Her hata aynı gövdeyi döner:
 | POST | `/auth/change-password` | giriş | R | `{current_password, new_password}` → 204. Geçici parolada (`must_change_password: true`) zorunlu; o zamana kadar `/me` dışındaki uçlar 403 `password_change_required`. Hatalar 422: `invalid_current_password` (hesap kilidi sayacını artırır), `weak_password` (en az 8), `password_unchanged`. Başarılıysa **diğer oturumlar iptal**, bu oturum sürer |
 | POST | `/auth/refresh` | çerez | Y | gövde yok; çerezle → yeni `access_token` + yeni çerez. Geçersiz/süresi dolmuş: 401 `session_expired`. Frontend `credentials: "include"` ile çağırır |
 | POST | `/auth/logout` | — | R | Bearer ve/veya çerez; oturumu iptal eder, çerezi siler. Her zaman 204 |
-| GET | `/me` | giriş | R | `UserAccess` — `05-yetki.md` §4 + `must_change_password`. Frontend yönlendirmesi buna bakar (geçici paroladayken de çalışır) |
+| GET | `/me` | giriş | R | `UserAccess` — `05-yetki.md` §4 + `must_change_password`. Site başına `role` (ana rol), `roles[]` (`{key, name, level, scope_kind, block_id, ends_at}`), `permissions` (birleşim) ve `scoped_permissions` (blokla sınırlı izinler). `GET /sites/{slug}` aynı alanları taşır. Frontend yönlendirmesi buna bakar (geçici paroladayken de çalışır) |
 | GET | `/me/sessions` | giriş | R | açık oturumlarım, son kullanılan üstte: `[{id, device ("Chrome · Windows"), user_agent, ip, created_at, last_used_at, expires_at, is_current}]` (Yazılım Dokümanı PLT-10) |
 | DELETE | `/me/sessions/{id}` | giriş | R | bir cihazı kapatır → 204; o cihazın jetonu bir sonraki istekte 401. Başkasının ya da kapalı oturum 404 |
 | DELETE | `/me/sessions?keep_current=true` | giriş | R | "tüm cihazlardan çık" → `{revoked, current_revoked}`; `keep_current=false` bu oturumu da kapatır (frontend girişe döner) |
@@ -230,6 +230,64 @@ kişisel veriyi görmez (`05`). Sakin kendi hesabında kendi adını görür.
 | POST | `/sites/{slug}/cash-movements` | `finance.cash.manage` | R | elle hareket `{cash_account_id, date, direction: in\|out, amount, description, reference?}` · `Idempotency-Key` |
 | POST | `/sites/{slug}/cash-transfers` | `finance.cash.manage` | R | `{from_id, to_id, date, amount, note?}` → `{outgoing, incoming}` · `Idempotency-Key` |
 | POST | `/sites/{slug}/cash-movements/{id}/reverse` | `finance.cash.manage` | R | `{reason}`; tahsilat/gider kaynaklıysa 409 · `Idempotency-Key` |
+
+### 2.8a Finans Mod P — dönem kapanışı, kasa günü, borç takibi, ödeme planı, dönem dışı ücret, muhasebe aktarımı, parametreler (servis istekleri 27–34)
+**Dönem kilidi (D-11, FIN-13):** kapanıştaki (`closing`) ya da kilitli (`locked`) döneme **hiçbir
+finansal kayıt yazılamaz/değişemez** — tahakkuk ve ters kaydı, tahsilat, iade, devir bakiye, gider
+(kayıt/ödeme/düzeltme), kasa hareketi (elle, aktarım, geri alma, hesap açılışı), dönem dışı ücret ve
+iptali, ödeme planı. Hepsi **409 `period_locked`** ("Tarih kilitli döneme düşüyor (Eylül 2026); kayıt
+yazılamaz — en erken Ekim 2026 (01.10.2026)."). Kilitli döneme ait kaydın ters kaydı da reddedilir.
+Süreli açık (`temp_open`) dönemde yazma serbest; denetim kaydına `reason = period_unlocked` satırı
+düşer. Merkezi kontrol: `services/period_lock.ensure_writable`.
+
+**Onay (K21, yeni modüller):** dönem kilidi açma, kasa farkı, ödeme planı, dönem dışı ücret, finansal
+etkili parametre ve ihtarname için yürürlükte onay kuralı varsa uç **202** döner; kayıt
+`status: "approval_pending"` + `approval_request_id` taşır, onaylanınca yürür, ret/geri çekmede
+`rejected`. Kural yoksa doğrudan yürür (201/200).
+
+| Yöntem | Yol | İzin | Not |
+|---|---|---|---|
+| GET | `/sites/{slug}/fiscal-periods?year=` | `finance.read` | yılın dönemleri (yeniden eskiye, bu aya kadar): `{period: "2026-09", label, status: open\|closing\|locked\|temp_open, is_past, exceptions, closing_started_by/_at, locked_by/_at, unlock_until, unlock_reason, unlock_request_id, history[{at, by, action, note}]}` |
+| GET | `/sites/{slug}/fiscal-periods/{YYYY-MM}/close-checklist` | `finance.read` | `{period, items[{key, label, ok, detail, link, required, exception}]}` — `charge`, `cash_days`, `approvals`, `accounting` zorunlu; `expenses`, `bank` uyarı |
+| POST | `…/fiscal-periods/{p}/start-close` | `finance.charge.post` | `{exceptions?: {madde: gerekçe ≥ 10}}` → Kapanışta. 409 `period_not_ended`, `checklist_incomplete`, `invalid_status` |
+| POST | `…/fiscal-periods/{p}/lock` | `finance.charge.post` | **iki kişi kuralı**: başlatan kilitleyemez (409 `four_eyes`); süreli açık dönemi herkes kilitler |
+| POST | `…/fiscal-periods/{p}/reopen` | `finance.charge.post` | Kapanışta → Açık |
+| POST | `…/fiscal-periods/{p}/unlock-requests` | `finance.charge.post` | `{reason ≥ 20, hours: 4\|24\|72}` → süreli açık (200) ya da "Dönem kilidi açma" kuralıyla 202. 409 `unlock_pending` |
+| GET | `/sites/{slug}/cash-accounts/{id}/days` | `finance.cash.read` | `{kind, open_days[] (son 60 gün, hareketli sayılmamış), closed[CashDay] (son 90)}` |
+| POST | `/sites/{slug}/cash-accounts/{id}/days/close` | `finance.cash.manage` | `{date, counted, reason?}` → CashDay `{id, date, system_balance, counted, difference, reason, status, approval_request_id, closed_by, closed_at}` (201/202). 422 `difference_reason`; 409 `day_closed`, `not_cash`. Kapanan güne kasa hareketi 422 `cash_day_closed` |
+| GET | `/sites/{slug}/receivables/aging` | `finance.read` | `{as_of, total, buckets[{key, label, count, amount}], by_block[{block, 0_30, 31_60, 61_90, 90_plus, total}]}` — toplam = borçlular toplamı |
+| GET | `/sites/{slug}/collection-status` | `finance.read` | `{account_id: {plan_status, letter_status, last_action_at, reminder_count}}` |
+| GET | `/sites/{slug}/accounts/{id}/collection-timeline` | `finance.read` | sayfalı, yeniden eskiye: `{id, kind: reminder\|call\|note\|demand_letter\|payment_plan, channel, note, stage, by, at, letter?, plan?}` |
+| POST | `/sites/{slug}/accounts/{id}/collection-actions` | `finance.payment.record` | `{kind, channel?, note?}` — **gönderim yok (K5)**: `delivered: false`, mesaj bunu söyler |
+| POST | `/sites/{slug}/collection-actions/bulk` | `finance.payment.record` | `{account_ids[≤500], channel}` → `{count}` |
+| POST | `/sites/{slug}/accounts/{id}/demand-letters` | `finance.payment.record` | `{method: hand\|registered_mail\|notary, sent_on, tracking_no?, note?}` (iadeli/noterde takip no zorunlu) → 201/202 |
+| PATCH | `/sites/{slug}/demand-letters/{id}` | `finance.payment.record` | `{served_on}` (gönderimden önce/gelecekte 422) |
+| GET | `/sites/{slug}/payment-plans?status=` | `finance.read` | sayfalı + `counts{active, broken, completed, cancelled, approval_pending, remaining_total}` |
+| GET · POST | `/sites/{slug}/accounts/{id}/payment-plans` | `finance.read` · `finance.payment.record` | POST `{amount ≤ açık bakiye, installment_count 2–36, first_due_date ≥ bugün, note?}`; `Idempotency-Key`. 409 `plan_exists`. Plan: `{…, total, installments[{no, due_date, amount, paid, status: paid\|partial\|open\|overdue}], status, paid_total, remaining, tolerance_days}`. Yürürlükte: yapılandırılan kalemler kapanır (alacak + `payment_plan_closures`), taksitler vadeli borç (`source: payment_plan`) |
+| POST | `/sites/{slug}/payment-plans/{id}/cancel` | `finance.payment.record` | `{reason ≥ 5}`; ödenmemiş tutar ilk vadesiyle yeniden açılır. Onay bekleyen 409 `plan_pending`, tamamlanan 409 `plan_completed` |
+| GET | `/sites/{slug}/resident/payment-plans` | sakin (kendi hesapları) | yürürlükteki/iptal planları |
+| GET · PUT | `/sites/{slug}/settings/ad-hoc-charges` | `finance.read` · `finance.charge.post` | `{sources: {reservation\|service\|renovation\|penalty\|other: {mode: immediate\|next_period, due_days 0–60}}}` (varsayılan anında, 10 gün) |
+| GET · POST | `/sites/{slug}/ad-hoc-charges[?status=]` | `finance.read` · `finance.charge.post` | sayfalı · `{unit_id, account_kind, source, description, amount, due_date?}` → 201/202; `Idempotency-Key`; 422 `no_account`. `next_period` ücret sonraki tahakkukta "ek kalemler" olarak yazılır (koşu ters kaydedilirse yeniden bekler) |
+| POST | `/sites/{slug}/ad-hoc-charges/{id}/cancel` | `finance.charge.post` | `{reason}` — yazılmışsa ters kayıt; 409 `already_cancelled`, `charge_pending` |
+| GET · PUT | `/sites/{slug}/accounting/mappings` | `finance.read` · `finance.charge.post` | `{items[{key, label, debit_account, credit_account}]}` — versiyonlu; kod rakam+nokta (422 `fields.{key}.debit_account`) |
+| GET | `/sites/{slug}/accounting/exports/preview?period=` | `finance.read` | `{period, vouchers[{key, source, source_id, date, description, debit_account, credit_account, amount}], already_exported, total, missing_mappings[]}` |
+| POST | `/sites/{slug}/accounting/exports` | `finance.charge.post` | `{period}` → 201 ExportBatch; 409 `mapping_missing`, `nothing_to_export`. Fiş bir kez aktarılır (kilit) |
+| GET | `/sites/{slug}/accounting/exports` · `/{id}/file?format=csv\|xlsx` | `finance.read` | sayfalı geçmiş · dosya (CSV `;`, UTF-8 BOM; Kivi biçimi K7 sonrası) |
+| GET | `/sites/{slug}/finance-parameters` | `finance.read` | `{current, current_period, earliest_financial_period, defaults, financial_keys, versions (son 100), scheduled}` |
+| POST | `/sites/{slug}/finance-parameters/versions` | `finance.charge.post` | `{effective_period, values: {değişen alanlar}}` → 201/202. Finansal etkili erken dönem 422 `period_locked` (`fields.effective_period`); 422 `no_change` |
+| GET | `/sites/{slug}/charge-runs/preview/diff?charge_date=&due_date=` | `finance.read` | **fark raporu**: `{period, base_period, threshold, compared, counts{increase, decrease, new, missing}, rows[{account_id, unit_name, person_name, account_kind, previous, current, change_percent, flag}]}` |
+
+Finans parametreleri (varsayılan): `reminder_days [3,10,30]`, `demand_letter_day 60`, `proration day`
+(K9), `diff_threshold_percent 10`, `bank_auto_match high`, `plan_tolerance_days 10`,
+`plan_suspends_late_fee true`, `budget_warn_percent 90`, `due_day 10` (K25), `charge_source
+budget_plan` (K23), `late_fee_enabled false` · `late_fee_monthly_rate_percent "5.00"` (≤ 5) ·
+`late_fee_method daily` · `late_fee_grace_days 5` (K2), `allocation_order late_fee_first` (K24),
+`debtor_restriction_enabled false` · `_min_amount "0.00"` · `_min_days 90` (K11). Finansal etkili
+(sonraki dönemden, onaya tabi): kıst, vade günü, tahakkuk kaynağı, gecikme alanları, mahsup sırası,
+plan süresince gecikme. **Tahakkuk motoru bu parametreleri henüz okumuyor (P03b).**
+
+Gece/saatlik iş `run-finance-jobs`: süresi dolan süreli açmayı kilitler, borç takibi kademelerini
+(aynı açık vade için bir kez; ödeme planındaki hesaba yazılmaz) kaydeder, bozulan planı bildirir.
 
 ### 2.9 Rapor
 | Yöntem | Yol | İzin | Durum | Not |
@@ -395,10 +453,16 @@ içindir"). Sakin, `requests.read` izni olmadan da kendi taleplerini görür (`0
 ### 2.16 Site kullanıcıları (servis isteği 12)
 | Yöntem | Yol | İzin | Durum | Not |
 |---|---|---|---|---|
-| GET | `/sites/{slug}/roles` | `members.manage` | R | sabit roller `[{key, name, description}]`: `manager` · `board` · `auditor` · `accounting` · `security` · `technical` |
-| GET | `/sites/{slug}/members` | `members.manage` | R | personel (sakinler hariç), dizi: `{id, full_name, email, role_key, role_name, is_active, source: site\|organization, last_login_at, invited_at}`. `organization`: yönetim şirketinden gelen erişim |
-| POST | `/sites/{slug}/members` | `members.manage` | R | `{full_name, email, role_key}` → `{member, temporary_password}` (201, `Cache-Control: no-store`). Yeni e-posta → yeni kullanıcı + geçici parola (yalnız bu yanıtta; ilk girişte değiştirme zorunlu). Kayıtlı e-posta → mevcut kullanıcıya rol, `temporary_password: null`. Zaten sitede 409 `already_member` |
-| PATCH | `/sites/{slug}/members/{id}` | `members.manage` | R | `{role_key?, is_active?}`. Kapatma kullanıcının oturumlarını sonlandırır. 409: `derived_membership` (şirketten gelen erişim), `last_manager` (en az bir etkin yönetici kalır), `self_change` (kendi kaydı) |
+| GET | `/permissions` | giriş | R | izin ağacı `[{group, permissions: [{key, description, sensitivity: normal\|sensitive\|critical}]}]` (PLT-09) |
+| GET | `/sites/{slug}/roles?include_archived=` | `members.manage` ya da `approvals.rules.read` | R | roller (sakin hariç), düzey sırasıyla: `{key, name, description, kind: system\|custom, base_key, level, permissions, is_active, is_critical, holder_count}`. Şablonlar: `manager` · `board` · `auditor` · `accounting` · `hr` · `security` · `technical` · `attendant` |
+| POST | `/sites/{slug}/roles` | `members.manage` | R | kopyala ve özelleştir `{base_key, name, description?, permissions?, level?}` → 201. Ad değişmez, sitede benzersiz. 403 `exceeds_own_permissions`: kendinizde olmayan izin |
+| PATCH | `/sites/{slug}/roles/{key}` | `members.manage` | R | özel rol `{description?, permissions?, level?, is_active?}`; hazır şablonda yalnız `{level}` (aksi 409 `system_role`). Arşivde etkin atama varsa 409 `role_in_use`; son yönetici kuralı (409 `last_manager`) |
+| GET | `/sites/{slug}/members` | `members.manage` | R | personel (sakinler hariç), dizi: `{id, full_name, email, role_key, role_name, roles: [{assignment_id, role_key, role_name, level, scope_kind, block_id, block_name, starts_at, ends_at, is_current}], is_active, source: site\|organization, last_login_at, invited_at}`. `role_key`/`role_name` ana rol (geriye uyum; rolü yoksa null). `organization`: yönetim şirketinden gelen erişim |
+| POST | `/sites/{slug}/members` | `members.manage` | R | `{full_name, email, role_key, scope_kind?, block_id?, starts_at?, ends_at?}` → `{member, temporary_password}` (201, `Cache-Control: no-store`). Yeni e-posta → yeni kullanıcı + geçici parola (yalnız bu yanıtta; ilk girişte değiştirme zorunlu). Kayıtlı e-posta → mevcut kullanıcıya rol, `temporary_password: null`. Zaten sitede 409 `already_member` |
+| PATCH | `/sites/{slug}/members/{id}` | `members.manage` | R | `{role_key?, is_active?}`. `role_key`: **ana rolü değiştir** (diğer tesis kapsamlı personel rolleri kapanır). Kapatma kullanıcının oturumlarını sonlandırır. 409: `derived_membership` (şirketten gelen erişim), `last_manager` (`members.manage` izinli en az bir etkin kullanıcı kalır), `self_change` (kendi kaydı); 403 `exceeds_own_permissions` |
+| POST | `/sites/{slug}/members/{id}/role-assignments` | `members.manage` | R | rol ata `{role_key, scope_kind: site\|block, block_id?, starts_at?, ends_at?}` → 201 güncel üye. 422 (rol, blok, tarih; `gate` kapı tanımları gelene kadar 422), 403 `exceeds_own_permissions`, 409 `assignment_exists` · `self_change` |
+| DELETE | `/sites/{slug}/members/{id}/role-assignments/{assignment_id}` | `members.manage` | R | rolü kaldır: atama bitiş zamanıyla kapanır (silinmez). 403 `exceeds_own_permissions`, 409 `assignment_ended` · `last_manager` · `self_change` |
+| GET | `/sites/{slug}/role-assignments?user_id=&page=` | `members.manage` | R | rol atama geçmişi (sayfalı, yeni üstte): `{id, user_id, user_name, role_key, role_name, scope_kind, block_name, starts_at, ends_at, assigned_by, assigned_at, removed_by, removed_at}` |
 
 ### 2.17 Sakin kayıt başvurusu (servis isteği 13)
 | Yöntem | Yol | İzin | Durum | Not |
@@ -451,6 +515,51 @@ uçta yok, oy tablosu denetim kaydına yazılmaz. Sonuç danışma niteliğinded
 | — | personel kartı ek alanları (istek 35, K29) | | R | `payroll_no?` (harf, rakam, tire; ≤ 20; büyük harfe çevrilir; site içinde tekil → 409 `payroll_no_taken`), `user_id?` (bağlı giriş hesabı; sakin olmayan site üyesi, tek karta → 409 `user_taken`). Yanıtta + `user_name`, `access_closed_at`. Ayrılış tarihi **geçince** bağlı hesabın site üyeliği pasifleşir (gece `run-staff-jobs`; erişim çözümlemesi de ertesi gün düşürür); kartı yeniden açmak erişimi açmaz |
 | GET | `/sites/{slug}/staff/linkable-users` | `staff.manage` | R | karta bağlanabilecek hesaplar `[{user_id, full_name, email, role_name, staff_id?}]` |
 | GET | `/sites/{slug}/staff/{id}/open-items?after=` | `staff.manage` | R | `{future_shifts, first_shift, pending_leaves}` — ayrılışta bilgi; kayıt engellenmez |
+
+### 2.20b Operasyon ekleri ve teknik varlık (servis istekleri 53–58; Yazılım Dokümanı OPS-01..06, HIZ-06, HIZ-07; K28, K29, K14)
+Çekirdek (modül yok). Küçük listeler **dizi** döner (envanter uçlarıyla aynı; üst sınır uçta yazılı).
+Endeks, tüketim, miktar ve çarpan **ondalık metin**; para `Money`. Saha fotoğrafı istekte veri adresi
+(`data:image/jpeg;base64,…`, içerik imzası JPEG/PNG/WebP, ≤ 2 MB), dosya deposuna yazılır; yanıtta
+yalnız `photo_id` döner.
+
+| Yöntem | Yol | İzin | Durum | Not |
+|---|---|---|---|---|
+| GET · POST · PATCH | `/sites/{slug}/keys` · `/{id}` | `requests.assign` **ya da** `security.visitors` | R | `{kind: key\|card\|remote, code (site içinde tekil, Türkçe büyük harf), name, area?, authorized_roles[] (boş: herkes), is_active}` → `{…, loan, overdue}` |
+| POST | `/sites/{slug}/keys/{id}/loans` | aynı | R | `{to_name, to_phone?, role?, due_at (ileri)}` → 201. Açık teslim tekil (kısmi indeks): 409 `key_out`; rol yetkili değil 409 `not_authorized`; pasif anahtar 409 `key_inactive` |
+| POST · GET | `/sites/{slug}/key-loans/{id}/return` · `/key-loans` | aynı | R | iade (409 `already_returned`); geçmiş son 100 |
+| GET · POST | `/sites/{slug}/deposited-keys` · `/{id}/receive\|hand\|return` | aynı | R | emanet; `hand {name, id_checked}` — ad yetkili listesinde (harf duyarsız, Türkçe harf katlanır) değilse 409 `not_authorized` (+ sakine bildirim), kimlik kontrolü yoksa 422 `fields.id_checked`, süre geçmişse 409 `expired`. Verilince sakine bildirim. `status: requested\|held\|handed\|returned\|expired` (expired okumada) |
+| GET · POST | `/sites/{slug}/resident/deposited-keys` | sakin | R | `{authorized: [{name, phone?}], valid_until ≥ bugün, note?, unit_id?}` (boş: ilk bölüm) |
+| GET · POST | `/sites/{slug}/stock-counts` | `inventory.read` · `inventory.manage` | R | `{lines: [{item_id, counted}]}` → `{id, status, approval_request_id, lines: [{item_id, name, system, counted, diff}], created_by, created_at, applied_at}`. Fark "Sayım farkı" hareketi; **"Stok sayım farkı" onay kuralı varsa 202** `approval_pending`, hareket onaydan sonra (ret → `rejected`, geri çekme → `withdrawn`, yürütülemedi → `failed`). 422 `fields.lines` / `fields.lines.{item_id}`, bilinmeyen malzeme 404 |
+| GET · POST · PATCH | `/sites/{slug}/checklist-templates` · `/{id}` | `requests.assign` | R | `{name, items: [{text, type: yesno\|number\|score, photo_required, min?, max?}], is_active}`; ilk listede 5 hazır şablon |
+| GET · POST | `/sites/{slug}/inspections` | `requests.assign` | R | `{template_id, location, answers: [{value, photo?}], open_requests=true}` → `{…, answers: [{text, type, value, ok, photo_id}], score, failed, opened_request_ids}`. Olumsuz her madde ortak alan talebi (talep modülü açıksa). Denetim değişmez |
+| GET · POST · PATCH | `/sites/{slug}/insurance-policies` · `/{id}` | `expenses.read` · `expenses.manage` | R | `{kind, insurer, policy_no, coverage?, premium, start, end > start, area?, note?}` → `+ days_left, warning: "60"\|"30"\|"expired"\|null, documents[]` |
+| GET · POST · PATCH | `/sites/{slug}/insurance-claims` · `/{id}` | aynı | R | `{policy_id, source?, description, incident_date ≤ bugün, claimed?}`; PATCH `{status, paid?, paid_on?}` — açık → iletildi/ret; iletildi → ödendi/ret/açık; ödendi tutar zorunlu (422 `fields.paid`); diğer geçiş 409 `invalid_status` |
+| GET · POST · PATCH | `/sites/{slug}/meters` · `/{id}` | `units.manage` | R | `{kind, serial (aktif sayaçlarda tekil), unit_id \| area, unit_label?, multiplier, installed_on?, status: active\|faulty}` (`?include_replaced=true`) |
+| GET · POST | `/sites/{slug}/meter-readings?period=YYYY-AA` | `units.manage` | R | dönem: `{period, rows: [{meter, reading, last}], missing}`; okuma `{meter_id, period, value \| unreadable_reason, photo?, replacement?: {old_final, new_serial, new_initial}}`. Endeks düşerse 422 `index_decreased`; okunmuş dönem 409 `already_read` (okunamadı ve anormal yeniden okunabilir); ±%X (ayar, varsayılan 50) sapma `anomaly` |
+| POST | `/sites/{slug}/meter-readings/{id}/approve\|reread` | `units.manage` | R | yalnız `anomaly` (409 `invalid_status`) |
+| GET · PUT | `/sites/{slug}/operation-settings` | `units.manage` | R | `{meter_anomaly_percent (1–1000), meter_photo_required}` |
+| GET | `/sites/{slug}/resident/meter-readings` · `/{id}/photo` | sakin | R | bölümlerinin sayaçları ve son 24 okuma; fotoğraf |
+| GET · POST · PATCH | `/sites/{slug}/task-templates` · `/{id}` | `requests.read` · `requests.assign` | R | `{name, description?, frequency: daily\|weekdays\|monthly, weekdays[0..6], month_day 1–28, time_from, time_to > time_from, location?, assignee, staff_member_id? (K29), photo_required, checklist_template_id?, is_active}` |
+| GET · POST | `/sites/{slug}/tasks?date=&staff_member_id=` · `/tasks/{template_id}/complete` | `requests.read` | R | günün görevleri `[{template, done, status: upcoming\|due\|late\|done\|failed}]`; kapatma `{date?, status: done\|failed, reason?, note?, photo?}` → 201; 404 "Bu gün için görev yok", 409 `already_done`, 422 `photo_required` / `fields.reason`, ileri tarih 409 `future_task` |
+| GET | `/sites/{slug}/tasks/report` | `requests.read` | R | son 7 gün `{from, to, rows: [{template_id, name, assignee, expected, done, failed, rate}], rate}` |
+| GET · POST | `/sites/{slug}/me/tasks?date=` · `/me/tasks/{template_id}/complete` | personel kartı (K29) | R | yalnız kendi kartına atanmış görevler; kartı yoksa 403 |
+| GET | `/sites/{slug}/asset-inspection-templates` | `inventory.read` | R | yasal muayene şablonları (kategori, önerilen periyot) |
+| GET · POST · PATCH | `/sites/{slug}/technical-assets` · `/{id}` | `inventory.read` · `inventory.manage` | R | **K28: mali demirbaştan (`/assets`) ayrı.** `{category, name, location?, brand?, model?, serial_no?, installed_on?, warranty_until?, contract_id?, service_company?, status: working\|faulty\|out_of_service\|nonconforming, note?, inspections?: [...]}` → `TV-0001`, `next_inspection`; ayrıntı `{asset, inspections, records, plans, documents}` |
+| POST · PATCH | `/sites/{slug}/technical-assets/{id}/inspection-schedules` · `/asset-inspection-schedules/{id}` | `inventory.manage` | R | `{template_key?, name?, period_months 1–120, last_inspected_on? \| next_due_on?, is_active?}`; sonraki tarih = son muayene + periyot |
+| GET | `/sites/{slug}/asset-inspections/calendar?within_days=` | `inventory.read` | R | yaklaşan önce; `warning: "60"\|"30"\|"7"\|"overdue"` |
+| POST | `/sites/{slug}/asset-inspection-schedules/{id}/records` | `inventory.manage` | R | **multipart** `inspected_on, result: pass\|fail, inspector?, note?, cost?, report (zorunlu)`; rapor belge arşivine bağlanır; olumsuz → yüksek öncelikli düzeltme talebi + varlık `nonconforming`. Kayıt değişmez |
+| GET · POST · PATCH | `/sites/{slug}/maintenance-plans` · `/{id}` | `inventory.read` · `inventory.manage` | R | `{asset_id, title, description?, period_unit: week\|month, period_count 1–60, next_due_on, responsible?, contract_id?, checklist_template_id?, is_active}` |
+| POST | `/sites/{slug}/maintenance-plans/{id}/runs` | `inventory.manage` | R | sıradaki bakımın iş emrini şimdi aç (409 `run_exists` / `plan_inactive`) |
+| GET · POST | `/sites/{slug}/maintenance-runs?status=&asset_id=` · `/{id}/complete` | `inventory.read` · `inventory.manage` | R | kapatma `{status: done\|skipped, done_on?, cost?, note?, issue_found, issue_description?}` — sorun → arıza talebi + varlık `faulty`; sonraki tarih hesaplanır |
+| GET | `/sites/{slug}/technical-assets/{id}/timeline` | `inventory.read` | R | `{events: [{date, at, kind, title, detail, cost, request_id, request_number, request_status, document_id}], annual_costs: [{year, total}]}` |
+| POST · GET | `/sites/{slug}/subject-documents` · `?subject_type=&subject_id=` · `/{id}/download` | kaydın izni (sigorta: `expenses.*`, varlık: `inventory.*`) | R | **multipart** `subject_type: insurance_policies\|insurance_claims\|technical_assets, subject_id, title?, file` → belge arşivine (`documents.subject_type/subject_id`, gizlilik "yönetim") yazılır; belge modülü kapalı olsa da kayıttan indirilir |
+| GET | `/sites/{slug}/operation-photos/{id}` | sayaç: `units.manage` · denetim: `requests.assign` · görev: `requests.read` | R | saha fotoğrafı; bağlı olmadığı kayıttan 404 |
+
+Zamanlanmış işler: `run-operations-jobs` (günde bir, gece) — yasal muayene 60/30/7 gün ve
+gecikme uyarısı (`inventory.manage` sahiplerine), planı gelen bakımın iş emri, poliçe 60/30 gün ve
+bitiş uyarısı (`expenses.manage`), dünün görev özeti (`requests.assign`); `run-key-reminders`
+(saatlik) — iade zamanı geçen anahtar. Hepsi tekrar güvenli (bildirim tekil anahtarı). **K14:**
+sayaç okumaları tahakkuk motoruna (`by_meter_consumption`) henüz beslenmez.
 
 ### 2.20a İnsan kaynakları (servis istekleri 36–39, Yazılım Dokümanı IK-02..05, K29)
 Modül `staff`. Saatler `"SS:DD"`, saat toplamları **metin** (`"6.67"`), dakikalar tam sayı.
@@ -518,8 +627,9 @@ henüz bağlı değil (K21). Diğer işlem tipleri için kural şimdiden tanıml
 | POST | `/sites/{slug}/approvals/{id}/reject` · `/request-revision` | onaycı | R | `{comment}` zorunlu (422 `fields.comment`) |
 | POST | `/sites/{slug}/approvals/{id}/withdraw` | talep eden | R | bekleyen ya da revizyondaki talep |
 | POST | `/sites/{slug}/approvals/{id}/resubmit` | talep eden | R | revizyondan sonra: `{title?, amount?, rule? (kural değişikliğinde yeni öneri)}` → yeni sürüm, zincir baştan |
-| GET · POST | `/sites/{slug}/delegations` | personel | R | devirlerim `[{…, state: scheduled\|active\|ended, direction: given\|received}]`; POST `{to_user_id, roles: [kendi rolüm], starts_at, ends_at, note?}` |
-| GET | `/sites/{slug}/delegations/candidates` | personel | R | devredebileceğim kişiler (aynı rol) |
+| GET · POST | `/sites/{slug}/delegations` | personel | R | devirlerim `[{…, state: scheduled\|active\|ended, direction: given\|received}]`; POST `{to_user_id, roles: [kendi rollerim (ad)], starts_at, ends_at, note?}`; devralan aynı ya da üst düzeyde role sahip olmalı (422 `to_user_id`) |
+| GET | `/sites/{slug}/delegations/candidates` | personel | R | `{my_roles, candidates: [{user_id, name, role, roles, can_take}]}` — aynı ya da üst düzeyde role sahip kişiler; `can_take`: rollerimden alabildikleri (ONY-03, K20) |
+| GET | `/sites/{slug}/approval-rules/escalation-suggestion?roles=&roles=` | `approvals.rules.read` | R | `{role}` — adımlardaki en üst rolün hemen üst düzeyinden rol önerisi (K20); yoksa null |
 | POST | `/sites/{slug}/delegations/{id}/end` | devreden | R | erken sonlandırma |
 
 `status`: `pending` · `revision_requested` · `approved` · `executed` · `execution_failed`
@@ -549,7 +659,7 @@ Saklama süresi (K8) bilgi amaçlıdır, otomatik silme yapılmaz. Geçerlilik u
 `run-document-expiry`: 60 ve 30 gün kala ve bitince belge yöneticilerine (`documents.manage`;
 gizlide ayrıca `documents.confidential`) uygulama içi bildirim (`operations`, `document.expiring`
 · `document.expired`, `link_entity: documents`); aynı uyarı bir kez. Belgeyi başka kayda bağlamak
-için şemada `subject_type/subject_id` var (bugün uçta yok; modüller servis üzerinden bağlar).
+için şemada `subject_type/subject_id` var; poliçe, hasar dosyası, teknik varlık ve muayene raporu bunu kullanır (§2.20b `subject-documents`).
 "Okudum" onayı (ILT-01, istek 71) sonraki adım.
 
 ### 2.24 Yapı, kişiler ve kayıt (servis istekleri 19–26, Yazılım Dokümanı YAP-01..10)

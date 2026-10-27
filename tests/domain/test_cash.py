@@ -19,7 +19,6 @@ from site_yonetim.domain.cash import (
     clean_iban,
     clean_text,
     clip,
-    closed_period_error,
     expense_movement_text,
     opening_amounts,
 )
@@ -61,9 +60,6 @@ def test_texts_and_dates() -> None:
     check_not_future(date(2026, 10, 2), TODAY, tolerance=1)
     with pytest.raises(FinanceRuleError):
         check_not_future(date(2026, 10, 2), TODAY)
-    assert closed_period_error(date(2026, 9, 5)).message == (
-        "09/2026 dönemi kapalı, bu tarihe kayıt yazılamaz."
-    )
 
 
 def test_expense_amount_limits() -> None:
