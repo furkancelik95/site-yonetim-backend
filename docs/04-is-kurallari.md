@@ -123,10 +123,13 @@ draft ──tebliğ──> notified ──7 gün itiraz süresi──> finalized
 
 | `frequency` | Dönem tutarı |
 |---|---|
-| `monthly` | `round_money(annual_amount / 12)` |
-| `quarterly` | `round_money(annual_amount / 4)` |
+| `monthly` | `distribute(annual_amount, [1]*12)[ay − 1]` |
+| `quarterly` | `distribute(annual_amount, [1]*4)[çeyrek]` |
 | `yearly` | `annual_amount` |
 | `one_time` | `annual_amount` |
+
+**Yıllık toplam her zaman korunur** (D-5, Yazılım Dokümanı §8.18; 27.10.2026): 1.000 TL/yıl →
+Ocak–Nisan 83,34, Mayıs–Aralık 83,33; 12 ayın toplamı 1.000,00.
 
 **Kalem hangi kesime girer** (karar: Furkan, 30.09.2026 — dokümanda tutar vardı, zaman yoktu):
 
@@ -140,11 +143,17 @@ draft ──tebliğ──> notified ──7 gün itiraz süresi──> finalized
 Önizleme, takvim gereği o dönem kesilmeyen kalemleri `not_due_items` olarak listeler.
 
 > **Referans uygulamada durum:** aylık tutar her ay ayrı yuvarlanıyor. 1.000 TL/yıl → 83,33 × 12 =
-> 999,96 — yılda 4 kuruş kayıp. **Doğrusu:** yıllık tutar 12 aya `distribute()` ile bölünür
-> (`distribute(1000, [1]*12)` → ilk 4 ay 83,34, sonraki 8 ay 83,33), dönem sırasına göre ilgili
-> pay alınır. Bu davranış değişikliği Burhan'ın onayına tabidir → `12-acik-kararlar.md` #K3.
+> 999,96 — yılda 4 kuruş kayıp. **Doğrusu (uygulandı, P03b):** yıllık tutar 12 aya `distribute()`
+> ile bölünür, dönem sırasına göre ilgili pay alınır (`12` #K3).
 
 ## 4. Tahakkuk motoru
+
+**Girdi kaynağı (K23, 27.10.2026):** finans parametresi `charge_source` — `budget_plan`
+(işletme projesi, varsayılan) ya da `billing_rule` (aidat kuralları, Yazılım Dokümanı FIN-02).
+Aidat kuralı kalemi motora dönem tutarı hazır gelir (`pool`), bölüm tipi katsayıları,
+bölüm muafiyetleri (`payın %X'i indirim`, açıklamaya "· %50 muafiyet (boş daire)") ve "malik
+kalemi" (her durumda malike) taşıyabilir. Kural versiyonludur: dönemde geçerli sürüm, yürürlüğü o
+döneme kadar başlamış en son **aktif** sürümdür; sürüm "Aidat kuralı" onayından geçer.
 
 İşletme projesinin her kalemini alır, kapsamdaki bölümlere dağıtım kuralına göre paylaştırır ve
 borcu doğru kişinin doğru cari hesabına yazar. **Saftır:** veritabanına dokunmaz, aynı girdi
@@ -222,6 +231,14 @@ Kalemin `charge_type.payer_rule`'u belirler. Tip bulunamazsa varsayılan `occupa
 
 "Aktif" = `unit_party.is_active_on(charge_date)`. Kiracı eylülde çıktıysa ekim tahakkuku
 malikin oturan hesabına yazılır.
+
+**Kıst (K9, FIN-05 S3; 27.10.2026):** finans parametresi `proration`.
+- `day` (varsayılan, PM kararı): dönemin (tahakkuk ayının) her günü için yukarıdaki kuralla
+  ödeyen bulunur; aynı kişinin günleri tek dilim olur. Her satır `distribute(tutar, [gün…])` ile
+  dilimlere bölünür — 15 Ekim'de çıkan kiracı 15/31, malik 16/31; satır toplamı korunur.
+  Açıklamaya `· kıst 15/31 gün` eklenir. Etkin kimsenin olmadığı günlerin payı yazılmaz,
+  `no_active_party` uyarısı (`01.10.2026–10.10.2026 arasında …`).
+- `month`: tahakkuk tarihinde etkin kişi ayın tamamını öder (eski davranış).
 Hesap = `(unit_id, person_id, kind)` eşleşen, **kapalı olmayan** `ledger_account`. Ödeyen hiç
 yoksa → `no_active_party`; ödeyen var ama hesabı yoksa → `missing_ledger_account`.
 
@@ -301,9 +318,15 @@ Her borca `min(kalan, açık_tutar)` yazılır, kalan azaltılır, kalan bitince
 
 > **Referans uygulamada durum:** avans, **sonraki tahakkuka mahsup edilmiyor.** Bakiye doğru
 > çıkıyor (defter toplamı), ama yeni borç için `payment_allocation` üretilmediğinden mahsup
-> dökümünde yeni borç "açık" görünüyor. **Doğrusu:** tahakkuk kaydedilirken hesapta
-> kullanılmamış avans varsa, avans önce yeni borca mahsup edilir (mahsup kaydı üretilir).
-> → `12-acik-kararlar.md` #K4.
+> dökümünde yeni borç "açık" görünüyor. **Doğrusu (uygulandı, P03b — D-6):** tahakkuk
+> kesinleşince (ve satır düzeltmesinde) hesapta kullanılmamış avans varsa avans yeni borca
+> mahsup sırasına göre düşülür, en eski kullanılmamış tahsilattan `payment_allocations` yazılır.
+> Kullanılabilir avans = min(Σ kullanılmamış tahsilat, açık borç − bakiye): iade edilmiş avans
+> yeniden kullanılmaz. Ters kaydı alınan borca yapılmış mahsup serbest kalır (ödeme avansa döner).
+> Ekstre satırında `allocated` / `advance_applied`.
+
+**Mahsup sırası (K24):** finans parametresi `allocation_order` — `late_fee_first` (varsayılan)
+ya da `principal_first`; tahsilatta ve avans mahsubunda uygulanır.
 
 ## 6. Gecikme tazminatı — KMK m.20
 
@@ -332,8 +355,22 @@ def late_fee(outstanding: Decimal, due_date: date, as_of: date, policy) -> Decim
 - Tazminatın kendisine tazminat işletilmez (yalnız anapara borçlarından hesaplanır).
 
 > **Referans uygulamada durum:** hesap fonksiyonu yazılmış ve politika tablosu var, ama **hiçbir
-> yerde çağrılmıyor** — deftere tek gecikme kaydı düşmüyor. Uygulayan iş (ay sonu + ödeme anı)
-> **yazılmalı.** Oran ve yöntemin hukuki teyidi açık → `12-acik-kararlar.md` #K2.
+> yerde çağrılmıyor** — deftere tek gecikme kaydı düşmüyor. Oran ve yöntemin hukuki teyidi açık
+> → `12-acik-kararlar.md` #K2.
+
+**Uygulama (P03b, 27.10.2026 — K2: site kararı, varsayılan kapalı):**
+- Açma ve yöntem finans parametresidir: `late_fee_enabled`, `late_fee_monthly_rate_percent`
+  (en fazla 5,00), `late_fee_method` (`daily` oran × gün / 30 · `full_month` başlamış 30 gün = tam
+  ay), `late_fee_grace_days`, `late_fee_cap_percent` (tavan: ana borcun %X'i, 0 = yok),
+  `late_fee_minimum_amount`. Yöntem yürürlüğünden önceki günlere işletilmez.
+- Ana borç: tahakkuk, dönem dışı ücret, devir ve ödeme planı taksiti (ters kaydı alınmamış).
+  Kısmi ödemede açık tutar mahsup tarihinin ertesinden düşer; plan kapatması plan yürürlük
+  tarihinde. Ödeme planı süresince (plan bozulmadıkça) taksite işlemez (`plan_suspends_late_fee`).
+- Ana borç başına o güne kadar işlemiş **toplam** hesaplanır, daha önce yazılan
+  (`late_fee_accruals`) düşülür; yalnız fark yazılır → tekrar güvenli (FIN-03 S3).
+- Ay sonu işi `run-finance-jobs` içinde önceki ay için bir kez (`late_fee_runs`); hareket tarihi
+  ayın son günü (kilitliyse bugün, "önceki döneme ait"); vadesi en eski ana borcun vadesi (aynı
+  vadede önce gecikme kapanır).
 
 ## 7. Tahakkuk kaydı ve ters kayıt
 
@@ -358,7 +395,27 @@ Dönem (`periods`) yoksa oluşturulur.
 - Geçerli koşu = `status = posted` **ve** `reversal_of_run_id IS NULL`.
 - Sıradaki dönem = son geçerli koşunun ayından bir sonraki ay. Hiç geçerli koşu yoksa **içinde
   bulunulan ay.**
-- `charge_date` = o ayın **1'i**, `due_date` = `charge_date + 14 gün`.
+- `charge_date` = o ayın **1'i**, `due_date` = o ayın `due_day`'i (K25 finans parametresi,
+  varsayılan **10**; kesimden önceye düşerse sonraki ayın aynı günü). Sabit "+14 gün" kalktı.
+
+### 7.2.1 Taslak → onay → kesinleştirme (FIN-05, K21; 27.10.2026)
+- Koşu durumu: `draft` → `approval_pending` → `approved` → `posted` (· `rejected`, `cancelled`).
+  Taslak önizlemenin anlık görüntüsünü saklar (`charge_run_drafts`); kesinleşme bu görüntüden
+  yapılır — onaycının gördüğü tutar yazılır. Dönem başına en fazla bir açık taslak.
+- "Tahakkuk" onay kuralı **varsa** kaydetme taslağı onaya gönderir (202); onay tahakkuk
+  tarihinden sonra gelirse hemen, önce gelirse tahakkuk tarihinde gece işiyle kesinleşir.
+  Kural **yoksa** doğrudan kesilir (201, eski davranış).
+- Otomatik takvim kural varsa taslağı kesimden `draft_lead_days` (varsayılan 5) gün önce
+  hazırlar ve ayarı açan yönetici adına onaya gönderir; kural yoksa kesim gününde keser.
+
+### 7.4 Kesinleşmiş tahakkukta satır düzeltmesi (FIN-05, D-10; 27.10.2026)
+- Bir satırın tutarı düzeltilir (gerekçe zorunlu). Borcun güncel hareketi ters kaydedilir
+  (`reversal_of_entry_id`), düzeltilmiş toplamla yeni borç yazılır (aynı vade, `source = charge`).
+  Orijinal satır ve hareket değişmez (`charge_adjustments` iz tutar).
+- Orijinal dönem açıksa ikisi orijinal tarihle aynı döneme; **kilitliyse** bugünün tarihiyle açık
+  döneme, açıklamada "(önceki döneme ait — 05/2026)".
+- "Tahakkuk düzeltme" onay kuralı varsa onay bekler (202). Ödenmiş tutar avansa döner, yeni
+  borca mahsup edilir. Koşunun tamamı sonradan ters kaydedilirse güncel borç ters kaydedilir.
 
 > **Referans uygulamada durum — HATA, kopyalama:** sıradaki dönem "tarihi en büyük koşu + 1 ay"
 > diye hesaplanıyor ve **ters kayıt koşuları da hesaba giriyor.** Ters kayıt koşusunun tarihi
@@ -389,6 +446,10 @@ Kaydedilmiş koşu **düzenlenmez, silinmez.** Yanlışsa ters kaydı alınır:
 Değişebilen tek şeyler durum alanlarıdır: `charge_runs.status → reversed`,
 `expenses.is_reversed → true`, `expenses.paid_on` (bir kez, ödenince).
 Uç noktalarda bu tablolar için `DELETE` yoktur.
+
+**Dönem kilidi (FIN-13, 26.10.2026):** kapanıştaki ya da kilitli döneme tarihli hiçbir kayıt yazılmaz; kilitli döneme ait kaydın ters kaydı da alınmaz (orijinalin dönemini değiştirir). Hepsi 409 `period_locked`, mesajda en erken açık dönem. Tek kontrol noktası `services/period_lock.ensure_writable`; yeni bir finansal yazma yolu yazan onu çağırır. Kapanan kasa gününe (FIN-11) hareket yazılmaz (`cash_day_closed`).
+
+**Ödeme planı (FIN-12, §8.9):** plan yürürlüğe girince tutar kadar alacak hareketi yazılır ve en eski açık borçları FIFO kapatır (`payment_plan_closures`; açık borç = borç − mahsuplar − plan kapatmaları); her taksit ayrı vadeli borçtur. Taksitler eşit, kuruş artığı ilk taksitlere. İptalde ödenmemiş taksitler kapanır, aynı tutar yapılandırılan en eski vadeyle yeniden borç olarak açılır. Bakiye hiçbir adımda değişmez.
 
 ## 9. Gider
 

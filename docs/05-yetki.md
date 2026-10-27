@@ -42,7 +42,7 @@ kümesi tanımlanmalı.
 | `meetings.read` / `meetings.manage` | Toplantı ve genel kurul görüntüleme / planlama, karar, iptal |
 | `polls.manage` | Anket açma ve kapatma (okuma: `announcements.read`) |
 | `contracts.manage` | Hizmet sözleşmesi ekleme, düzenleme, arşivleme (okuma: `expenses.read`) |
-| `inventory.read` / `inventory.manage` | Demirbaş ve stok görüntüleme / yönetimi (stok giriş-çıkışı dahil) |
+| `inventory.read` / `inventory.manage` | Demirbaş ve stok görüntüleme / yönetimi (stok giriş-çıkışı ve sayım dahil); **teknik varlık**, yasal muayene ve periyodik bakım (K28 — ayrı liste, aynı izin) |
 | `staff.manage` | Site personeli kaydı; vardiya planı, izin, puantaj, aktarım ve giriş-çıkış ayarı (okuma: `people.read` — personel listesi ve vardiya planı; izin listesi ve puantaj yalnız `staff.manage`, raporlu izin sağlık verisi olabilir). Puantaj aktarımını `finance.read` de okur. Kartı bağlı personel (K29) kendi vardiyasını, izin talebini ve giriş-çıkışını `/me/*` ile kullanır — izin gerekmez |
 | `approvals.rules.read` | Onay kurallarını görür (Yazılım Dokümanı ONY-01) |
 | `documents.read` | Belge arşivi: gizli dışındaki belgeleri görür ve indirir (RAP-03) |
@@ -73,15 +73,48 @@ giren farkını onaylayamaz. Tedarikçi teklif linki oturumsuz (`/public/quote-l
 | **Muhasebe** | `finance.read`, `finance.charge.post`, `finance.payment.record`, `finance.budget.manage`, `expenses.read`, `expenses.manage`, `finance.cash.read`, `finance.cash.manage`, `finance.reports.read`, `units.read`, `people.read`, `contracts.manage`, `inventory.read`, `documents.read` |
 | **Güvenlik** — yalnızca kapıdaki işi. Borç, kişi listesi, muhasebe **yok** | `security.visitors`, `security.packages`, `security.incidents`, `requests.create`, `announcements.read` |
 | **Teknik Personel** | `requests.read`, `requests.assign`, `requests.create`, `announcements.read`, `inventory.read`, `inventory.manage` (stok çıkışı) |
+| **İK Sorumlusu** (P18 ile eklendi; Ürün Dokümanı 5.1) | `staff.manage`, `people.read`, `announcements.read`, `requests.create` |
+| **Görevli** (kapıcı; P18 ile eklendi) | `security.packages`, `requests.create`, `announcements.read` |
 | **Sakin** | `announcements.read`, `requests.create` + kendi dairesine ait okuma (§6) |
 
-Rol adları Türkçe saklanır (yukarıdaki gibi); kodda sabit olarak tanımlanır.
+Hazır şablonların izinleri kodda **tek yerdedir**: `domain/access.py` `ROLE_PERMISSIONS`
+(`TEMPLATE_PERMISSIONS`). Yeni izin eklenince ilgili şablona oradan eklenir. API'de şablon anahtarı
+(`role_key`): `manager` · `board` · `auditor` · `accounting` · `hr` · `security` · `technical` ·
+`attendant` · `resident`.
+
+### 3.1 Siteye özel roller (P18, PLT-09)
+
+- Hazır şablonlar salt okunurdur. **Kopyala ve özelleştir**: şablonun (ya da başka özel rolün)
+  kopyası; ad, açıklama, izin seti ve düzey sitenindir (`site_roles`). Ad sitede benzersizdir ve
+  **değişmez** (onay kurallarında rolü tanıtır). Özel rol silinmez, arşivlenir; etkin ataması
+  varken arşivlenemez.
+- İzin ağacı `GET /permissions`: grup → izin, açıklama, hassasiyet (`normal` · `sensitive` ·
+  `critical`). Kritik: `members.manage`, `approvals.rules.manage`, `finance.charge.post`,
+  `modules.manage` — atanması P16b'de onaydan geçecek (K21 4. adım; yürütücü
+  `services/roles.assign_role(check_actor=False)` ile atar).
+- **Kendi izninden fazlası yok:** atayan, kendinde (tesis genelinde) olmayan bir izni içeren rolü
+  atayamaz, kaldıramaz, tanımlayamaz, özel rolün izin setine ekleyemez → 403
+  `exceeds_own_permissions`. Kişi kendi rolünü değiştiremez (409 `self_change`).
+
+### 3.2 Rol sırası (K20)
+
+Her rolün **düzeyi** vardır (1 en üst). Varsayılan: Yönetici 1 > YK Üyesi 2 > Muhasebe = Denetçi =
+İK Sorumlusu 3 > Teknik = Güvenlik = Görevli 4 (Sakin 9). Sıra **veridir**: site, şablonun ve özel
+rolün düzeyini değiştirir (PM notu). Kullanıldığı yer:
+- **Yetki devri** (ONY-03): devralan, devredilen rolle aynı ya da daha üst düzeyde bir role sahip
+  olmalı; karar anında yeniden denetlenir.
+- **Eskalasyon önerisi**: adımlardaki en üst rolün hemen üst düzeyinden bir rol önerilir; hedef
+  kuralda yine açıkça seçilir (otomatik seçim yok).
 
 ## 4. Üyelik: iki kaynak
 
 Bir kullanıcının bir sitedeki erişimi iki yoldan gelir:
 
-1. **Açık site üyeliği** — `site_memberships(site_id, user_id, role, person_id?)`
+1. **Açık site üyeliği** — `site_memberships(site_id, user_id, person_id?, is_active)` + **rol
+   atamaları** `site_role_assignments(user_id, role_key, scope_kind, block_id?, starts_at?, ends_at?)`
+   (P18). Bir kişinin birden çok rolü olabilir; **izinler birleşir**. Yalnız o anda etkin atamalar
+   sayılır (başlangıç ≤ şimdi < bitiş): süresi dolan atama bir sonraki istekte yetki vermez;
+   etkin ataması kalmamış açık üyelik erişim vermez.
 2. **Yönetim şirketi üyeliğinden türetilmiş** — `organization_memberships(organization_id, user_id, role)`:
    kullanıcı, şirketin **bütün sitelerine** aşağıdaki eşlemeyle erişir.
 
@@ -101,10 +134,22 @@ Pasif üyelik (`is_active = false`) ve pasif kullanıcı hiç erişim vermez.
 ```
 UserAccess
   user_id, full_name, kind (staff|resident), is_platform_admin
-  sites: [ SiteAccess(site_id, name, slug, role, permissions[], person_id?,
-                      is_derived, organization_id?, organization_role?) ]
+  sites: [ SiteAccess(site_id, name, slug, roles[] (ana rol önce), role = ana rol adı,
+                      permissions[] (tesis geneli, birleşim), scoped{izin → blok kümesi},
+                      person_id?, is_derived, organization_id?, organization_role?) ]
   can_see_portfolio = len(sites) > 1
 ```
+
+### 4.1 Kapsam: tesis, blok, kapı
+
+Rol ataması tesis geneline ya da bir **bloğa** yapılır (kapı kapsamı GUV-08 kapı tanımlarıyla
+bağlanacak; şimdilik 422). Blok kapsamlı atama **yalnız kapsamı uygulayan uçlarda** izin verir
+(`SCOPABLE_PERMISSIONS`: `security.visitors`, `security.packages`): kargo/ziyaretçi listesi,
+kaydı, teslim/giriş/çıkış ve güvenlik daire araması o blokların bölümleriyle sınırlanır; dışındaki
+bölüm 403 "Bu bölüm yetkili olduğunuz blokların dışında.". Diğer izinler blok kapsamında hiç
+verilmez — kapsamı bilmeyen bir uç blok iznini tesis geneli sanmasın (`SiteAccess.can` yalnız tesis
+genelini sayar, kapsamlı uçlar `blocks_for` kullanır). `/me` `permissions` ekranı açabilmek için
+birleşimi, `scoped_permissions` sınırı taşır.
 
 ## 5. Platform yöneticisi
 
@@ -191,3 +236,35 @@ UserAccess
 - Erişim çözümleme: `src/SiteYonetimi.Infrastructure/Identity/AccessService.cs`
 - İstek filtresi (404/403): `src/SiteYonetimi.Web/Infrastructure/SiteContext.cs`
 - Platform yöneticisi: `src/SiteYonetimi.Web/Controllers/PlatformController.cs` (`RequirePlatformAdminAttribute`)
+
+
+### 8.3 SMS koduyla giriş, iki adımlı doğrulama, step-up (P5 — 27.10.2026)
+
+- **Telefonla giriş** (sakin, saha): `POST /auth/otp/request` → `POST /auth/otp/verify`. Kayıtlı
+  olsun olmasın aynı yanıt; kodun yalnız HMAC özeti saklanır (`otp_challenges`); sınırlar
+  Yazılım Dokümanı §4.7 (60 sn, günde 10, 5 hatada 15 dk kilit) + IP başına istek sınırı.
+- **İki adımlı doğrulama** (TOTP, RFC 6238): yönetici rollerinde zorunlu (`domain/mfa.py`
+  `MFA_SITE_ROLES`, şirket rolü, platform yöneticisi). 2FA kurulu kullanıcının girişi **bekleyen
+  oturum** açar; kod girilene dek her uç 401 `mfa_required` (`api/deps.mfa_passed`). Sır
+  `core/secretbox` ile şifreli (`DATA_ENCRYPTION_KEY`, yoksa JWT sırrından türetilir); yedek
+  kodların yalnız özeti; aynı TOTP adımı iki kez geçmez.
+- **Geçiş süresi:** kurmamış yönetici ilk girişinden itibaren `MFA_GRACE_DAYS` gün uyarıyla
+  girer (`mfa_setup_deadline`); süre dolunca `password_changed` kapısı 403 `mfa_setup_required`
+  döner — açık kalanlar: `/me`, `/me/security`, `/auth/mfa/setup|enable`, parola değişikliği.
+- **Step-up:** `Depends(require_step_up())` — oturumun son güçlü doğrulaması (`verified_at`) 5
+  dakikadan eskiyse 403 `step_up_required`; `financial=True, sensitive=False` yalnız telefon son
+  24 saatte değiştiyse ister. Yeniden doğrulama `POST /auth/step-up`.
+- **Davet:** yeni kullanıcıya geçici parola yerine 72 saatlik tek kullanımlık bağlantı
+  (`user_invitations`, jetonun yalnız özeti); kabul edince parola belirlenir.
+- Kimlik olaylarının hepsi `auth_events`'e yazılır (hedef telefon/e-posta yazılmaz).
+- İzinler: `notifications.manage` (yönetici — SMS hesabı, kota, sessiz saat, teslim kayıtları),
+  `reports.schedule` (yönetici, muhasebe — planlı raporlar).
+
+### Şeffaflık raporu izinleri (P12, 27.10.2026 — K32)
+
+| İzin | Roller | Ne |
+|---|---|---|
+| `transparency.manage` | Yönetici, Muhasebe | şeffaflık raporu taslağı hazırlama, silme, yayına gönderme |
+| `transparency.publish` | Yönetici | "Şeffaflık raporu" onay kuralı yoksa doğrudan yayın |
+
+Acil durum: başlatma/bitirme `announcements.publish` ya da `security.incidents`; pano ve yoklama ayrıca `security.visitors`. Anket isimli dökümü (K31) `polls.manage`.

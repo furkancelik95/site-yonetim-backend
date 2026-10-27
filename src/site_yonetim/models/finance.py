@@ -9,6 +9,7 @@ her zaman ters kayıtla yapılır.
 import datetime as dt
 import uuid
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import (
     ARRAY,
@@ -53,18 +54,33 @@ _COMPONENT_KIND_CHECK = "kind NOT IN ('composite', 'fixed_per_unit')"
 
 
 class Period(TenantMixin, Base):
-    """Mali dönem (ay). Kapalı döneme kayıt yazılamaz."""
+    """Mali dönem (ay) ve kapanış durumu (FIN-13). Kapanıştaki ve kilitli döneme finansal kayıt
+    yazılamaz (`services/periods.ensure_writable`). Geçmiş `period_events`'te (değişmez)."""
 
     __tablename__ = "periods"
     __table_args__ = tenant_table_args(
         UniqueConstraint("site_id", "year", "month"),
         CheckConstraint("month BETWEEN 1 AND 12", name="month_range"),
         CheckConstraint(enum_check("status", PeriodStatus), name="status"),
+        CheckConstraint("(status = 'temp_open') = (unlock_until IS NOT NULL)", name="unlock_until"),
+        tenant_fk("unlock_request_id", "approval_requests"),
     )
 
     year: Mapped[int]
     month: Mapped[int]
     status: Mapped[str] = mapped_column(Text, default=PeriodStatus.OPEN.value)
+    # gerekçeli istisnalar: kontrol listesi maddesi → gerekçe (kapanış raporunda listelenir)
+    exceptions: Mapped[dict[str, str]] = mapped_column(
+        JSONB, default=dict, server_default=text("'{}'::jsonb")
+    )
+    closing_started_by_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
+    closing_started_by: Mapped[str | None] = mapped_column(Text)
+    closing_started_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    locked_by: Mapped[str | None] = mapped_column(Text)
+    locked_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    unlock_until: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    unlock_reason: Mapped[str | None] = mapped_column(Text)
+    unlock_request_id: Mapped[uuid.UUID | None]  # onay bekleyen süreli açma talebi
 
 
 class ExpenseCategory(TenantMixin, Base):
@@ -150,6 +166,7 @@ class BudgetPlan(TenantMixin, Base):
 
     __tablename__ = "budget_plans"
     __table_args__ = tenant_table_args(
+        tenant_fk("finalize_request_id", "approval_requests"),
         CheckConstraint(enum_check("status", BudgetStatus), name="status"),
         CheckConstraint("fiscal_year BETWEEN 2000 AND 2100", name="fiscal_year"),
     )
@@ -160,6 +177,8 @@ class BudgetPlan(TenantMixin, Base):
     notified_on: Mapped[dt.date | None] = mapped_column(Date)
     objection_deadline: Mapped[dt.date | None] = mapped_column(Date)
     finalized_on: Mapped[dt.date | None] = mapped_column(Date)
+    # "Bütçe" onay kuralı varsa kesinleştirme onay bekler (D-16); onaylanınca kesinleşir.
+    finalize_request_id: Mapped[uuid.UUID | None]
 
 
 class BudgetItem(TenantMixin, Base):
@@ -289,16 +308,30 @@ class SiteFinanceSummary(TenantMixin, Base):
 
 
 class ChargeRun(TenantMixin, Base):
-    """Bir dönemin tahakkuk koşusu. Bir dönem için en fazla bir geçerli koşu (kısmi indeks)."""
+    """Bir dönemin tahakkuk koşusu. Bir dönem için en fazla bir geçerli koşu ve en fazla bir açık
+    taslak (kısmi indeksler). Taslağın önizlemesi `charge_run_drafts`'tadır; kesinleşince
+    `charges` yazılır (FIN-05)."""
 
     __tablename__ = "charge_runs"
     __table_args__ = tenant_table_args(
         tenant_fk("period_id", "periods"),
         tenant_fk("budget_plan_id", "budget_plans"),
+        tenant_fk("approval_request_id", "approval_requests"),
         ForeignKeyConstraint(
             ["site_id", "reversal_of_run_id"], ["charge_runs.site_id", "charge_runs.id"]
         ),
         CheckConstraint(enum_check("status", ChargeRunStatus), name="status"),
+        CheckConstraint("source IN ('budget_plan', 'billing_rule')", name="source"),
+        CheckConstraint(
+            "source <> 'budget_plan' OR budget_plan_id IS NOT NULL", name="budget_plan_source"
+        ),
+        Index(
+            "uq_charge_runs_open_draft",
+            "site_id",
+            "period_id",
+            unique=True,
+            postgresql_where=text("status IN ('draft', 'approval_pending', 'approved')"),
+        ),
         Index(
             "uq_charge_runs_valid_period",
             "site_id",
@@ -315,7 +348,9 @@ class ChargeRun(TenantMixin, Base):
     )
 
     period_id: Mapped[uuid.UUID]
-    budget_plan_id: Mapped[uuid.UUID]
+    # K23: tahakkuk kaynağı — işletme projesi ya da aidat kuralları (finans parametresi)
+    source: Mapped[str] = mapped_column(Text, default="budget_plan", server_default="budget_plan")
+    budget_plan_id: Mapped[uuid.UUID | None]
     status: Mapped[str] = mapped_column(Text, default=ChargeRunStatus.DRAFT.value)
     charge_date: Mapped[dt.date] = mapped_column(Date)
     due_date: Mapped[dt.date] = mapped_column(Date)
@@ -323,6 +358,23 @@ class ChargeRun(TenantMixin, Base):
     posted_by: Mapped[str | None] = mapped_column(Text)  # işlemi yapanın adı
     reversal_of_run_id: Mapped[uuid.UUID | None]
     reason: Mapped[str | None] = mapped_column(Text)  # ters kayıt gerekçesi
+    approval_request_id: Mapped[uuid.UUID | None]  # "Tahakkuk" onay talebi
+    created_by: Mapped[str | None] = mapped_column(Text)  # taslağı hazırlayan (iş: "Otomatik…")
+
+
+class ChargeRunDraft(TenantMixin, Base):
+    """Taslak koşunun önizleme anlık görüntüsü (borçlar, satırlar, uyarılar). Onaylanan taslak
+    bu görüntüden kesinleşir — onaycının gördüğü tutar deftere yazılan tutardır. Denetim kaydına
+    girmez (büyük); koşunun kendisi denetlenir."""
+
+    __tablename__ = "charge_run_drafts"
+    __table_args__ = tenant_table_args(
+        tenant_fk("charge_run_id", "charge_runs"),
+        UniqueConstraint("charge_run_id"),
+    )
+
+    charge_run_id: Mapped[uuid.UUID]
+    snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB)
 
 
 class Charge(TenantMixin, Base):
@@ -348,12 +400,18 @@ class ChargeLine(TenantMixin, Base):
     __table_args__ = tenant_table_args(
         tenant_fk("charge_id", "charges"),
         tenant_fk("budget_item_id", "budget_items"),
+        tenant_fk("billing_rule_version_id", "billing_rule_versions"),
         CheckConstraint(enum_check("allocation_kind", AllocationKind), name="allocation_kind"),
+        CheckConstraint(
+            "num_nonnulls(budget_item_id, billing_rule_version_id) = 1", name="one_source"
+        ),
         Index("ix_charge_lines_budget_item", "site_id", "budget_item_id"),
     )
 
     charge_id: Mapped[uuid.UUID] = mapped_column(index=True)
-    budget_item_id: Mapped[uuid.UUID]
+    # dayanak: işletme projesi kalemi YA DA aidat kuralı sürümü (K23)
+    budget_item_id: Mapped[uuid.UUID | None]
+    billing_rule_version_id: Mapped[uuid.UUID | None]
     description: Mapped[str] = mapped_column(Text)
     amount: Mapped[Decimal] = mapped_column(MONEY)
     allocation_kind: Mapped[str] = mapped_column(Text)
@@ -473,14 +531,21 @@ class ChargeSchedule(TenantMixin, Base):
         UniqueConstraint("site_id"),
         CheckConstraint("charge_day BETWEEN 1 AND 28", name="charge_day_range"),
         CheckConstraint("due_days BETWEEN 0 AND 60", name="due_days_range"),
+        CheckConstraint("draft_lead_days BETWEEN 0 AND 15", name="draft_lead_days_range"),
     )
 
     enabled: Mapped[bool] = mapped_column(default=False)
     charge_day: Mapped[int] = mapped_column(default=1)
+    # K25 sonrası kullanılmaz: vade finans parametresi `due_day` (ayın günü). Eski satırlar için.
     due_days: Mapped[int] = mapped_column(default=14)
+    # FIN-05: "Tahakkuk" onay kuralı varsa taslak kesim gününden bu kadar gün önce hazırlanır.
+    draft_lead_days: Mapped[int] = mapped_column(default=5, server_default="5")
     notify_on_run: Mapped[bool] = mapped_column(default=True)
     # Açıldığı gün (İstanbul): o günden önceki kesim günleri geriye dönük kesilmez.
     enabled_on: Mapped[dt.date | None] = mapped_column(Date)
+    # Ayarı açan: gece işinin hazırladığı taslak onaya onun adına gönderilir (FIN-05).
+    enabled_by_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
+    enabled_by: Mapped[str | None] = mapped_column(Text)
 
 
 class ChargeScheduleRun(TenantMixin, Base):

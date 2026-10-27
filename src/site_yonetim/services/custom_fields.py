@@ -30,11 +30,10 @@ from site_yonetim.domain.custom_fields import (
     is_sensitive_label,
 )
 from site_yonetim.domain.members import FORM_ERROR
+from site_yonetim.domain.roles import RoleCatalog
 from site_yonetim.models import CustomField, CustomFieldValue
+from site_yonetim.services import roles as roles_svc
 
-STAFF_ROLE_NAMES = frozenset(
-    {"Yönetici", "Yönetim Kurulu Üyesi", "Denetçi", "Muhasebe", "Güvenlik", "Teknik Personel"}
-)
 SENSITIVE_MESSAGE = (
     "Bu alan özel nitelikli kişisel veri içeriyor olabilir. KVKK gereği bu tür veri "
     "tutulmamalıdır. Etiketi değiştirin ya da gerekçeyle devam edin."
@@ -69,11 +68,19 @@ class FieldData:
     sensitive_reason: str | None = None
 
 
-def _roles(value: list[str] | None, errors: dict[str, str], key: str) -> list[str]:
-    roles = list(dict.fromkeys(value or []))
-    if any(r not in STAFF_ROLE_NAMES for r in roles):
-        errors[key] = "Geçersiz rol seçildi."
-    return roles
+def _roles(
+    value: list[str] | None, errors: dict[str, str], key: str, catalog: RoleCatalog
+) -> list[str]:
+    """Sitenin etkin personel rolleri (hazır şablon ya da siteye özel rol — P18), adıyla."""
+    staff = {r.name for r in catalog.staff}
+    roles: list[str] = []
+    for name in dict.fromkeys(value or []):
+        role = catalog.by_name(name)
+        if role is None or role.name not in staff:
+            errors[key] = "Geçersiz rol seçildi."
+        else:
+            roles.append(role.name)
+    return list(dict.fromkeys(roles))
 
 
 async def save(
@@ -101,10 +108,12 @@ async def save(
     category = data.kvkk_category or (field.kvkk_category if field else None)
     if category not in {c.value for c in KvkkCategory}:
         errors["kvkk_category"] = "KVKK kategorisi seçin."
+    catalog = await roles_svc.load_catalog(session)
     view_roles = _roles(
         data.view_roles if data.view_roles is not None else (field.view_roles if field else []),
         errors,
         "view_roles",
+        catalog,
     )
     if not view_roles and "view_roles" not in errors:
         errors["view_roles"] = "En az bir rol görebilmeli."
@@ -114,6 +123,7 @@ async def save(
         else (field.edit_roles if field else ["Yönetici"]),
         errors,
         "edit_roles",
+        catalog,
     )
     if errors:
         raise CustomFieldError(422, "validation", FORM_ERROR, errors)

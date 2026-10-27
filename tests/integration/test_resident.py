@@ -157,40 +157,8 @@ async def test_announcements_and_requests(sakin: tuple[World, dict[str, str]]) -
     assert denied.json()["error"]["code"] == "unit_not_yours"
 
 
-async def test_site_expenses_with_invoice(sakin: tuple[World, dict[str, str]]) -> None:
+async def test_k32_sakin_gider_dokumu_ve_fatura_kalkti(sakin: tuple[World, dict[str, str]]) -> None:
+    """K32: sakin giderleri ve fatura görüntüsünü tek tek görmez; yerine şeffaflık raporu."""
     w, headers = sakin
-    category = w.lookups["category"]
-
-    async def expense(amount: str, files: dict[str, object] | None = None) -> str:
-        response = await w.api.post(
-            w.url("/expenses"),
-            data={"expense_category_id": category, "description": "Asansör bakımı",
-                  "amount": amount, "date": "2026-06-10"},
-            files=files,  # type: ignore[arg-type]
-            headers=w.headers,
-        )  # fmt: skip
-        assert response.status_code == 201, response.text
-        return str(response.json()["data"]["id"])
-
-    await expense(
-        "500.00", files={"document": ("fatura.pdf", b"%PDF-1.4 fatura", "application/pdf")}
-    )
-    reversed_id = await expense(
-        "200.00", files={"document": ("iptal.pdf", b"%PDF-1.4 iptal", "application/pdf")}
-    )
-    await w.post(f"/expenses/{reversed_id}/reverse", {"reason": "Mükerrer"})
-
-    body = (await get(w, headers, "/expenses", params={"year": 2026})).json()
-    assert (body["total"], body["total_amount"]) == (1, "500.00")  # geri alınan ve düzeltme yok
-    [item] = body["items"]
-    assert (item["description"], item["category"], item["is_paid"]) == (
-        "Asansör bakımı",
-        "İşletme Giderleri",
-        False,
-    )
-    invoice = await get(w, headers, f"/files/{item['document_id']}")
-    assert invoice.status_code == 200
-    assert invoice.content == b"%PDF-1.4 fatura"
-    reversed_doc = (await w.get(f"/expenses/{reversed_id}")).json()["stored_file_id"]
-    assert (await get(w, headers, f"/files/{reversed_doc}")).status_code == 404
+    assert (await get(w, headers, "/expenses", params={"year": 2026})).status_code == 404
     assert (await get(w, headers, f"/files/{uuid.uuid4()}")).status_code == 404

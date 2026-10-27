@@ -155,6 +155,7 @@ class AccountSpec:
     organization_role: str | None = None
     site_slug: str | None = None
     site_role: str | None = None
+    phone: str | None = None  # P5: saha ve sakin telefon + SMS koduyla da girer
 
 
 # docs/10 §2. Sakin hesabı ayrıca kurulur: Aksu'da en borçlu oturan hesabın kişisine bağlanır.
@@ -166,11 +167,19 @@ ACCOUNTS: tuple[AccountSpec, ...] = (
         "mimoza@demo.local", "Hakan Tunç", site_slug="mimoza-apartmani", site_role="Yönetici"
     ),
     AccountSpec(
-        "guvenlik@demo.local", "Recep Er", site_slug="aksu-konaklari", site_role="Güvenlik"
+        "guvenlik@demo.local",
+        "Recep Er",
+        site_slug="aksu-konaklari",
+        site_role="Güvenlik",
+        phone="+905550000002",
     ),
     AccountSpec("denetci@demo.local", "Nuray Şen", site_slug="aksu-konaklari", site_role="Denetçi"),
     AccountSpec(
-        "teknik@demo.local", "Ergün Kılıç", site_slug="aksu-konaklari", site_role="Teknik Personel"
+        "teknik@demo.local",
+        "Ergün Kılıç",
+        site_slug="aksu-konaklari",
+        site_role="Teknik Personel",
+        phone="+905550000003",
     ),
 )
 
@@ -250,7 +259,9 @@ LAST_MONTH_FACTOR = Decimal("0.90")
 OLDER_MONTHS_BONUS = Decimal("0.04")
 CASH_SHARE = 0.25  # ~%25 nakit, gerisi havale
 PAYMENT_DAYS = (2, 25)  # ayın 2'si – 25'i
-RESIDENT = AccountSpec("sakin@demo.local", "", site_slug="aksu-konaklari", site_role="Sakin")
+RESIDENT = AccountSpec(
+    "sakin@demo.local", "", site_slug="aksu-konaklari", site_role="Sakin", phone="+905550000001"
+)
 
 
 # --- Duyuru ve talep (docs/10 §1.4) ----------------------------------------------
@@ -416,3 +427,139 @@ VENDORS: tuple[tuple[str, str, str, str | None, str], ...] = (
     ("Doruk Asansör Bakım", "4444444444", "Asansör bakım", "TR810004600000000055501234",
      "passive"),
 )  # fmt: skip
+
+# --- Operasyon ekleri ve teknik varlık (servis istekleri 53–58; HIZ-06/07; K28) --------------
+# Anahtar: tip, kod, ad, alan, yetkili roller (boş: herkes).
+FACILITY_KEYS: tuple[tuple[str, str, str, str, tuple[str, ...]], ...] = (
+    ("key", "TS-01", "Toplantı salonu", "Sosyal tesis", ()),
+    ("remote", "OT-01", "Otopark bariyer kumandası", "Otopark", ("Güvenlik", "Görevli")),
+    ("card", "SP-01", "Spor salonu kartı", "Sosyal tesis", ()),
+    ("key", "TK-01", "Teknik oda", "B Blok bodrum", ("Teknik Personel", "Yönetici")),
+)
+# Poliçe: tür, sigortacı, no, kapsam, prim, başlangıç (bugünden gün), bitiş (bugünden gün)
+INSURANCE_POLICIES: tuple[tuple[str, str, str, str, str, int, int], ...] = (
+    (
+        "building",
+        "Anadolu Sigorta",
+        "KNT-2026-0418",
+        "Deprem, yangın, su baskını",
+        "18400.00",
+        -320,
+        45,
+    ),
+    (
+        "liability",
+        "Allianz",
+        "SRM-77812",
+        "Üçüncü şahıs sorumluluk 5.000.000 TL",
+        "6200.00",
+        -100,
+        265,
+    ),
+    ("elevator", "Axa Sigorta", "ASN-5521", "Asansör kaza ve sorumluluk", "3900.00", -200, 165),
+)
+# Teknik varlık: kategori, ad, konum, marka, seri no, sorumlu firma,
+#   muayene (şablon anahtarı, son muayene — bugünden gün; None: yok)
+TECHNICAL_ASSETS: tuple[tuple[str, str, str, str, str, str | None, str | None, int | None], ...] = (
+    (
+        "elevator",
+        "A Blok asansörü",
+        "A Blok",
+        "Kone",
+        "KN-55871",
+        "Asansör Bakım Ltd.",
+        "elevator_periodic",
+        -340,
+    ),
+    (
+        "elevator",
+        "B Blok asansörü",
+        "B Blok",
+        "Otis",
+        "OT-90214",
+        "Asansör Bakım Ltd.",
+        "elevator_periodic",
+        -120,
+    ),
+    (
+        "generator",
+        "Jeneratör",
+        "Teknik oda",
+        "Aksa",
+        "AJ-1100",
+        "Enerji Servis A.Ş.",
+        "generator_load_test",
+        -310,
+    ),
+    (
+        "hydrophore",
+        "Hidrofor",
+        "B Blok bodrum",
+        "Wilo",
+        "WL-3321",
+        "Pompa Servis",
+        "pressure_vessel",
+        -200,
+    ),
+    (
+        "fire_system",
+        "Yangın tüpleri",
+        "Tüm bloklar",
+        "Sesa",
+        "YT-SET-24",
+        "Yangın Güvenlik Ltd.",
+        "fire_extinguisher",
+        -359,
+    ),
+    ("camera", "Kamera sistemi", "Güvenlik kulübesi", "Hikvision", "HK-NVR-08", None, None, None),
+)
+# Bakım planı: varlık adı, iş, periyot (birim, sayı), sıradaki tarih (bugünden gün), sorumlu
+MAINTENANCE_PLANS: tuple[tuple[str, str, str, int, int, str], ...] = (
+    ("A Blok asansörü", "Aylık asansör bakımı", "month", 1, 3, "Asansör Bakım Ltd."),
+    ("B Blok asansörü", "Aylık asansör bakımı", "month", 1, 10, "Asansör Bakım Ltd."),
+    ("Hidrofor", "Hidrofor filtre ve basınç kontrolü", "month", 3, 0, "Pompa Servis"),
+    ("Jeneratör", "Jeneratör yağ ve akü kontrolü", "month", 6, 40, "Enerji Servis A.Ş."),
+)
+# Görev şablonu: ad, sıklık, haftanın günleri, ayın günü, başlangıç, bitiş, yer, atanan,
+#   personel kartı (STAFF_CARDS sırası; None), fotoğraf zorunlu
+TASK_TEMPLATES: tuple[
+    tuple[str, str, tuple[int, ...], int | None, str, str, str, str, int | None, bool], ...
+] = (
+    ("Çöplerin toplanması", "daily", (), None, "07:00", "09:00", "Tüm bloklar", "Görevli", 2, True),
+    (
+        "Giriş holü temizliği",
+        "daily",
+        (),
+        None,
+        "09:00",
+        "11:00",
+        "A ve B Blok",
+        "Görevli",
+        2,
+        False,
+    ),
+    (
+        "Havuz klor ölçümü",
+        "weekdays",
+        (0, 3),
+        None,
+        "10:00",
+        "11:00",
+        "Havuz",
+        "Teknik Personel",
+        1,
+        True,
+    ),
+    (
+        "Jeneratör çalıştırma testi",
+        "monthly",
+        (),
+        1,
+        "14:00",
+        "15:00",
+        "Teknik oda",
+        "Teknik Personel",
+        1,
+        False,
+    ),
+)

@@ -4,9 +4,10 @@ o sitedeki izinleri. Erişimi olmayan kullanıcı 404 alır."""
 import uuid
 
 from fastapi import APIRouter
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from site_yonetim.api.deps import SiteContextDep
+from site_yonetim.api.v1.me import RoleGrantOut, ScopedPermissionOut
 
 router = APIRouter(prefix="/sites", tags=["site"])
 
@@ -18,8 +19,10 @@ class SiteResponse(BaseModel):
     property_kind: str
     city: str | None
     district: str | None
-    role: str
-    permissions: list[str]
+    role: str = Field(description="ana rol (en üst düzey) — geriye uyum")
+    roles: list[RoleGrantOut] = Field(description="şu an etkin bütün roller (P18)")
+    permissions: list[str] = Field(description="tesis geneli + blokla sınırlı izinler (birleşim)")
+    scoped_permissions: list[ScopedPermissionOut]
     modules: list[str]
 
 
@@ -33,7 +36,12 @@ async def get_site(ctx: SiteContextDep) -> SiteResponse:
         property_kind=site.property_kind,
         city=site.city,
         district=site.district,
-        role=ctx.access.role.value,
-        permissions=sorted(p.value for p in ctx.access.permissions),
+        role=ctx.access.role,
+        roles=[RoleGrantOut.of(g) for g in ctx.access.roles],
+        permissions=sorted(p.value for p in ctx.access.usable_permissions),
+        scoped_permissions=[
+            ScopedPermissionOut(permission=p.value, block_ids=sorted(blocks))
+            for p, blocks in sorted(ctx.access.scoped.items())
+        ],
         modules=sorted(m.value for m in ctx.modules),
     )

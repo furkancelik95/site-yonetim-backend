@@ -8,7 +8,7 @@ import tempfile
 from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated, Self
+from typing import Annotated, Literal, Self
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -61,6 +61,28 @@ class Settings(BaseSettings):
     # Yüklenen belgeler (fatura görüntüsü) — web kökünün DIŞINDA, kalıcı birim (docs/09 §3).
     file_storage_root: Path = Path("var/files")
     log_level: str = "INFO"
+    # --- Kimlik ve bildirim gönderimi (Yazılım Dokümanı PLT-01, PLT-05, §4.7) ---
+    # Sağlayıcı açık karar K5'te seçilecek; şimdilik yalnız test sağlayıcısı: gönderim kayda
+    # geçer, dışarı gitmez. Gerçek sağlayıcı eklenince buraya yeni değer gelir.
+    sms_provider: Literal["test"] = "test"
+    email_provider: Literal["test"] = "test"
+    push_provider: Literal["test"] = "test"
+    # Test sağlayıcısının son mesajlarını (giriş kodları dahil) gösterme: platform yöneticisine
+    # "test gelen kutusu" ve demo girişinde kodun ekranda görünmesi. Boşsa geliştirme/test
+    # ortamında açık; ÜRETİMDE HİÇBİR KOŞULDA açılmaz (açılış reddedilir).
+    test_inbox_enabled: bool | None = None
+    # Davet ve bildirim bağlantılarının kökü (frontend adresi). Boşsa ilk CORS kaynağı.
+    public_web_url: str | None = None
+    # Yönetici rollerinde iki adımlı doğrulama zorunlu (§4.7). Geçiş süresi: kurmamış yönetici
+    # ilk girişinden itibaren bu kadar gün uyarıyla girer; sonra yalnız kurulum ekranı açılır.
+    # 0 → dokümandaki gibi anında zorunlu.
+    mfa_grace_days: int = Field(default=14, ge=0, le=180)
+    mfa_issuer: str = "SiteYönetimi"
+    # Paket içi aylık SMS kotası (A-08: miktar pilot sonrası); site bazında ezilebilir.
+    sms_default_monthly_quota: int = Field(default=1000, ge=0, le=10_000_000)
+    # İki adımlı doğrulama sırrı ve sağlayıcı anahtarları bu anahtarla şifrelenir. Boşsa
+    # JWT_SECRET'tan türetilir (JWT_SECRET değişirse kurulu doğrulayıcılar yeniden kurulur).
+    data_encryption_key: SecretStr | None = None
 
     @field_validator("cors_origins", "allowed_hosts", mode="before")
     @classmethod
@@ -90,11 +112,32 @@ class Settings(BaseSettings):
             raise ValueError("Üretimde ALLOWED_HOSTS '*' olamaz.")
         if not self.refresh_cookie_secure:
             raise ValueError("Üretimde REFRESH_COOKIE_SECURE kapatılamaz (çerez yalnız HTTPS).")
+        if self.test_inbox_enabled:
+            raise ValueError(
+                "Üretimde TEST_INBOX_ENABLED açılamaz (test sağlayıcısı kodları dışarı vermez)."
+            )
         return self
 
     @property
     def is_production(self) -> bool:
         return self.environment is Environment.PRODUCTION
+
+    @property
+    def test_inbox_active(self) -> bool:
+        """Test sağlayıcısının mesajları (kodlar dahil) gösterilebilir mi? Üretimde asla."""
+        if self.is_production:
+            return False
+        return True if self.test_inbox_enabled is None else self.test_inbox_enabled
+
+    @property
+    def web_url(self) -> str:
+        base = self.public_web_url or (self.cors_origins[0] if self.cors_origins else "")
+        return base.rstrip("/")
+
+    @property
+    def encryption_key(self) -> bytes:
+        source = self.data_encryption_key or self.jwt_secret
+        return source.get_secret_value().encode()
 
     @property
     def import_dir(self) -> Path:

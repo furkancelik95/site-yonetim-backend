@@ -82,7 +82,8 @@ async def list_fields(
         raise ForbiddenError
     fields = await svc.fields_for(ctx.session, entity, archived=archived)
     if not manager:
-        fields = [f for f in fields if not f.is_archived and ctx.access.role.value in f.view_roles]
+        mine = set(ctx.access.role_names)  # P18: rollerin birleşimi
+        fields = [f for f in fields if not f.is_archived and mine & set(f.view_roles)]
     return [CustomFieldOut.of(f) for f in fields]
 
 
@@ -184,9 +185,11 @@ class CustomValuesIn(BaseModel):
 async def _visible(ctx: SiteContext, entity: CustomEntity) -> list[CustomField]:
     if not ctx.access.can(READ[entity]):
         raise ForbiddenError
-    role = ctx.access.role.value
+    mine = set(ctx.access.role_names)  # P18: rollerin birleşimi
     return [
-        f for f in await svc.fields_for(ctx.session, entity, archived=False) if role in f.view_roles
+        f
+        for f in await svc.fields_for(ctx.session, entity, archived=False)
+        if mine & set(f.view_roles)
     ]
 
 
@@ -214,8 +217,8 @@ async def _put_values(
 ) -> Written[CustomValuesOut]:
     fields = await _visible(ctx, entity)
     await _require_entity(ctx, entity, entity_id)
-    role = ctx.access.role.value
-    editable = {f.key for f in fields if role in f.edit_roles}
+    mine = set(ctx.access.role_names)
+    editable = {f.key for f in fields if mine & set(f.edit_roles)}
     try:
         values = await svc.write_values(
             ctx.session, entity_id, fields, body.values, editable=editable

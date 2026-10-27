@@ -11,19 +11,23 @@ import uuid
 from http import HTTPStatus
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Response, status
 from pydantic import BaseModel, Field
 
-from site_yonetim.api.deps import CurrentUserDep, SiteContext, require_permission
+from site_yonetim.api.deps import CurrentUserDep, NowDep, SiteContext, TodayDep, require_permission
 from site_yonetim.api.schemas import Money, Written
 from site_yonetim.api.v1.members import form_error
+from site_yonetim.api.v1.ops_shared import ops_error
 from site_yonetim.core.errors import ApiError, NotFoundError
 from site_yonetim.domain.access import Permission
+from site_yonetim.domain.approvals import ApprovalStatus
+from site_yonetim.domain.facility import OpsError, StockCountStatus
 from site_yonetim.domain.management import AssetStatus, StockDirection, format_quantity
 from site_yonetim.domain.members import FormFieldError
 from site_yonetim.domain.operations import OperationRuleError
-from site_yonetim.models import Asset, StockItem, StockMove
+from site_yonetim.models import Asset, StockCount, StockCountLine, StockItem, StockMove
 from site_yonetim.services import inventory as svc
+from site_yonetim.services.approvals import Person
 
 router = APIRouter(prefix="/sites/{slug}", tags=["demirbaş ve stok"])
 Reader = Annotated[SiteContext, Depends(require_permission(Permission.INVENTORY_READ))]
@@ -250,3 +254,128 @@ async def create_move(
     await ctx.session.commit()
     kind = "giriş" if move.direction == StockDirection.IN.value else "çıkış"
     return Written(data=out, message=f"{item.name}: {kind} kaydedildi.")
+
+
+# --- Stok sayımı (OPS-02; servis isteği 54) -----------------------------------------
+
+
+class CountLineIn(BaseModel):
+    item_id: uuid.UUID
+    counted: str | None = Field(default=None, max_length=30, description='"12.5" — boş: sayılmadı')
+
+
+class StockCountIn(BaseModel):
+    lines: list[CountLineIn] = Field(default_factory=list, max_length=LIST_MAX)
+
+
+class StockCountLineOut(BaseModel):
+    item_id: uuid.UUID
+    name: str
+    system: str = Field(description="sayım anındaki sistem miktarı")
+    counted: str
+    diff: str = Field(description='sayılan − sistem ("-2.5")')
+
+
+class StockCountOut(BaseModel):
+    id: uuid.UUID
+    status: StockCountStatus = Field(
+        description="applied · approval_pending (onayda) · rejected · withdrawn · failed"
+    )
+    approval_request_id: uuid.UUID | None
+    lines: list[StockCountLineOut]
+    created_by: str
+    created_at: dt.datetime
+    applied_at: dt.datetime | None
+
+
+def _count_out(
+    count: StockCount, lines: list[StockCountLine], approval_status: str | None = None
+) -> StockCountOut:
+    shown = StockCountStatus(count.status)
+    if (
+        shown is StockCountStatus.APPROVAL_PENDING
+        and approval_status == ApprovalStatus.EXECUTION_FAILED.value
+    ):
+        shown = StockCountStatus.FAILED
+    return StockCountOut(
+        id=count.id,
+        status=shown,
+        approval_request_id=count.approval_request_id,
+        lines=[
+            StockCountLineOut(
+                item_id=line.stock_item_id,
+                name=line.item_name,
+                system=format_quantity(line.system_quantity),
+                counted=format_quantity(line.counted_quantity),
+                diff=svc.signed_quantity(line.diff),
+            )
+            for line in lines
+        ],
+        created_by=count.created_by_name,
+        created_at=count.created_at,
+        applied_at=count.applied_at,
+    )
+
+
+@router.get("/stock-counts", summary="Sayım geçmişi (yeniden eskiye; dizi, en çok 100)")
+async def list_stock_counts(ctx: Reader) -> list[StockCountOut]:
+    counts = list(await ctx.session.scalars(svc.counts_query().limit(100)))
+    lines = await svc.count_lines(ctx.session, [c.id for c in counts])
+    statuses = await svc.approval_statuses(
+        ctx.session, [c.approval_request_id for c in counts if c.approval_request_id]
+    )
+    return [
+        _count_out(
+            c, lines[c.id], statuses.get(c.approval_request_id) if c.approval_request_id else None
+        )
+        for c in counts
+    ]
+
+
+@router.post(
+    "/stock-counts",
+    status_code=status.HTTP_201_CREATED,
+    summary="Sayımı kaydet — fark onay kuralına bağlıysa 202 (hareket onaydan sonra)",
+    response_model=Written[StockCountOut],
+    responses={202: {"description": "`status: approval_pending` — fark onaya gönderildi"}},
+)
+async def create_stock_count(
+    body: StockCountIn,
+    ctx: Manager,
+    current: CurrentUserDep,
+    response: Response,
+    today: TodayDep,
+    now: NowDep,
+) -> Written[StockCountOut]:
+    try:
+        result = await svc.count_stock(
+            ctx.session,
+            ctx.site,
+            [svc.CountLineData(line.item_id, line.counted) for line in body.lines],
+            requester=Person(current.user.id, current.user.full_name),
+            today=today,
+            now=now,
+        )
+    except FormFieldError as exc:
+        raise form_error(exc) from exc
+    except OpsError as exc:
+        raise ops_error(exc) from exc
+    await ctx.session.refresh(result.count, ["created_at"])
+    out = _count_out(result.count, result.lines)
+    await ctx.session.commit()
+    differences = sum(1 for line in result.lines if line.diff != 0)
+    if result.request is not None:
+        response.status_code = HTTPStatus.ACCEPTED
+        return Written(
+            data=out,
+            message=(
+                f"Sayım kaydedildi; {differences} malzemedeki fark onaya gönderildi "
+                f"(#{result.request.number}). Onaylanınca düzeltme hareketi yazılır."
+            ),
+        )
+    message = (
+        f"Sayım kaydedildi; {differences} malzemede fark düzeltme hareketi olarak yazıldı."
+        if differences
+        else "Sayım kaydedildi; fark yok."
+    )
+    return Written(data=out, message=message)

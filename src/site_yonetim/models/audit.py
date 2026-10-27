@@ -147,6 +147,22 @@ AUDITED_TABLES = frozenset(
         "refunds",
         "charge_schedules",
         "recurring_expenses",
+        # finans Mod P (servis istekleri 27–33)
+        "period_events",
+        "cash_days",
+        "collection_actions",
+        "demand_letters",
+        "payment_plans",
+        "ad_hoc_charge_settings",
+        "ad_hoc_charges",
+        "accounting_mapping_versions",
+        "finance_parameter_versions",
+        # finans motoru (P03b): aidat kuralları, satır düzeltmesi, yıllık bütçe
+        "billing_rules",
+        "billing_rule_versions",
+        "charge_adjustments",
+        "budgets",
+        "budget_lines",
         # operasyon
         "incidents",
         "lost_items",
@@ -186,6 +202,26 @@ AUDITED_TABLES = frozenset(
         "timesheet_days",
         "timesheet_exports",
         "attendance_settings",
+        # operasyon ekleri ve teknik varlık (OPS-01..06, HIZ-06/07; K28): telefon ve emanet
+        # yetkili listesi maskeli
+        "operation_settings",
+        "facility_keys",
+        "key_loans",
+        "deposited_keys",
+        "stock_counts",
+        "checklist_templates",
+        "checklist_inspections",
+        "insurance_policies",
+        "insurance_claims",
+        "meters",
+        "meter_readings",
+        "task_templates",
+        "task_completions",
+        "technical_assets",
+        "asset_inspection_schedules",
+        "asset_inspection_records",
+        "maintenance_plans",
+        "maintenance_runs",
         # ayarlar
         "charge_types",
         "allocation_rules",
@@ -224,11 +260,22 @@ AUDITED_TABLES = frozenset(
         "purchase_orders",
         "purchase_receipts",
         "vendor_invoices",
+        # iletişim ve acil durum (yoklama ayrıntısı `emergency_units` kişisel veri: yazılmaz,
+        # 30 gün sonra silinir; acil bilgi kartı görsel içerdiği için elle özetle yazılır)
+        "emergencies",
+        "emergency_settings",
+        "notification_template_versions",
+        "transparency_reports",
         # belge arşivi (gizli belge açılışı ayrıca document_access_logs'ta)
         "documents",
         "document_versions",
+        # bildirim gönderimi (PLT-05, ILT-05, RAP-05): SMS hesabı/sessiz saat ve planlı rapor
+        "site_messaging_settings",
+        "scheduled_reports",
         # yetki / üyelik
         "site_memberships",
+        "site_roles",
+        "site_role_assignments",
     }
 )
 # `token_hash`: davet belirtecinin özeti bile kayda girmez.

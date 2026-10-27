@@ -16,6 +16,7 @@ from site_yonetim.models import LedgerEntry, Person
 from site_yonetim.services.imports import ImportStore
 from tests.integration.finance_world import World
 from tests.integration.p02_helpers import OTHER, call, new_unit, scope, staff
+from tests.integration.test_period_lock import set_period
 
 CSV = "text/csv"
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -174,6 +175,22 @@ async def test_acilis_bakiyesi_geri_alma_ters_kayit_ve_engel(stored: World) -> N
                 .where(LedgerEntry.account_id == uuid.UUID(w.account_id))
             )
     assert entries == 2
+
+
+async def test_acilis_bakiyesi_geri_alma_kilitli_donemde_engellenir(stored: World) -> None:
+    """D-11: açılış bakiyesi geri alma da dönem kilidine tabi (409 period_locked)."""
+    w = stored
+    codes = await _accounts(w)
+    batch = (
+        await _upload(w, "opening-balances", f"Referans;Tutar\n{codes['occupant']};100\n")
+    ).json()
+    await w.post(f"/imports/{batch['import_id']}/confirm", {"reconciliation_total": "100.00"})
+    [history] = (await w.get("/imports")).json()["items"]
+    today = w.today[0]
+    await set_period(w, today.year, today.month, "locked")
+    response = await w.post(f"/imports/{history['id']}/rollback")
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "period_locked"
 
 
 async def test_yetki_ve_izolasyon(stored: World) -> None:

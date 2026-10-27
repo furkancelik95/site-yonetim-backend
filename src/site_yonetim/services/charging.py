@@ -1,8 +1,12 @@
 """Tahakkuk koşusu: önizle → kaydet → (gerekirse) ters kaydet — docs/04 §4, §7. Site kapsamında.
 
 Önizleme hiçbir şey yazmaz. Kaydetme tek transaction'dır: koşu + borçlar + satırlar + borç
-hareketleri + özet bakiye. Bir dönem için tek geçerli koşu: uygulama kontrol eder, kısmi
-benzersiz indeks eşzamanlı ikinci kaydı veritabanında reddeder.
+hareketleri + özet bakiye + avans mahsubu (D-6). Bir dönem için tek geçerli koşu: uygulama
+kontrol eder, kısmi benzersiz indeks eşzamanlı ikinci kaydı veritabanında reddeder.
+
+Motor finans parametrelerini o dönemde geçerli sürümden okur (FIN-16): tahakkuk kaynağı
+(`charge_source`, K23 — işletme projesi ya da aidat kuralları), kıst (`proration`, K9) ve vade
+günü (`due_day`, K25). Taslak → onay → kesinleştirme akışı `services/charge_drafts.py`'dedir.
 
 Motor girdisi sabit sayıda sorguyla kurulur (bölüm sayısından bağımsız — docs/08 §3).
 """
@@ -10,18 +14,20 @@ Motor girdisi sabit sayıda sorguyla kurulur (bölüm sayısından bağımsız �
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import ColumnElement, and_, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from site_yonetim.domain.charging.engine import (
     AccountData,
     ChargeInput,
     ComponentData,
     ItemData,
+    ItemSource,
     PartyData,
     Preview,
     RuleData,
@@ -29,11 +35,10 @@ from site_yonetim.domain.charging.engine import (
     build_preview,
 )
 from site_yonetim.domain.charging.periods import (
-    DUE_AFTER_DAYS,
     YearMonth,
     already_posted_message,
     charge_description,
-    default_dates,
+    due_date_for,
     is_item_due,
     next_period,
     reversal_description,
@@ -46,9 +51,9 @@ from site_yonetim.domain.finance import (
     Frequency,
     LedgerSource,
     PayerRule,
-    PeriodStatus,
     ScopeKind,
 )
+from site_yonetim.domain.finance_params import ChargeSource, Proration
 from site_yonetim.domain.money import ZERO
 from site_yonetim.domain.structure import AccountKind, PartyRole
 from site_yonetim.models import (
@@ -70,11 +75,12 @@ from site_yonetim.models import (
     UnitType,
     UnitWeight,
 )
-from site_yonetim.services import ledger, summary
+from site_yonetim.services import ledger, payments, period_lock, summary
 from site_yonetim.services.budget import current_plan
 from site_yonetim.services.structure import apply_due_attribute_changes
 
 BUSINESS_TZ = ZoneInfo("Europe/Istanbul")
+_REVERSAL = aliased(LedgerEntry)
 
 
 def _valid_run() -> list[ColumnElement[bool]]:
@@ -209,7 +215,7 @@ async def _charged_item_ids(session: AsyncSession, item_ids: list[uuid.UUID]) ->
         .where(ChargeLine.budget_item_id.in_(item_ids), *_valid_run())
         .distinct()
     )
-    return set(rows)
+    return {item_id for item_id in rows if item_id is not None}
 
 
 async def _items(
@@ -267,9 +273,38 @@ class PreparedRun:
     period: YearMonth
     charge_date: date
     due_date: date
-    plan: BudgetPlan
+    plan: BudgetPlan | None  # aidat kuralı kaynağında yok
     preview: Preview
     not_due_items: list[str]  # takvim gereği bu dönem kesilmeyen kalemler
+    source: ChargeSource = ChargeSource.BUDGET_PLAN
+    proration: Proration = Proration.DAY
+
+
+async def _input_items(
+    session: AsyncSession, source: ChargeSource, period: YearMonth
+) -> tuple[BudgetPlan | None, list[ItemData], list[str]]:
+    """K23: tahakkuk girdisi sitenin seçtiği kaynaktan."""
+    if source is ChargeSource.BILLING_RULE:
+        from site_yonetim.services import billing_rules
+
+        items, not_due = await billing_rules.items_for(session, period)
+        if not items and not not_due:
+            raise FinanceRuleError(
+                "no_billing_rules",
+                f"Tahakkuk kaynağı 'aidat kuralları'; {period.name} döneminde yürürlükte aidat "
+                "kuralı yok. Önce kural tanımlayıp onaylatın ya da kaynağı işletme projesi yapın.",
+                conflict=True,
+            )
+        return None, items, not_due
+    plan = await current_plan(session)
+    if plan is None:
+        raise FinanceRuleError(
+            "no_finalized_budget",
+            "Tahakkuk kesmek için önce işletme projesi kesinleşmeli.",
+            conflict=True,
+        )
+    items, not_due = await _items(session, plan, period)
+    return plan, items, not_due
 
 
 async def prepare(
@@ -279,29 +314,27 @@ async def prepare(
     charge_date: date | None = None,
     due_date: date | None = None,
 ) -> PreparedRun:
-    """Önizleme; `charge_date` verilmezse sıradaki dönemin 1'i (docs/04 §7.2)."""
-    plan = await current_plan(session)
-    if plan is None:
-        raise FinanceRuleError(
-            "no_finalized_budget",
-            "Tahakkuk kesmek için önce işletme projesi kesinleşmeli.",
-            conflict=True,
-        )
+    """Önizleme; `charge_date` verilmezse sıradaki dönemin 1'i (docs/04 §7.2), `due_date`
+    verilmezse dönemin vade günü (K25, finans parametresi `due_day`, varsayılan 10)."""
+    from site_yonetim.services import finance_params
+
     if charge_date is None:
         period = next_period(await last_valid_period(session), today)
-        charge_date, default_due = default_dates(period)
+        charge_date = period.first_day
     else:
         period = YearMonth.of(charge_date)
-        default_due = charge_date + timedelta(days=DUE_AFTER_DAYS)
-    due_date = due_date or default_due
+    params = await finance_params.params_at(session, period)
+    due_date = due_date or due_date_for(charge_date, int(params["due_day"]))
     if due_date < charge_date:
         raise FinanceRuleError(
             "due_before_charge", "Vade tarihi tahakkuk tarihinden önce olamaz.", field="due_date"
         )
-    items, not_due = await _items(session, plan, period)
+    source = ChargeSource(params["charge_source"])
+    proration = Proration(params["proration"])
     # Tarihi gelmiş yürürlük tarihli öznitelikler (m², arsa payı, tip — YAP-02 S3) gece işini
     # beklemeden uygulanır: tahakkuk, dönemin yürürlükteki değerini kullanır.
     await apply_due_attribute_changes(session, today, datetime.now(UTC))
+    plan, items, not_due = await _input_items(session, source, period)
     data = ChargeInput(
         charge_date=charge_date,
         due_date=due_date,
@@ -309,26 +342,20 @@ async def prepare(
         units=await _units(session),
         parties=await _parties(session),
         accounts=await _accounts(session),
+        proration=proration,
     )
-    return PreparedRun(period, charge_date, due_date, plan, build_preview(data), not_due)
+    return PreparedRun(
+        period, charge_date, due_date, plan, build_preview(data), not_due, source, proration
+    )
 
 
 # --- Kaydetme -----------------------------------------------------------------------
 
 
-async def _period_row(session: AsyncSession, period: YearMonth) -> Period:
-    row: Period | None = await session.scalar(
-        select(Period).where(Period.year == period.year, Period.month == period.month)
-    )
-    if row is None:  # dönem yoksa oluşturulur (docs/04 §7.1)
-        row = Period(year=period.year, month=period.month)
-        session.add(row)
-        await session.flush()
-    if row.status == PeriodStatus.CLOSED.value:
-        raise FinanceRuleError(
-            "period_closed", f"{period.name} dönemi kapalı; kayıt yazılamaz.", conflict=True
-        )
-    return row
+async def _period_row(session: AsyncSession, period: YearMonth, charge_date: date) -> Period:
+    """Dönem satırı (yoksa açılır, docs/04 §7.1); tahakkuk tarihi kilitli döneme düşemez."""
+    await period_lock.ensure_writable(session, charge_date)
+    return await period_lock.get_or_create(session, period)
 
 
 async def valid_run_of(session: AsyncSession, period_id: uuid.UUID) -> ChargeRun | None:
@@ -357,10 +384,19 @@ class PostedRun:
 
 
 async def post(
-    session: AsyncSession, prepared: PreparedRun, *, posted_by: str, now: datetime
+    session: AsyncSession,
+    prepared: PreparedRun,
+    *,
+    posted_by: str,
+    now: datetime,
+    run: ChargeRun | None = None,
 ) -> PostedRun:
-    """Önizlemeyi kalıcı kayda çevirir (docs/04 §7.1). Transaction'ı çağıran yönetir."""
-    period_row = await _period_row(session, prepared.period)
+    """Önizlemeyi kalıcı kayda çevirir (docs/04 §7.1). Transaction'ı çağıran yönetir.
+
+    `run` verilirse onaylanmış taslak koşu kesinleşir (FIN-05); verilmezse yeni koşu açılır.
+    Borç yazılan hesaplarda kullanılmamış avans varsa yeni borca mahsup edilir (D-6).
+    """
+    period_row = await _period_row(session, prepared.period, prepared.charge_date)
     existing = await valid_run_of(session, period_row.id)
     if existing is not None:
         raise already_posted(prepared.period, existing)
@@ -368,18 +404,22 @@ async def post(
     if not preview.charges:
         raise FinanceRuleError("nothing_to_charge", "Kesilecek tahakkuk yok.", conflict=True)
 
-    await ledger.lock_accounts(session, [c.ledger_account_id for c in preview.charges])
-    run = ChargeRun(
-        id=uuid.uuid7(),
-        period_id=period_row.id,
-        budget_plan_id=prepared.plan.id,
-        status=ChargeRunStatus.POSTED.value,
-        charge_date=prepared.charge_date,
-        due_date=prepared.due_date,
-        posted_at=now,
-        posted_by=posted_by,
-    )
-    session.add(run)
+    account_ids = [c.ledger_account_id for c in preview.charges]
+    await ledger.lock_accounts(session, account_ids)
+    if run is None:
+        run = ChargeRun(
+            id=uuid.uuid7(),
+            period_id=period_row.id,
+            source=prepared.source.value,
+            budget_plan_id=prepared.plan.id if prepared.plan else None,
+            charge_date=prepared.charge_date,
+            due_date=prepared.due_date,
+            created_by=posted_by,
+        )
+        session.add(run)
+    run.status = ChargeRunStatus.POSTED.value
+    run.posted_at = now
+    run.posted_by = posted_by
     await session.flush()
     for preview_charge in preview.charges:
         charge = Charge(
@@ -393,7 +433,12 @@ async def post(
         session.add_all(
             ChargeLine(
                 charge_id=charge.id,
-                budget_item_id=line.budget_item_id,
+                budget_item_id=(
+                    line.budget_item_id if line.source is ItemSource.BUDGET_ITEM else None
+                ),
+                billing_rule_version_id=(
+                    line.budget_item_id if line.source is ItemSource.BILLING_RULE else None
+                ),
                 description=line.description,
                 amount=line.amount,
                 allocation_kind=line.allocation_kind.value,
@@ -420,13 +465,18 @@ async def post(
                 ),
             )
         )
-    await ledger.refresh_balances(session, [c.ledger_account_id for c in preview.charges])
+    await ledger.refresh_balances(session, account_ids)
+    # Sonraki tahakkuku bekleyen dönem dışı ücretler "ek kalemler" olarak aynı transaction'da.
+    from site_yonetim.services import ad_hoc_charges
+
+    await ad_hoc_charges.post_waiting(session, run, prepared.period)
     await summary.add(
         session,
         year=prepared.period.year,
         month=prepared.period.month,
         charged=preview.total_amount,
     )
+    await payments.apply_advances(session, account_ids)
     return PostedRun(
         run, prepared.period, len(preview.charges), preview.unit_count, preview.total_amount
     )
@@ -474,6 +524,9 @@ async def reverse(
             conflict=True,
         )
     period = await run_period(session, locked)
+    # Kilitli döneme ait koşu ters kaydedilemez (özet ve koşu durumu o dönemi değiştirir).
+    await period_lock.ensure_writable(session, locked.charge_date, original=True)
+    await period_lock.ensure_writable(session, today)
     entries = list(
         await session.scalars(
             select(LedgerEntry)
@@ -485,6 +538,11 @@ async def reverse(
                 Charge.charge_run_id == locked.id,
                 LedgerEntry.source == LedgerSource.CHARGE.value,
                 LedgerEntry.reversal_of_entry_id.is_(None),
+                # satır düzeltmesinde ters kaydı alınmış borç zaten kapanmıştır (D-10)
+                ~select(_REVERSAL.id)
+                .where(_REVERSAL.reversal_of_entry_id == LedgerEntry.id)
+                .correlate(LedgerEntry)
+                .exists(),
             )
         )
     )
@@ -492,6 +550,7 @@ async def reverse(
     reversal = ChargeRun(
         id=uuid.uuid7(),
         period_id=locked.period_id,
+        source=locked.source,
         budget_plan_id=locked.budget_plan_id,
         status=ChargeRunStatus.POSTED.value,
         charge_date=today,
@@ -519,7 +578,10 @@ async def reverse(
     )
     locked.status = ChargeRunStatus.REVERSED.value
     await session.flush()
-    await ledger.refresh_balances(session, [e.account_id for e in entries])
+    from site_yonetim.services import ad_hoc_charges
+
+    extra = await ad_hoc_charges.reverse_for_run(session, locked, today)
+    await ledger.refresh_balances(session, [e.account_id for e in entries] + extra)
     reversed_total = sum((e.debit - e.credit for e in entries), ZERO)
     await summary.add(session, year=period.year, month=period.month, charged=-reversed_total)
     return reversal

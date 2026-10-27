@@ -23,7 +23,7 @@ router = APIRouter(prefix="/sites/{slug}/setup", tags=["kurulum"])
 ModulesManage = Annotated[SiteContext, Depends(require_permission(Permission.MODULES_MANAGE))]
 
 
-class ChecklistItemOut(BaseModel):
+class SetupChecklistItemOut(BaseModel):
     key: str
     label: str
     ok: bool
@@ -40,7 +40,7 @@ class SetupOut(BaseModel):
     )
     ready: bool = Field(description="zorunlu maddelerin hepsi tamam")
     opening_reconciled_at: dt.datetime | None
-    checklist: list[ChecklistItemOut]
+    checklist: list[SetupChecklistItemOut]
 
 
 async def _out(ctx: SiteContext, today: dt.date) -> SetupOut:
@@ -53,7 +53,7 @@ async def _out(ctx: SiteContext, today: dt.date) -> SetupOut:
         ready=svc.is_ready(items),
         opening_reconciled_at=config.opening_reconciled_at,
         checklist=[
-            ChecklistItemOut(
+            SetupChecklistItemOut(
                 key=i.key, label=i.label, ok=i.ok, detail=i.detail, link=i.link,
                 required=i.required,
             )

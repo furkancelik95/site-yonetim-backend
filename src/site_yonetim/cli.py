@@ -4,6 +4,10 @@ uv run python -m site_yonetim.cli seed-demo       # demo verisi (yalnız develop
 uv run python -m site_yonetim.cli purge-imports   # süresi dolan Excel aktarımlarını sil (cron)
 uv run python -m site_yonetim.cli purge-login-throttle  # dolmuş giriş sayaçlarını sil (gece)
 uv run python -m site_yonetim.cli reconcile [--fix]    # özet bakiye ↔ defter mutabakatı (gece)
+uv run python -m site_yonetim.cli run-finance-jobs       # dönem kilidi, borç kademeleri, ödeme
+uv run python -m site_yonetim.cli run-operations-jobs    # muayene 60/30/7, bakım iş emri, poliçe,
+                                                         # görev gün sonu özeti (günde bir, gece)
+uv run python -m site_yonetim.cli run-key-reminders      # anahtar iade gecikmesi (saatlik)
 uv run python -m site_yonetim.cli run-request-jobs       # talep kapanış + SLA (5 dakikada bir)
 uv run python -m site_yonetim.cli run-charge-schedules # otomatik aylık tahakkuk (günde bir)
 uv run python -m site_yonetim.cli run-recurring-expenses # tekrarlanan giderler (günde bir)
@@ -11,6 +15,11 @@ uv run python -m site_yonetim.cli run-approval-jobs      # onay hatırlatma/eska
 uv run python -m site_yonetim.cli run-structure-jobs     # öznitelik yürürlüğü, davet (günde bir)
 uv run python -m site_yonetim.cli run-staff-jobs         # ayrılan personelin erişimini kapat (gece)
 uv run python -m site_yonetim.cli run-document-expiry    # belge geçerlilik uyarısı (günde bir)
+uv run python -m site_yonetim.cli run-notification-jobs  # bildirim gönderimi, sessiz saat
+                                                         # kuyruğu, kritik SMS yedeği (dakikalık)
+uv run python -m site_yonetim.cli run-scheduled-reports  # planlı rapor e-postası (dakikalık)
+uv run python -m site_yonetim.cli run-announcement-jobs # duyuru zamanlama, SMS yedeği (dakika)
+uv run python -m site_yonetim.cli run-emergency-purge    # acil durum yoklama verisi saklama (gece)
 """
 
 import argparse
@@ -25,19 +34,29 @@ from site_yonetim.db.session import create_engine_from_settings, create_session_
 from site_yonetim.domain.finance import ScheduleRunStatus
 from site_yonetim.seed.demo import DemoSeedRefusedError, ensure_demo_allowed, seed_demo
 from site_yonetim.services import (
+    announcements,
     approvals,
     bank_imports,
     charge_schedule,
+    delivery,
     documents,
+    emergencies,
+    finance_jobs,
+    insurance,
+    keys,
     login_throttle,
     rate_limit,
     reconciliation,
     recurring_expenses,
+    routine_tasks,
+    scheduled_reports,
     security_jobs,
     service_desk,
     staff,
     structure_jobs,
+    technical_assets,
 )
+from site_yonetim.services.channels import channels_from_settings
 from site_yonetim.services.charging import BUSINESS_TZ
 from site_yonetim.services.imports import ImportStore
 
@@ -129,6 +148,63 @@ async def _reconcile(*, fix: bool) -> int:
         print(f"Onarımdan sonra {len(remaining)} fark kaldı.")
         return 1
     print(f"{len(sites)} sitenin özetleri defterden yeniden üretildi; onarıldı.")
+    return 0
+
+
+async def _run_finance_jobs() -> int:
+    """Süreli açması dolan dönemi kilitler, borç takibi kademelerini yazar, bozulan ödeme
+    planlarını bildirir (saatlik; tekrar güvenli)."""
+    engine = create_engine_from_settings(get_settings())
+    now = datetime.now(UTC)
+    try:
+        results = await finance_jobs.run_all(
+            create_session_factory(engine), now=now, today=now.astimezone(BUSINESS_TZ).date()
+        )
+    finally:
+        await engine.dispose()
+    for site_id, r in results:
+        print(f"{site_id}: kilitlenen {r.relocked}, kademe {r.reminders}, bozulan plan "
+              f"{r.broken_plans}")  # fmt: skip
+    print(f"{len(results)} sitede finans işi çalıştı.")
+    return 0
+
+
+async def _run_operations_jobs() -> int:
+    """Operasyon ve teknik varlık günlük işleri (HIZ-06/07, OPS-04, OPS-06): yasal muayene
+    60/30/7 gün uyarısı, planı gelen periyodik bakımın iş emri, poliçe bitiş 60/30 uyarısı, dünün
+    görev özeti. Hepsi tekrar güvenli (aynı uyarı/iş emri ikinci kez yazılmaz)."""
+    engine = create_engine_from_settings(get_settings())
+    today = datetime.now(UTC).astimezone(BUSINESS_TZ).date()
+    try:
+        factory = create_session_factory(engine)
+        assets = await technical_assets.run_daily(factory, today=today)
+        policies = await insurance.run_expiry_warnings(factory, today=today)
+        tasks = await routine_tasks.run_daily_summary(factory, today=today)
+    finally:
+        await engine.dispose()
+    for r in assets:
+        print(f"{r.site_id}: muayene uyarısı {r.warnings}, bakım iş emri {r.runs}")
+    for site_id, written in policies:
+        print(f"{site_id}: poliçe uyarısı {written}")
+    for site_id, written in tasks:
+        print(f"{site_id}: görev özeti {written}")
+    print(f"{len(assets)} sitede varlık/bakım, {len(policies)} sitede poliçe işi çalıştı.")
+    return 0
+
+
+async def _run_key_reminders() -> int:
+    """Anahtar iade gecikmesi (OPS-01): iade zamanı geçen teslimler için yöneticiye bildirim
+    (saatlik; teslim başına bir kez)."""
+    engine = create_engine_from_settings(get_settings())
+    try:
+        results = await keys.run_overdue_warnings(
+            create_session_factory(engine), now=datetime.now(UTC)
+        )
+    finally:
+        await engine.dispose()
+    for site_id, written in results:
+        print(f"{site_id}: {written} gecikme uyarısı")
+    print(f"{len(results)} sitede anahtar iade kontrolü çalıştı.")
     return 0
 
 
@@ -275,12 +351,93 @@ async def _run_document_expiry() -> int:
     return 0
 
 
+async def _run_notification_jobs() -> int:
+    """Bildirim gönderim katmanı (PLT-05, §4.6): kritik push için 2 dk SMS yedeği, sonra zamanı
+    gelen bütün teslimler (sessiz saat kuyruğu dahil). Dakikalık; tekrar güvenli."""
+    settings = get_settings()
+    engine = create_engine_from_settings(settings)
+    now = datetime.now(UTC)
+    try:
+        factory = create_session_factory(engine)
+        fallbacks = await delivery.run_critical_fallbacks(factory, now=now)
+        results = await delivery.dispatch_due(
+            factory,
+            channels_from_settings(settings),
+            now=now,
+            default_quota=settings.sms_default_monthly_quota,
+        )
+    finally:
+        await engine.dispose()
+    for site_id, r in results:
+        print(f"{site_id}: gönderildi {r.sent}, başarısız {r.failed}, SMS yedeği {r.fallbacks}")
+    print(f"{fallbacks} kritik bildirim için SMS yedeği üretildi; {len(results)} sitede gönderim.")
+    return 0
+
+
+async def _run_scheduled_reports() -> int:
+    """Planlı rapor gönderimi (RAP-05): zamanı gelen tanımlar için e-posta kuyruğa alınır ve
+    gönderilir. Dakikalık; aynı zaman dilimi iki kez çalışmaz."""
+    settings = get_settings()
+    engine = create_engine_from_settings(settings)
+    now = datetime.now(UTC)
+    try:
+        factory = create_session_factory(engine)
+        results = await scheduled_reports.run_due(factory, now=now, web_url=settings.web_url)
+        await delivery.dispatch_due(
+            factory,
+            channels_from_settings(settings),
+            now=now,
+            default_quota=settings.sms_default_monthly_quota,
+            site_ids=[site_id for site_id, _ in results],
+        )
+    finally:
+        await engine.dispose()
+    for site_id, count in results:
+        print(f"{site_id}: {count} planlı rapor")
+    print(f"{len(results)} sitede planlı rapor çalıştı.")
+    return 0
+
+
+async def _run_announcement_jobs() -> int:
+    """ILT-01: vakti gelen zamanlanmış duyuruyu yayınlar; son onay süresi dolan okuma onaylı
+    duyuruda onaylamayanlara bir kez SMS yedeği (sağlayıcı P16c ile). Dakikalık."""
+    engine = create_engine_from_settings(get_settings())
+    try:
+        results = await announcements.run_jobs(
+            create_session_factory(engine), now=datetime.now(UTC)
+        )
+    finally:
+        await engine.dispose()
+    for r in results:
+        print(f"{r.site_id}: yayınlanan {r.published}, SMS yedeği {r.fallbacks}")
+    return 0
+
+
+async def _run_emergency_purge() -> int:
+    """ILT-06 / K8: `auto_purge` açık sitelerde bitişten `retention_days` gün sonra acil durum
+    yoklama ayrıntısını siler (özet kalır). Varsayılan kapalı — hukuk teyidi bekliyor. Gece."""
+    engine = create_engine_from_settings(get_settings())
+    try:
+        results = await emergencies.run_purge(create_session_factory(engine), now=datetime.now(UTC))
+    finally:
+        await engine.dispose()
+    for r in results:
+        print(f"{r.site_id}: {r.purged} acil durumun yoklama verisi silindi")
+    print(f"{len(results)} sitede acil durum verisi temizlendi.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="site_yonetim.cli")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("seed-demo", help="Demo verisini yükle (yalnız development)")
     sub.add_parser("purge-imports", help="Süresi dolan Excel aktarım dosyalarını sil")
     sub.add_parser("purge-login-throttle", help="Penceresi dolmuş giriş sayaçlarını sil")
+    sub.add_parser("run-finance-jobs", help="Dönem kilidi, borç kademeleri, plan uyumu (saatlik)")
+    sub.add_parser(
+        "run-operations-jobs", help="Muayene/bakım/poliçe uyarıları ve görev özeti (günde bir)"
+    )
+    sub.add_parser("run-key-reminders", help="Anahtar iade gecikmesi uyarısı (saatlik)")
     sub.add_parser("run-request-jobs", help="Talep otomatik kapanış ve SLA (5 dakikada bir)")
     sub.add_parser("run-charge-schedules", help="Otomatik aylık tahakkuku çalıştır (günde bir)")
     sub.add_parser("run-recurring-expenses", help="Tekrarlanan giderleri yaz (günde bir)")
@@ -294,6 +451,14 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("run-structure-jobs", help="Öznitelik yürürlüğü, davet süresi (günde bir)")
     sub.add_parser("run-staff-jobs", help="Ayrılan personelin site erişimini kapat (gece)")
     sub.add_parser("run-document-expiry", help="Belge geçerlilik uyarısı (günde bir)")
+    sub.add_parser(
+        "run-notification-jobs", help="Bildirim gönderimi ve kritik SMS yedeği (dakikalık)"
+    )
+    sub.add_parser("run-scheduled-reports", help="Planlı rapor e-postaları (dakikalık)")
+    sub.add_parser(
+        "run-announcement-jobs", help="Zamanlanmış duyuru + okuma onayı SMS yedeği (dakikalık)"
+    )
+    sub.add_parser("run-emergency-purge", help="Acil durum yoklama verisi saklama (gece)")
     reconcile = sub.add_parser("reconcile", help="Özet bakiyeleri defterle karşılaştır")
     reconcile.add_argument("--fix", action="store_true", help="Farklı siteleri onar")
     args = parser.parse_args(argv)
@@ -304,6 +469,12 @@ def main(argv: list[str] | None = None) -> int:
         return _purge_imports()
     if args.command == "purge-login-throttle":
         return asyncio.run(_purge_login_throttle())
+    if args.command == "run-finance-jobs":
+        return asyncio.run(_run_finance_jobs())
+    if args.command == "run-operations-jobs":
+        return asyncio.run(_run_operations_jobs())
+    if args.command == "run-key-reminders":
+        return asyncio.run(_run_key_reminders())
     if args.command == "run-request-jobs":
         return asyncio.run(_run_request_jobs())
     if args.command == "run-security-daily":
@@ -316,8 +487,16 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_run_structure_jobs())
     if args.command == "run-staff-jobs":
         return asyncio.run(_run_staff_jobs())
+    if args.command == "run-announcement-jobs":
+        return asyncio.run(_run_announcement_jobs())
+    if args.command == "run-emergency-purge":
+        return asyncio.run(_run_emergency_purge())
     if args.command == "run-document-expiry":
         return asyncio.run(_run_document_expiry())
+    if args.command == "run-notification-jobs":
+        return asyncio.run(_run_notification_jobs())
+    if args.command == "run-scheduled-reports":
+        return asyncio.run(_run_scheduled_reports())
     if args.command == "run-recurring-expenses":
         return asyncio.run(_run_recurring_expenses())
     if args.command == "run-charge-schedules":

@@ -257,6 +257,7 @@ async def test_hazir_sablonlar(world: World, board: list[Member]) -> None:
     # tahakkuk şablonu Muhasebe ister; sitede muhasebeci yok → kurulmaz, gerekçesi döner
     assert types == [
         "charge_rule",
+        "period_unlock",
         "purchase_request",
         "purchase_request",
         "purchase_request",
@@ -553,7 +554,7 @@ async def test_yetki_devri_kurallari(world: World, board: list[Member]) -> None:
         "/delegations", {"to_user_id": str(accountant.id), "roles": ["Yönetici"], **period(0, 3)}
     )
     assert wrong_role.json()["error"]["fields"] == {
-        "to_user_id": "Devralan aynı role sahip olmalı."
+        "to_user_id": "Devralan aynı ya da daha üst bir role sahip olmalı."
     }
     not_mine = await w.post(
         "/delegations",
@@ -587,11 +588,14 @@ async def test_yetki_devri_kurallari(world: World, board: list[Member]) -> None:
     again = await w.api.post(w.url(f"/delegations/{delegation_id}/end"), headers=ayse.headers)
     assert again.status_code == 409
     candidates = await w.api.get(w.url("/delegations/candidates"), headers=ayse.headers)
-    assert sorted(c["name"] for c in candidates.json()) == [
+    assert candidates.json()["my_roles"] == ["Yönetim Kurulu Üyesi"]
+    # K20: aynı ya da üst rol — YK üyeleri ve Yönetici; Muhasebe (alt düzey) aday değil
+    assert sorted(c["name"] for c in candidates.json()["candidates"]) == [
         "Burak YK",
         "Cem YK",
         "Deniz YK",
         "Ece YK",
+        "Kerem YILDIRIM",
     ]
 
 

@@ -46,7 +46,7 @@ from site_yonetim.models import (
     UnitType,
     Vehicle,
 )
-from site_yonetim.services import ledger, opening_balances, vehicles
+from site_yonetim.services import ledger, opening_balances, period_lock, vehicles
 from site_yonetim.services.imports import MAX_UPLOAD_BYTES, PENDING_TTL, ZIP_SIGNATURE, open_sheet
 
 ROLLBACK_WINDOW = timedelta(days=7)
@@ -604,6 +604,9 @@ async def rollback(session: AsyncSession, batch: ImportBatch, *, today: date, no
                 select(LedgerEntry).where(LedgerEntry.id.in_(_ids(batch, "entries")))
             )
         )
+        await period_lock.ensure_writable(session, today)
+        for entry in entries:  # düzeltme: kilitli döneme ait açılış kaydı geri alınamaz
+            await period_lock.ensure_writable(session, entry.date, original=True)
         await ledger.lock_accounts(session, [e.account_id for e in entries])
         for entry in entries:
             session.add(

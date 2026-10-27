@@ -28,6 +28,15 @@ PUBLIC_ROUTES = {
     # Sakinin kendini kaydetmesi (servis isteği 13): IP başına istek sınırı, tahmin edilemez kod,
     # yalnız site adı döner, başvuru yönetici onayı bekler.
     "/api/v1/public/registration/{code}",
+    # P5 / PLT-01, §4.7: kodla giriş, parola sıfırlama, davet. Hedef başına sınır (60 sn, günde
+    # 10, 5 hatada 15 dk) + IP başına istek sınırı; kayıtlı/kayıtsız aynı yanıt; kodun ve davet
+    # jetonunun yalnız özeti saklanır.
+    "/api/v1/auth/otp/request",
+    "/api/v1/auth/otp/verify",
+    "/api/v1/auth/password/forgot",
+    "/api/v1/auth/password/reset",
+    "/api/v1/auth/invitations/{token}",
+    "/api/v1/auth/invitations/{token}/accept",
     # Davetle kayıt (servis isteği 23): IP başına istek sınırı, belirtecin yalnız özeti saklanır,
     # telefon davetteki numarayla tam eşleşmeli; yanıt yalnız site/bölüm adı ve son 4 hane.
     "/api/v1/public/invitations/{token}",
@@ -39,7 +48,16 @@ PUBLIC_ROUTES = {
     "/api/v1/public/quote-links/{token}/file",
 }
 # Geçici parolalı oturumun erişebildiği uçlar (docs/05 §8.1). Gerisi `password_changed` ister.
-PASSWORD_PENDING_ROUTES = {"/api/v1/me", "/api/v1/auth/change-password"}
+PASSWORD_PENDING_ROUTES = {
+    "/api/v1/me",
+    "/api/v1/auth/change-password",
+    # Yönetici rolünde 2FA kurulumu (geçiş süresi bitince yalnız bunlar açık) ve girişin ikinci
+    # adımı (`mfa_passed` bile istemez — kod bekleyen oturuma açık tek uç).
+    "/api/v1/me/security",
+    "/api/v1/auth/mfa/setup",
+    "/api/v1/auth/mfa/enable",
+    "/api/v1/auth/mfa/verify",
+}
 
 
 def _calls(dependant: Dependant) -> set[object]:
