@@ -90,7 +90,7 @@ from site_yonetim.models import (
 from site_yonetim.models.approvals import ApprovalRequest
 from site_yonetim.models.audit import Actor, set_actor
 from site_yonetim.services import approvals as approvals_svc
-from site_yonetim.services import ledger, service_desk
+from site_yonetim.services import ledger, period_lock, service_desk
 from site_yonetim.services import notifications as notify_svc
 from site_yonetim.services import requests as requests_svc
 from site_yonetim.services.charging import BUSINESS_TZ
@@ -497,6 +497,7 @@ async def _bill(session: AsyncSession, r: Reservation, area_name: str, today: da
                 "malik/kiracı ekleyin.",
             )  # fmt: skip
         r.account_id = account.id
+    await period_lock.ensure_writable(session, today)
     await ledger.lock_accounts(session, [r.account_id])
     entry = LedgerEntry(
         id=uuid.uuid7(),
@@ -520,6 +521,7 @@ async def _refund(session: AsyncSession, r: Reservation, today: date) -> None:
     original = await session.get(LedgerEntry, r.charge_entry_id)
     if original is None:  # pragma: no cover
         return
+    await period_lock.ensure_writable(session, today)
     await ledger.lock_accounts(session, [original.account_id])
     refund = LedgerEntry(
         id=uuid.uuid7(),
