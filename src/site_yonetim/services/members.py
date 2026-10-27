@@ -230,7 +230,10 @@ async def add_member(
     actor: Actor,
     now: datetime,
     inviter: Inviter,
+    defer_role: bool = False,
 ) -> Added:
+    """`defer_role`: kritik rol onay bekliyor (P16b) — kullanıcı ve üyelik rolsüz açılır, rol
+    onaylanınca `role_approvals` yürütücüsü atar."""
     errors: dict[str, str] = {}
     try:
         name = check_full_name(full_name)
@@ -273,10 +276,11 @@ async def add_member(
     membership = SiteMembership(user_id=user.id, is_active=True)
     session.add(membership)
     await session.flush()
-    await roles_svc.assign_role(
-        session, site, user_id=user.id, data=assignment, actor_id=actor.user_id,
-        actor_permissions=actor.permissions, actor_name=actor.name, now=now,
-    )  # fmt: skip
+    if not defer_role:
+        await roles_svc.assign_role(
+            session, site, user_id=user.id, data=assignment, actor_id=actor.user_id,
+            actor_permissions=actor.permissions, actor_name=actor.name, now=now,
+        )  # fmt: skip
     return Added(await get_member(session, site, membership.id, now), sent)
 
 

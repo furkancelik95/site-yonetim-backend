@@ -364,23 +364,50 @@ def _assignment(role_key: str | None, body: AssignmentFields) -> roles_svc.Assig
     )
 
 
-@router.post("/members", status_code=status.HTTP_201_CREATED, summary="Kullanıcı ekle")
+@router.post(
+    "/members",
+    status_code=status.HTTP_201_CREATED,
+    summary="Kullanıcı ekle",
+    response_model=Written[AddedOut] | Written[ApprovalPendingOut],
+    responses={202: {"description": "`status: approval_pending` — kritik rol ataması onayda"}},
+)
 async def add_member(
     body: MemberIn,
     ctx: MembersManage,
     current: CurrentUserDep,
     now: NowDep,
+    today: TodayDep,
     response: Response,
     request: Request,
     settings: SettingsDep,
     channels: ChannelsDep,
-) -> Written[AddedOut]:
+) -> Written[AddedOut] | Written[ApprovalPendingOut]:
+    """Kritik izin içeren rol için `role_change` onay kuralı tanımlıysa 202 `approval_pending`:
+    kullanıcı rolsüz açılır ve davet edilir; rol onaylanınca atanır."""
+    assignment = _assignment(body.role_key, body)
     try:
+        deferred = await role_approvals.needs_approval(ctx.session, body.role_key, today=today)
         added = await svc.add_member(
             ctx.session, ctx.site, full_name=body.full_name, email=body.email,
-            assignment=_assignment(body.role_key, body), actor=_actor(ctx, current), now=now,
-            inviter=_inviter(request, settings, channels),
+            assignment=assignment, actor=_actor(ctx, current), now=now,
+            inviter=_inviter(request, settings, channels), defer_role=deferred,
         )  # fmt: skip
+        pending = None
+        if deferred:
+            pending = await role_approvals.request_if_critical(
+                ctx.session, ctx.site, user_id=added.member.user.id,
+                user_name=added.member.user.full_name, data=assignment,
+                requester=Person(current.user.id, current.user.full_name),
+                actor_permissions=ctx.access.permissions, today=today, now=now,
+            )  # fmt: skip
+            if pending is None:  # pragma: no cover — kural aynı işlemde kayboldu
+                await roles_svc.assign_role(
+                    ctx.session, ctx.site, user_id=added.member.user.id, data=assignment,
+                    actor_id=current.user.id, actor_permissions=ctx.access.permissions,
+                    actor_name=current.user.full_name, now=now,
+                )  # fmt: skip
+    except ApprovalError as exc:
+        raise ApiError(exc.status, exc.code, exc.message) from exc
     except FormFieldError as exc:
         raise form_error(exc) from exc
     except (svc.MemberRuleError, RoleRuleError) as exc:
@@ -388,6 +415,14 @@ async def add_member(
     await ctx.session.commit()
     response.headers["Cache-Control"] = "no-store"  # önizleme bağlantısı önbelleğe düşmesin
     member = added.member
+    if pending is not None:
+        response.status_code = status.HTTP_202_ACCEPTED
+        return Written(
+            data=ApprovalPendingOut(approval_request_id=pending.id),
+            message=f"{member.user.full_name} eklendi ve davet gönderildi; kritik rol ataması "
+            f"onaya gönderildi (talep #{pending.number}), onaylanana kadar rolü yok.",
+        )
+    member = await svc.get_member(ctx.session, ctx.site, member.id, now)
     role_name = member.primary.name if member.primary else ""
     if added.invitation is None:
         message = (
@@ -451,19 +486,49 @@ class MemberPatch(BaseModel):
     is_active: bool | None = None
 
 
-@router.patch("/members/{member_id}", summary="Ana rolü değiştir, erişimi kapat/aç")
+@router.patch(
+    "/members/{member_id}",
+    summary="Ana rolü değiştir, erişimi kapat/aç",
+    response_model=Written[MemberOut] | Written[ApprovalPendingOut],
+    responses={202: {"description": "`status: approval_pending` — kritik ana rol onayda"}},
+)
 async def update_member(
     member_id: uuid.UUID,
     body: MemberPatch,
     ctx: MembersManage,
     current: CurrentUserDep,
     now: NowDep,
-) -> Written[MemberOut]:
+    today: TodayDep,
+    response: Response,
+) -> Written[MemberOut] | Written[ApprovalPendingOut]:
+    """Ana rol kritik izin içeriyorsa ve `role_change` kuralı varsa 202 `approval_pending`: rol
+    onaylanınca atanır (kişinin diğer tesis rolleri o anda kapanır); `is_active` hemen uygulanır."""
     try:
-        member, closed = await svc.update_member(
-            ctx.session, ctx.site, member_id, role_key=body.role_key, is_active=body.is_active,
-            actor=_actor(ctx, current), now=now,
-        )  # fmt: skip
+        pending = None
+        role_key = body.role_key
+        if role_key is not None:
+            member = await svc.get_member(ctx.session, ctx.site, member_id, now)
+            if member.source != "site":
+                raise LookupError
+            pending = await role_approvals.request_if_critical(
+                ctx.session, ctx.site, user_id=member.user.id, user_name=member.user.full_name,
+                data=roles_svc.AssignmentInput(role_key=role_key),
+                requester=Person(current.user.id, current.user.full_name),
+                actor_permissions=ctx.access.permissions, today=today, now=now,
+                replace_primary=True,
+            )  # fmt: skip
+            if pending is not None:
+                role_key = None
+        if pending is not None and body.is_active is None:
+            member = await svc.get_member(ctx.session, ctx.site, member_id, now)
+            closed = False
+        else:
+            member, closed = await svc.update_member(
+                ctx.session, ctx.site, member_id, role_key=role_key, is_active=body.is_active,
+                actor=_actor(ctx, current), now=now,
+            )  # fmt: skip
+    except ApprovalError as exc:
+        raise ApiError(exc.status, exc.code, exc.message) from exc
     except LookupError:
         raise NotFoundError("Kullanıcı bulunamadı.") from None
     except FormFieldError as exc:
@@ -472,6 +537,13 @@ async def update_member(
         raise rule_error(exc) from exc
     await ctx.session.commit()
     name = member.user.full_name
+    if pending is not None:
+        response.status_code = status.HTTP_202_ACCEPTED
+        return Written(
+            data=ApprovalPendingOut(approval_request_id=pending.id),
+            message=f"{name} için ana rol değişikliği onaya gönderildi (talep "
+            f"#{pending.number}); onaylanınca atanır.",
+        )
     if closed:
         message = f"{name} erişimi kapatıldı; oturumları sonlandırıldı."
     elif body.is_active and member.is_active and body.role_key is None:

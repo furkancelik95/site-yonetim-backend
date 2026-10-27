@@ -1,4 +1,4 @@
-"""P16b (PM kararı K21): kayıt onayı, iade, tahakkuk / tahakkuk iptali ve kritik rol ataması
+"""P16b (PM kararı K21): kayıt onayı, iade, tahakkuk ters kaydı ve kritik rol ataması (üç yol)
 onay kuralına bağlı. Kural yoksa bugünkü davranış (mevcut testler); kural varsa 202, onayda
 yürütme, retde işlem yapılmaz / eski haline döner."""
 
@@ -164,41 +164,7 @@ async def test_iade_onaydan_once_alacak_biterse_yurutulemez(world: World) -> Non
     assert await world.balance() == Decimal("-50.00")
 
 
-# --- Tahakkuk ve ters kaydı ----------------------------------------------------------------
-
-
-async def test_tahakkuk_kurali_varsa_onaya_duser_onayda_kesilir(world: World) -> None:
-    await finalized_plan(world)
-    await rule(world, "charge_run")
-
-    response = await post_run(world)
-
-    assert response.status_code == 202, response.text
-    request_id = response.json()["data"]["approval_request_id"]
-    assert (await world.get("/charge-runs")).json()["total"] == 0
-    again = await post_run(world)  # aynı dönem için ikinci talep açılmaz
-    assert (again.status_code, again.json()["error"]["code"]) == (409, "approval_pending")
-
-    who = await approver(world)
-    decided = await decide(world, who, request_id)
-    assert decided.status_code == 200, decided.text
-    assert decided.json()["data"]["status"] == "executed"
-    runs = (await world.get("/charge-runs")).json()
-    assert runs["total"] == 1
-    assert runs["items"][0]["status"] == "posted"
-    assert await world.balance() == Decimal("1000.00")
-
-
-async def test_tahakkuk_talebi_reddedilirse_kesilmez(world: World) -> None:
-    await finalized_plan(world)
-    await rule(world, "charge_run")
-    request_id = (await post_run(world)).json()["data"]["approval_request_id"]
-    who = await approver(world)
-
-    assert (await decide(world, who, request_id, "reject")).status_code == 200
-
-    assert (await world.get("/charge-runs")).json()["total"] == 0
-    assert (await post_run(world)).status_code == 202  # yeniden talep açılabilir
+# --- Tahakkuk ters kaydı (tahakkuk kaydı onayı taslak akışında: test_finance_engine) --------
 
 
 async def test_tahakkuk_ters_kaydi_onaya_duser_onayda_yazilir(world: World) -> None:
@@ -285,3 +251,71 @@ async def test_kritik_rol_talebi_reddedilirse_atanmaz(world: World) -> None:
     assert await _role_keys(world, member_id) == {"security"}
     bad = await world.post(f"/members/{member_id}/role-assignments", {"role_key": "yok"})
     assert bad.status_code == 422  # geçersiz rol talep açmaz
+
+
+async def test_yeni_uyeye_kritik_rol_onaya_duser(world: World) -> None:
+    await rule(world, "role_change")
+
+    plain = await world.post(
+        "/members", {"full_name": "Deniz Er", "email": "deniz@test.local", "role_key": "security"}
+    )
+    critical = await world.post(
+        "/members",
+        {"full_name": "Selin Arı", "email": "selin@test.local", "role_key": "accounting"},
+    )
+
+    assert plain.status_code == 201, plain.text  # kritik izin yok: kural işlemez
+    assert critical.status_code == 202, critical.text
+    assert critical.json()["data"]["approval_request_id"]
+    members = {m["email"]: m for m in (await world.get("/members")).json()}
+    assert members["selin@test.local"]["roles"] == []  # kullanıcı açıldı, rol onay bekliyor
+
+    who = await approver(world)
+    decided = await decide(world, who, critical.json()["data"]["approval_request_id"])
+    assert decided.status_code == 200, decided.text
+    assert decided.json()["data"]["status"] == "executed"
+    member_id = members["selin@test.local"]["id"]
+    assert await _role_keys(world, member_id) == {"accounting"}
+
+
+async def test_yeni_uyeye_kritik_rol_kural_yoksa_dogrudan(world: World) -> None:
+    response = await world.post(
+        "/members",
+        {"full_name": "Selin Arı", "email": "selin@test.local", "role_key": "accounting"},
+    )
+    assert response.status_code == 201, response.text
+    assert [r["role_key"] for r in response.json()["data"]["member"]["roles"]] == ["accounting"]
+
+
+async def test_ana_rolu_kritik_role_cevirme_onaya_duser(world: World) -> None:
+    member_id = await _member(world, "selin@test.local", "security")
+    await rule(world, "role_change")
+
+    plain = await _patch(world, member_id, {"role_key": "technical"})
+    critical = await _patch(world, member_id, {"role_key": "accounting"})
+
+    assert plain.status_code == 200, plain.text
+    assert critical.status_code == 202, critical.text
+    assert await _role_keys(world, member_id) == {"technical"}  # onaya kadar eski ana rol
+
+    who = await approver(world)
+    decided = await decide(world, who, critical.json()["data"]["approval_request_id"])
+    assert decided.json()["data"]["status"] == "executed"
+    assert await _role_keys(world, member_id) == {"accounting"}  # ana rol değişti, eskisi kapandı
+
+
+async def test_ana_rol_degisikligi_reddedilirse_eski_rol_kalir(world: World) -> None:
+    member_id = await _member(world, "selin@test.local", "security")
+    await rule(world, "role_change")
+    response = await _patch(world, member_id, {"role_key": "accounting"})
+    who = await approver(world)
+
+    await decide(world, who, response.json()["data"]["approval_request_id"], "reject")
+
+    assert await _role_keys(world, member_id) == {"security"}
+    bad = await _patch(world, member_id, {"role_key": "yok"})
+    assert bad.status_code == 422  # geçersiz rol talep açmaz
+
+
+async def _patch(w: World, member_id: str, body: dict[str, str]) -> httpx2.Response:
+    return await w.api.patch(w.url(f"/members/{member_id}"), json=body, headers=w.headers)
