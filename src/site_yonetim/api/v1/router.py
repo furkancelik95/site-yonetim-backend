@@ -37,6 +37,7 @@ from site_yonetim.api.v1 import (
     platform,
     polls,
     portfolio,
+    purchasing,
     recurring_expenses,
     registrations,
     reports,
@@ -114,6 +115,8 @@ api_router.include_router(meetings.router)
 api_router.include_router(polls.router)
 api_router.include_router(contracts.router)
 api_router.include_router(inventory.router)
+api_router.include_router(purchasing.router)
+api_router.include_router(purchasing.public_router)
 api_router.include_router(staff.router)
 api_router.include_router(shifts.router)
 api_router.include_router(leaves.router)

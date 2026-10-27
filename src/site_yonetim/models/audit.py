@@ -213,6 +213,17 @@ AUDITED_TABLES = frozenset(
         "approval_requests",
         "approval_decisions",
         "approval_delegations",
+        # satın alma (SAT-01..06): kartlar, talep/teklif/karar, sipariş/kabul, fatura. Teklif
+        # linkinin belirteç özeti kayda girmez (`token_hash`).
+        "vendors",
+        "purchase_settings",
+        "purchase_requests",
+        "purchase_quotes",
+        "purchase_quote_links",
+        "purchase_decisions",
+        "purchase_orders",
+        "purchase_receipts",
+        "vendor_invoices",
         # belge arşivi (gizli belge açılışı ayrıca document_access_logs'ta)
         "documents",
         "document_versions",

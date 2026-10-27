@@ -55,6 +55,14 @@ Belge izinleri (`documents.*`) belge arşivi için eklendi (servis isteği 78, 2
 yalnız Yönetici; gizli belge Yönetici ve Denetçi; okuma Yönetici, YK üyesi, Denetçi, Muhasebe.
 Sakin belgeyi izinle değil kendi ucuyla görür (sakinlere açık + bölümüne özel).
 
+Satın alma (servis istekleri 62–67, 27.10.2026) yeni izin eklemez: okuma `expenses.read`; kart,
+ayar, sipariş, fatura ve "ödendi" `expenses.manage`; talep açma/teklif/link/seçim `expenses.read`
++ (`requests.assign` ya da `expenses.manage`); kabul `expenses.read` + (`requests.assign`,
+`inventory.manage` ya da `expenses.manage`) — kabuldeki stok girişi **sistem adına** yazılır,
+kabul edenin stok yetkisi aranmaz. Onay kararı: sitede onay kuralı varsa onay mekanizmasının
+atadığı onaycı (izin gerekmez), yoksa `expenses.manage`; talep eden kendi talebini, faturayı
+giren farkını onaylayamaz. Tedarikçi teklif linki oturumsuz (`/public/quote-links/{token}`).
+
 ## 3. Site rolleri (şablon)
 
 | Rol | İzinler |

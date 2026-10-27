@@ -762,6 +762,21 @@ UPDATE/DELETE tetikleyiciyle reddedilir.
 `visitors.anonymized_at` eklendi. Kişisel veri (ziyaretçi adı, plaka, not) saklama süresi dolunca
 gece işiyle silinir ya da "Anonim" olur; kaydın kendisi (tarih, sayı) kalır.
 
+## 9b. Satın alma (servis istekleri 62–67, göç 0034)
+
+| Tablo | Not |
+|---|---|
+| `vendors` [K] | tedarikçi kartı: unvan (+ `name_key` arama), `tax_number` (site içinde tekil), telefon, e-posta, IBAN (okumada maskeli; denetimde `tax_number/iban/phone/email` maskeli), kategori, `active/passive/blacklist`. Silinmez |
+| `purchase_settings` [K] | site başına bir satır: eşikler (JSONB `[{max, quotes}]`), `above_quotes`, `tolerance_percent` (NUMERIC 5,2), `link_days`; yoksa varsayılan |
+| `purchase_requests` [K] | `ST-YYYY-NNNN` (yıl + sıra, kilit altında), konu, gerekçe, gider kategorisi, tahmini toplam, **talep anındaki bütçe görüntüsü**, `over_budget`, `required_quotes`, durum, seçilen teklif, istisna/ret gerekçesi, açık onay talebi (`approval_request_id`) |
+| `purchase_request_items` [K] | kalem: açıklama, miktar (NUMERIC 14,3), birim, tahmini birim fiyat, stok kartı (isteğe bağlı) |
+| `purchase_quotes` · `purchase_quote_lines` [K] | teklif (talep × tedarikçi tekil): toplam (kalemlerden), teslim günü, ödeme koşulu, geçerlilik, `source: staff/vendor_link`, belge (`stored_file_id`) · kalem birim fiyatı |
+| `purchase_quote_links` [K] | tedarikçi linki: **yalnız `token_hash`** (SHA-256, global tekil), son geçerlilik, `used_at`, `closed_at`, oluşan teklif |
+| `purchase_decisions` [K] | istisna/satın alma/sipariş kararı (doğrudan ya da onay mekanizmasından). **Değişmez** |
+| `purchase_orders` · `purchase_order_lines` [K] | `SIP-YYYY-NNNN`, talep başına bir, seçilen teklif, tedarikçi, kategori, toplam, `sent/partial/received/closed` · kalem (birim fiyat tekliften, `received_quantity` kabulle artar) |
+| `purchase_receipts` · `purchase_receipt_lines` [K] | kabul: not, 1–5 puan, fotoğraf/irsaliye, kabul eden · kalem miktarı (**değişmez**). Stoklu kalemin stok hareketi aynı işlemde, sistem adına |
+| `vendor_invoices` · `vendor_invoice_lines` [K] | tedarikçi faturası: numara (tedarikçide tekil), tarih, vade, toplam, beklenen, farklar (JSONB), `matched/diff_pending/disputed/paid`, karar, belge, ödendi (`paid_on`, hesap, oluşan `expense_id`) · kalem (**değişmez**). Siparişte tek bekleyen fark (kısmi benzersiz indeks) |
+
 ## 10. Eksik ama gerekecek
 
 Referans uygulamada yok, PRD'de MVP işaretli. Tasarlanırken bunlara yer bırak:

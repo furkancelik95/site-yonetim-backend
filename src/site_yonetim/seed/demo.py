@@ -39,6 +39,7 @@ from site_yonetim.domain.operations import (
 )
 from site_yonetim.domain.parking import check_space
 from site_yonetim.domain.patrol import check_plan, check_point
+from site_yonetim.domain.purchasing import VendorInput
 from site_yonetim.domain.security import VisitorKind
 from site_yonetim.domain.service_desk import PermitType
 from site_yonetim.domain.staffing import week_start
@@ -65,6 +66,8 @@ from site_yonetim.models import (
     OrganizationMembership,
     Person,
     Plan,
+    PurchaseOrder,
+    PurchaseRequest,
     Request,
     ServiceTariff,
     Site,
@@ -105,6 +108,7 @@ from site_yonetim.seed.demo_data import (
     STAFF_CARDS,
     TARIFFS,
     UNPAID_SHARE_THIS_MONTH,
+    VENDORS,
     DocumentSpec,
     SiteSpec,
     occupancy_for,
@@ -127,7 +131,10 @@ from site_yonetim.services import (
     service_desk,
 )
 from site_yonetim.services import approvals as approvals_svc
+from site_yonetim.services import inventory as inventory_svc
 from site_yonetim.services import leaves as leaves_svc
+from site_yonetim.services import purchase_orders as orders_svc
+from site_yonetim.services import purchasing as purchasing_svc
 from site_yonetim.services import shifts as shifts_svc
 from site_yonetim.services import staff as staff_svc
 from site_yonetim.services import timesheets as timesheets_svc
@@ -253,6 +260,7 @@ async def _seed_demo(
     if aksu is not None:
         await _seed_resident(factory, aksu, password_hash, store, today)
         await _seed_staff(factory, aksu, user_ids, today)
+        await _seed_purchasing(factory, aksu, user_ids, today)
 
     logger.info("Demo verisi yüklendi: %d site, %d hesap.", len(SITES), len(ACCOUNTS) + 1)
     return True
@@ -930,6 +938,179 @@ async def _seed_staff(
                     await timesheets_svc.finalize(
                         session, day, today=today, actor_name="Demo verisi"
                     )
+
+
+async def _seed_purchasing(
+    factory: async_sessionmaker[AsyncSession],
+    site_id: uuid.UUID,
+    user_ids: dict[str, uuid.UUID],
+    today: date,
+) -> None:
+    """Satın alma (servis istekleri 62–67): tedarikçiler (biri pasif); açık talep; teklifli talep
+    (personel teklifi + açık tedarikçi linki); sipariş + tam kabul (stoğa giriş) + eşleşen fatura
+    (ödenecekler listesinde); kısmi kabul + fark çıkan fatura (fark onayı bekliyor)."""
+    now = datetime.combine(today, time(10), BUSINESS_TZ)
+    technician = approvals_svc.Person(user_ids["teknik@demo.local"], "Ergün Kılıç")
+    manager = approvals_svc.Person(user_ids["yonetici@demo.local"], "Kerem Yıldırım")
+    accounting = approvals_svc.Person(user_ids["muhasebe@demo.local"], "Selin Arı")
+    with site_scope(site_id):
+        async with factory() as session, session.begin():
+            site = await session.get(Site, site_id)
+            category = await session.scalar(
+                select(ExpenseCategory.id).where(
+                    ExpenseCategory.kind == ExpenseCategoryKind.OPERATING.value
+                )
+            )
+            if site is None or category is None:  # pragma: no cover
+                return
+            vendors = [
+                await purchasing_svc.save_vendor(
+                    session,
+                    VendorInput(
+                        name,
+                        tax,
+                        None,
+                        f"satis{index}@ornek-tedarikci.com",
+                        iban,
+                        kind,
+                        status,
+                        None,
+                    ),
+                    None,
+                )
+                for index, (name, tax, kind, iban, status) in enumerate(VENDORS, start=1)
+            ]
+            bulb = await inventory_svc.create_item(
+                session, name="LED ampul 9W", unit_label="adet", min_quantity="20", location="Depo"
+            )
+
+            def item(
+                text: str, qty: str, price: str, stock: uuid.UUID | None = None
+            ) -> purchasing_svc.ItemInput:
+                return purchasing_svc.ItemInput(text, qty, "adet", Decimal(price), stock)
+
+            def offer(*prices: str) -> purchasing_svc.QuoteInput:
+                return purchasing_svc.QuoteInput(
+                    [Decimal(p) for p in prices],
+                    7,
+                    "30 gün vadeli",
+                    today + timedelta(days=30),
+                    None,
+                )
+
+            async def request(
+                title: str, reason: str, *items: purchasing_svc.ItemInput
+            ) -> PurchaseRequest:
+                return await purchasing_svc.create_request(
+                    session,
+                    purchasing_svc.RequestInput(title, reason, category, list(items)),
+                    actor=technician,
+                    today=today,
+                )
+
+            await request(
+                "Bahçe sulama hortumu",
+                "Mevcut hortumlar çatladı; yaz öncesi yenilenmeli.",
+                item("Sulama hortumu 25 m", "4", "850.00"),
+            )
+            quoted = await request(
+                "Otopark aydınlatması",
+                "Otoparkta 6 armatür yanmıyor; gece güvenlik sorunu.",
+                item("LED armatür 36W", "6", "1450.00"),
+                item("Montaj işçiliği", "1", "2500.00"),
+            )
+            await purchasing_svc.add_quote(
+                session,
+                quoted,
+                vendors[1].id,
+                offer("1390.00", "2400.00"),
+                actor=technician,
+                today=today,
+                now=now,
+            )
+            await purchasing_svc.create_link(
+                session, quoted, vendors[0].id, actor=technician, now=now
+            )
+
+            async def ordered(
+                pr: PurchaseRequest, vendor: uuid.UUID, *prices: str
+            ) -> PurchaseOrder:
+                quote = await purchasing_svc.add_quote(
+                    session, pr, vendor, offer(*prices), actor=technician, today=today, now=now
+                )
+                await purchasing_svc.select_quote(
+                    session, site, pr, quote.id, None, today=today, now=now
+                )
+                await purchasing_svc.decide(
+                    session,
+                    site,
+                    pr,
+                    "approve",
+                    None,
+                    actor=manager,
+                    can_manage=True,
+                    today=today,
+                    now=now,
+                )
+                written = await orders_svc.create_order(
+                    session, site, pr, actor=accounting, today=today, now=now
+                )
+                if written.order is None:  # pragma: no cover — demoda onay kuralı yok
+                    raise RuntimeError("Demo siparişi onaya düştü")
+                return written.order
+
+            bulbs = await ordered(
+                await request(
+                    "Ortak alan ampulleri",
+                    "Merdiven ve koridor aydınlatması için stok yenileme.",
+                    item("LED ampul 9W", "40", "85.00", bulb.id),
+                ),
+                vendors[1].id,
+                "82.50",
+            )
+            await orders_svc.receive(
+                session, bulbs, ["40"], note="İrsaliye no 4471", rating=5, actor=technician
+            )
+            await orders_svc.create_invoice(
+                session,
+                site,
+                orders_svc.InvoiceInput(
+                    bulbs.id,
+                    "BRE2026000417",
+                    today,
+                    today + timedelta(days=30),
+                    [("40", Decimal("82.50"))],
+                ),
+                actor=accounting,
+                today=today,
+                now=now,
+            )
+            pump = await ordered(
+                await request(
+                    "Hidrofor bakım kiti",
+                    "Yıllık hidrofor bakımında değişecek parçalar.",
+                    item("Mekanik salmastra seti", "2", "1800.00"),
+                ),
+                vendors[0].id,
+                "1750.00",
+            )
+            await orders_svc.receive(
+                session, pump, ["1"], note="1 set eksik geldi", rating=3, actor=technician
+            )
+            await orders_svc.create_invoice(
+                session,
+                site,
+                orders_svc.InvoiceInput(
+                    pump.id,
+                    "AKN2026000932",
+                    today,
+                    today + timedelta(days=15),
+                    [("2", Decimal("1750.00"))],
+                ),
+                actor=accounting,
+                today=today,
+                now=now,
+            )
 
 
 def _person(first: str, last: str) -> Person:

@@ -32,6 +32,11 @@ PUBLIC_ROUTES = {
     # telefon davetteki numarayla tam eşleşmeli; yanıt yalnız site/bölüm adı ve son 4 hane.
     "/api/v1/public/invitations/{token}",
     "/api/v1/public/invitations/{token}/accept",
+    # Tedarikçi teklif linki (servis isteği 64, SAT-02): IP başına istek sınırı, belirteç 256 bit
+    # ve yalnız özeti saklanır, tek kullanımlık ve süreli; yanıt yalnız talep kalemleri. Belge
+    # ekleme yalnız gönderimden sonraki 1 saatte, bir kez.
+    "/api/v1/public/quote-links/{token}",
+    "/api/v1/public/quote-links/{token}/file",
 }
 # Geçici parolalı oturumun erişebildiği uçlar (docs/05 §8.1). Gerisi `password_changed` ister.
 PASSWORD_PENDING_ROUTES = {"/api/v1/me", "/api/v1/auth/change-password"}

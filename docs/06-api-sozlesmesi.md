@@ -595,6 +595,37 @@ kapalı); mevcut siteler ve demo `live`. Gece işi: `run-structure-jobs` (günde
 
 ---
 
+### 2.25 Satın alma (servis istekleri 62–67, Yazılım Dokümanı SAT-01..06)
+Modül kapısı yok (finans çekirdeği; `docs/12` K-SAT). Okuma `expenses.read`. "Alıcı" =
+`expenses.read` + (`requests.assign` ya da `expenses.manage`). Listeler sayfalı; miktar **metin**
+(`"2.5"`, en çok 3 ondalık), para metin.
+
+| Yöntem | Yol | İzin | Durum | Not |
+|---|---|---|---|---|
+| GET | `/sites/{slug}/vendors?q=&status=` | `expenses.read` | R | sayfalı `{id, name, tax_no, phone, email, iban_masked ("TR33 •••• •••• 1326"), category, status: active\|passive\|blacklist, note, rating_avg ("4.5"), rating_count, order_count}`; IBAN hiçbir okumada açık dönmez |
+| POST · PATCH | `/sites/{slug}/vendors[/{id}]` | `expenses.manage` | R | `{name 2–120, tax_no (10 VKN / 11 TCKN, site içinde tekil → 422 fields.tax_no), phone?, email?, iban? (TR + mod-97), category?, status, note?}`; düzenlemede boş IBAN mevcut olanı korur |
+| GET · PUT | `/sites/{slug}/purchase-settings` | okuma `expenses.read`, yazma `expenses.manage` | R | `{thresholds: [{max, quotes}], above_quotes, tolerance_percent ("1.00"), link_days}`; varsayılan < 10.000 → 1, < 100.000 → 2, üstü 3; %1; 7 gün |
+| GET | `/sites/{slug}/purchase-budget?category_id=` | `expenses.read` | R | `{has_budget, annual, spent, committed, remaining}` — yürürlükteki işletme projesi kalemleri; bu yılın gerçekleşen gideri; onay bekleyen/onaylı talepler (seçilen teklif tutarı) + açık siparişlerin ödenmemiş kısmı |
+| GET | `/sites/{slug}/purchase-requests?status=` | `expenses.read` | R | sayfalı satır `{id, number "ST-2026-0001", title, category_name, over_budget, estimated_total, quote_count, required_quotes, status, order_number, …}` |
+| GET | `/sites/{slug}/purchase-requests/{id}` | `expenses.read` | R | kalemler, bütçe anlık görüntüsü, teklifler (`lines[].unit_price`, `source: staff\|vendor_link`, `file_id`, puan), linkler (`id, vendor_name, expires_at, used_at, state: open\|used\|expired` — belirteç dönmez), kararlar (`stage: exception\|purchase\|order`), `approval` (açık onay talebi), `order_id/number` |
+| POST | `/sites/{slug}/purchase-requests` | alıcı | R | `{title, reason, category_id, items: [{description, qty, unit?, est_unit_price, stock_item_id?}]}`; 422 `fields.items.{k}.qty` … |
+| POST | `/sites/{slug}/purchase-requests/{id}/quotes` | alıcı | R | `{vendor_id, lines: [{unit_price}], delivery_days, payment_terms, valid_until, note?}`; yalnız `quoting` (409 `invalid_status`); pasif/kara liste ya da ikinci teklif 422 `fields.vendor_id`; toplam kalemlerden |
+| POST | `/sites/{slug}/purchase-requests/{id}/quote-links` | alıcı | R | `{vendor_id}` → `{token, expires_at, vendor_name, vendor_email}` (belirteç yalnız bu yanıtta; e-posta K5); açık link 409 `link_open`, teklif var 409 `quoted` |
+| GET · POST | `/public/quote-links/{token}` | **herkese açık** | R | IP başına 30/5 dk⁻¹; bilinmeyen 404, kullanılmış/süresi dolmuş/talep kapanmış 410 `link_closed`. GET yalnız `{site_name, vendor_name, number, title, items: [{description, qty, unit}], expires_at}`; POST teklif alanları + `terms_ack` |
+| POST | `/public/quote-links/{token}/file` | **herkese açık** | R | multipart `file`; gönderimden sonraki 1 saat, bir kez (410) |
+| POST | `/sites/{slug}/purchase-requests/{id}/select-quote` | alıcı | R | `{quote_id, exception_reason?}`; eksik teklif → gerekçe ≥ 10 (422 `quote_exception` + `fields.exception_reason`) → `exception_pending`; yeterli → `approval_pending`. Onay kuralı varsa onay talebi açılır (`approval`) |
+| POST | `/sites/{slug}/purchase-requests/{id}/decide` | onay kuralı varsa onaycı; yoksa `expenses.manage` | R | `{decision: approve\|reject, note}`; talep eden 403 `self_approval`; ret gerekçesi 422 `fields.note`; kural varsa karar onay mekanizmasına iletilir (403 `not_an_approver`) |
+| POST | `/sites/{slug}/purchase-requests/{id}/cancel` | alıcı (açan ya da `expenses.manage`) | R | açık linkler kapanır, bekleyen onay talebi geri çekilir; sipariş/ret/iptal 409 |
+| GET | `/sites/{slug}/purchase-orders?status=` · `/{id}` | `expenses.read` | R | ayrıntı: kalemler (`qty, received, invoiced`), kabuller (`lines[].qty`, `rating`, `file_id`), faturalar |
+| POST | `/sites/{slug}/purchase-orders` | `expenses.manage` | R | `{pr_id}` → `{status: created\|approval_pending, order, approval_request_id}`; onaysız 409 `not_approved`, tedarikçi pasif 409 `vendor_inactive`; "Sipariş" kuralı varsa **202** |
+| POST | `/sites/{slug}/purchase-orders/{id}/receipts` | `expenses.read` + (`requests.assign` \| `inventory.manage` \| `expenses.manage`) | R | `{lines: [{qty}], note?, rating? 1–5}`; kalandan fazlası 422 `fields.lines.{k}`; stoklu kalem **sistem adına** stoğa girer (stok yetkisi aranmaz) |
+| POST | `/sites/{slug}/purchase-quotes/{id}/file` · `/purchase-receipts/{id}/file` · `/vendor-invoices/{id}/file` | alıcı · kabul · `expenses.manage` | R | multipart `file` (PDF/JPG/PNG/WEBP ≤ 10 MB, içerik imzası); kayda bir kez (409 `file_exists`); indirme `GET …/files/{id}` |
+| GET | `/sites/{slug}/vendor-invoices?status=` | `expenses.read` | R | sayfalı `{…, lines, total, expected_total, diffs[], status: matched\|diff_pending\|disputed\|paid, decision, approval_request_id, file_id, paid_on, expense_id, overdue}` |
+| POST | `/sites/{slug}/vendor-invoices` | `expenses.manage` | R | `{order_id, number, date, due_date, lines: [{qty, unit_price}]}`; numara büyük harf, tedarikçide tekil; teslim alınmamış (faturalanmamış) miktar yoksa 409 `no_receipt`; bekleyen fark varken 409 `invoice_pending`; eşleşme: miktar tam, toplam ± tolerans |
+| POST | `/sites/{slug}/vendor-invoices/{id}/decide` | kural varsa onaycı; yoksa `expenses.manage` | R | `{decision, note (≥ 5)}`; faturayı giren 403 `self_approval`; onay → `matched`, ret → `disputed` |
+| GET | `/sites/{slug}/payables` | `expenses.read` | R | `{invoices (eşleşmiş, vadeye göre, overdue), direct_expenses {count, total}, total}` |
+| POST | `/sites/{slug}/vendor-invoices/{id}/mark-paid` | `expenses.manage` | R | `{paid_on, cash_account_id}` + **Idempotency-Key**; aynı işlemde gider (talebin kategorisi, tedarikçi, belge no, fatura görüntüsü) + hesaptan çıkış (`expenses.create(paid=True)`); eşleşmemiş/ödenmiş 409 `not_matched`; dönem kapalı 409 `period_closed` |
+
 ## 3. Sıralama önerisi
 
 Frontend bu sırayla istek açacak:

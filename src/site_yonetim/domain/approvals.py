@@ -45,6 +45,7 @@ class ActionType(StrEnum):
     APPROVAL_RULE_CHANGE = "approval_rule_change"  # onay kuralı değişikliği
     OWNERSHIP_TRANSFER = "ownership_transfer"  # malik değişimi: satış / veraset (YAP-04)
     LEAVE_REQUEST = "leave_request"  # izin talebi (IK-03)
+    INVOICE_DIFFERENCE = "invoice_difference"  # tedarikçi faturası farkı (SAT-05 üçlü eşleşme)
 
 
 ACTION_LABELS: dict[ActionType, str] = {
@@ -69,6 +70,7 @@ ACTION_LABELS: dict[ActionType, str] = {
     ActionType.APPROVAL_RULE_CHANGE: "Onay kuralı değişikliği",
     ActionType.OWNERSHIP_TRANSFER: "Malik değişimi (satış / veraset)",
     ActionType.LEAVE_REQUEST: "İzin talebi",
+    ActionType.INVOICE_DIFFERENCE: "Fatura farkı (üçlü eşleşme)",
 }
 
 

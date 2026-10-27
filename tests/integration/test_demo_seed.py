@@ -39,15 +39,19 @@ from site_yonetim.models import (
     Permit,
     Person,
     Plan,
+    PurchaseRequest,
     Request,
     RequestEvent,
     ServiceQuote,
     ServiceTariff,
     Site,
     SiteModule,
+    StockItem,
     Unit,
     UnitType,
     User,
+    Vendor,
+    VendorInvoice,
 )
 from site_yonetim.seed.demo import DemoSeedRefusedError, seed_demo
 from site_yonetim.seed.demo_data import DEMO_PASSWORD, SITES, occupancy_for
@@ -117,6 +121,18 @@ async def test_demo_verisi_yuklenir(
         "reservations", "visitors", "packages", "valet",
         "general-assembly", "surveys", "staff",
     }  # fmt: skip
+    # Satın alma (servis istekleri 62–67): açık, teklifli, siparişli talepler; eşleşen ve fark
+    # çıkan birer fatura; kabulde stoğa giren ampuller.
+    with site_scope(sites["aksu-konaklari"].id):
+        async with session_factory() as session:
+            statuses = sorted(await session.scalars(select(PurchaseRequest.status)))
+            invoices = sorted(await session.scalars(select(VendorInvoice.status)))
+            vendors = await session.scalar(select(func.count()).select_from(Vendor))
+            stock = await session.scalar(select(StockItem.quantity))
+    assert statuses == ["ordered", "ordered", "quoting", "quoting"]
+    assert invoices == ["diff_pending", "matched"]
+    assert vendors == 4
+    assert stock == Decimal("40.000")
 
 
 async def test_demo_talepleri_zaman_sirasinda(
