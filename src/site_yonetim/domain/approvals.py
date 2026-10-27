@@ -49,12 +49,14 @@ class ActionType(StrEnum):
     AD_HOC_CHARGE = "ad_hoc_charge"  # dönem dışı ücret (FIN-06)
     FINANCE_PARAMETER = "finance_parameter"  # finans parametresi değişikliği (FIN-16)
     DEMAND_LETTER = "demand_letter"  # ihtarname (FIN-12)
+    BUDGET = "budget"  # yıllık bütçe ve işletme projesi kesinleştirme (FIN-17, D-16)
+    CHARGE_ADJUSTMENT = "charge_adjustment"  # kesinleşmiş tahakkukta satır düzeltmesi (FIN-05)
 
 
 ACTION_LABELS: dict[ActionType, str] = {
     ActionType.CHARGE_RULE: "Aidat kuralı",
     ActionType.CHARGE_RUN: "Tahakkuk",
-    ActionType.CHARGE_RUN_REVERSAL: "Tahakkuk iptali / düzeltme",
+    ActionType.CHARGE_RUN_REVERSAL: "Tahakkuk iptali",
     ActionType.REFUND: "İade",
     ActionType.DEBT_WRITE_OFF: "Borç silme",
     ActionType.EXPENSE: "Gider",
@@ -77,6 +79,8 @@ ACTION_LABELS: dict[ActionType, str] = {
     ActionType.AD_HOC_CHARGE: "Dönem dışı ücret",
     ActionType.FINANCE_PARAMETER: "Finans parametresi",
     ActionType.DEMAND_LETTER: "İhtarname",
+    ActionType.BUDGET: "Bütçe",
+    ActionType.CHARGE_ADJUSTMENT: "Tahakkuk düzeltme",
 }
 
 

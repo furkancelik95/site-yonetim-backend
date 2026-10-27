@@ -116,6 +116,8 @@ async def account_row(session: AsyncSession, account_id: uuid.UUID) -> AccountRo
 class StatementLine:
     entry: LedgerEntry
     running_balance: Decimal
+    allocated: Decimal = Decimal("0.00")  # bu borca yapılan mahsuplar (tahsilat + avans)
+    advance_applied: Decimal = Decimal("0.00")  # önceden yatırılmış avanstan mahsup (D-6)
 
 
 async def statement(
@@ -150,7 +152,33 @@ async def statement(
         .offset(offset)
         .limit(limit)
     )
-    return [StatementLine(entry, value) for entry, value in rows], total
+    pairs = [(entry, value) for entry, value in rows.all()]
+    debts = [entry.id for entry, _ in pairs if entry.debit > 0]
+    allocated: dict[uuid.UUID, tuple[Decimal, Decimal]] = {}
+    if debts:
+        # Avans mahsubu: tahsilat borçtan önce kaydedilmiş, mahsup sonradan yazılmış (D-6).
+        later = PaymentAllocation.created_at > Payment.created_at
+        for entry_id, total_amount, advance in await session.execute(
+            select(
+                PaymentAllocation.ledger_entry_id,
+                func.sum(PaymentAllocation.amount),
+                func.coalesce(func.sum(PaymentAllocation.amount).filter(later), 0),
+            )
+            .join(
+                Payment,
+                and_(
+                    Payment.id == PaymentAllocation.payment_id,
+                    Payment.site_id == PaymentAllocation.site_id,
+                ),
+            )
+            .where(PaymentAllocation.ledger_entry_id.in_(debts))
+            .group_by(PaymentAllocation.ledger_entry_id)
+        ):
+            allocated[entry_id] = (total_amount, advance)
+    return [
+        StatementLine(entry, value, *allocated.get(entry.id, (Decimal("0.00"), Decimal("0.00"))))
+        for entry, value in pairs
+    ], total
 
 
 @dataclass(frozen=True, slots=True)

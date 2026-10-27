@@ -156,6 +156,12 @@ AUDITED_TABLES = frozenset(
         "ad_hoc_charges",
         "accounting_mapping_versions",
         "finance_parameter_versions",
+        # finans motoru (P03b): aidat kuralları, satır düzeltmesi, yıllık bütçe
+        "billing_rules",
+        "billing_rule_versions",
+        "charge_adjustments",
+        "budgets",
+        "budget_lines",
         # operasyon
         "incidents",
         "lost_items",

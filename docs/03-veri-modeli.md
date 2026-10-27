@@ -324,15 +324,17 @@ Referans uygulamada `scope_*_ids` virgüllü metin olarak saklanıyordu; Postgre
 |---|---|---|
 | enabled | BOOL | |
 | charge_day | INT | 1–28 (her ayda bulunsun) |
-| due_days | INT | 0–60; vade = kesim günü + due_days |
+| due_days | INT | **kullanılmaz** (K25, göç 0028): vade finans parametresi `due_day` |
+| draft_lead_days | INT | 0–15 (varsayılan 5): "Tahakkuk" onay kuralı varsa taslak kesimden bu kadar gün önce (FIN-05) |
 | notify_on_run | BOOL | bildirim sağlayıcısı yok (`12` K5) — şimdilik yalnız kayıt |
 | enabled_on | DATE NULL | açıldığı gün: daha önceki kesim günü geriye dönük kesilmez |
+| enabled_by_id, enabled_by | UUID NULL → users, TEXT | ayarı açan: gece işinin taslağı onaya onun adına gider |
 
 ### `charge_schedule_runs` [K] — otomatik tahakkukun ay başına sonucu
 | Sütun | Tip | Not |
 |---|---|---|
 | year, month | INT | `(site_id, year, month)` benzersiz — iş iki kez çalışsa da tek sonuç |
-| status | TEXT | `posted` · `skipped` (dönem kesilmiş, proje yok, önizlemede uyarı) · `failed` (ertesi gün yeniden denenir) |
+| status | TEXT | `posted` · `drafted` (taslak onaya gönderildi) · `skipped` (dönem kesilmiş, proje yok, önizlemede uyarı) · `failed` (ertesi gün yeniden denenir) |
 | message | TEXT NULL | atlama/hata nedeni |
 | charge_run_id | UUID NULL → charge_runs | kesildiyse |
 | ran_at | TIMESTAMPTZ | |
@@ -341,8 +343,11 @@ Referans uygulamada `scope_*_ids` virgüllü metin olarak saklanıyordu; Postgre
 | Sütun | Tip | Not |
 |---|---|---|
 | period_id | UUID → periods | |
-| budget_plan_id | UUID → budget_plans | |
-| status | TEXT | `draft` · `posted` · `reversed` |
+| source | TEXT | `budget_plan` · `billing_rule` (K23, göç 0028) |
+| budget_plan_id | UUID NULL → budget_plans | işletme projesi kaynağında zorunlu |
+| status | TEXT | `draft` · `approval_pending` · `approved` · `rejected` · `cancelled` · `posted` · `reversed` (FIN-05) |
+| approval_request_id | UUID NULL → approval_requests | "Tahakkuk" onayı |
+| created_by | TEXT NULL | taslağı hazırlayan |
 | charge_date | DATE | |
 | due_date | DATE | |
 | posted_at | TIMESTAMPTZ NULL | |
@@ -350,7 +355,12 @@ Referans uygulamada `scope_*_ids` virgüllü metin olarak saklanıyordu; Postgre
 | reversal_of_run_id | UUID NULL | ters kayıt koşusuysa orijinali |
 
 **Bir dönem için en fazla bir geçerli koşu:** aynı `period_id` için ters kaydı yapılmamış ikinci
-`posted` koşu olamaz. Kısmi benzersiz indeksle zorla.
+`posted` koşu olamaz. Kısmi benzersiz indeksle zorla. Aynı şekilde dönem başına en fazla bir
+açık taslak (`draft`/`approval_pending`/`approved`).
+
+### `charge_run_drafts` [K] — taslağın önizleme anlık görüntüsü (göç 0028)
+`charge_run_id` (benzersiz), `snapshot` JSONB (borçlar, satırlar, uyarılar, kalem toplamları).
+Kesinleşme bu görüntüden yapılır. Denetim kaydına girmez (büyük); koşu denetlenir.
 
 ### `charges` [K] — bir bölümün o koşudaki borcu
 | Sütun | Tip | Not |
@@ -367,7 +377,8 @@ kalemleri malikin hesabına.
 | Sütun | Tip | Not |
 |---|---|---|
 | charge_id | UUID → charges | |
-| budget_item_id | UUID → budget_items | |
+| budget_item_id | UUID NULL → budget_items | işletme projesi kalemi YA DA… |
+| billing_rule_version_id | UUID NULL → billing_rule_versions | …aidat kuralı sürümü (tam biri dolu, göç 0028) |
 | description | TEXT | kalem adı |
 | amount | NUMERIC(18,2) | |
 | allocation_kind | TEXT | |
@@ -698,6 +709,22 @@ UPDATE/DELETE tetikleyiciyle reddedilir.
 | note | TEXT NULL | |
 
 ---
+
+## 9b. Finans motoru (göç 0028; P03b)
+
+| Tablo | Not |
+|---|---|
+| `billing_rules` [K] | aidat kuralı kimliği: ad, `charge_type_id` (kim öder), `owner_item` (malik kalemi) |
+| `billing_rule_versions` [K] | sürüm: `version_no`, `status` (draft · approval_pending · active · rejected), yürürlük yıl/ay, `kind`, `area_basis`, `amount_mode` (per_unit · total), `amount`, `frequency`, `components`/`type_coefficients`/`exemptions` JSONB, kapsam, `discontinued`, `basis_note` (zorunlu), `basis_document_id` → documents |
+| `charge_adjustments` [K] | satır düzeltmesi: charge, charge_line, hesap, eski/yeni tutar, gerekçe, durum (approval_pending · applied · rejected), `prior_period`, `applied_on`, ters/yeni hareket kimlikleri; borç başına tek bekleyen (kısmi indeks) |
+| `late_fee_accruals` [K] | **değişmez** — gecikme hareketinin ana borç dökümü (`principal_entry_id`, tutar, `as_of`) |
+| `late_fee_runs` [K] | ay sonu gecikme işinin dönem başına sonucu (bir kez) |
+| `budgets` [K] | yıllık bütçe sürümü: yıl, `version`, durum (draft · approval_pending · active · rejected · superseded; yıl başına tek active), `income_target`, öneri kaynağı `budget_plan_id` |
+| `budget_lines` [K] | bütçe × gider kategorisi × ay (1–12) tutarı |
+| `budget_alerts` [K] | **değişmez** — kategori %90/%100 uyarısı, bütçe × kategori × eşik başına bir |
+
+`budget_plans.finalize_request_id` ("Bütçe" onayı, D-16). Onay işlem tiplerine `budget` ve
+`charge_adjustment` eklendi.
 
 ## 9a. Finans Mod P işlemleri (göç 0027; servis istekleri 27–33)
 
