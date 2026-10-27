@@ -83,6 +83,7 @@ from site_yonetim.models import (
     Vehicle,
 )
 from site_yonetim.models.audit import bulk_operation
+from site_yonetim.seed.demo_contracts import seed_contracts, seed_index_values
 from site_yonetim.seed.demo_data import (
     ACCOUNTS,
     ANNOUNCEMENTS,
@@ -231,6 +232,7 @@ async def _seed_demo(
             for spec in ACCOUNTS
             if spec.organization_role
         )  # fmt: skip
+        await seed_index_values(session, today, users["platform@demo.local"].id)
         plan_ids = {name: plan.id for name, plan in plans.items()}
         org_id = organization.id
         user_ids = {email: user.id for email, user in users.items()}
@@ -284,6 +286,10 @@ async def _seed_demo(
         await _seed_resident(factory, aksu, password_hash, store, today)
         await _seed_staff(factory, aksu, user_ids, today)
         await _seed_facility(factory, aksu, user_ids, store, today)
+        manager = next(a for a in ACCOUNTS if a.email == "yonetici@demo.local")
+        await seed_contracts(
+            factory, aksu, approvals_svc.Person(user_ids[manager.email], manager.full_name), today
+        )
 
     logger.info("Demo verisi yüklendi: %d site, %d hesap.", len(SITES), len(ACCOUNTS) + 1)
     return True

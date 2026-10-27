@@ -183,6 +183,13 @@ AUDITED_TABLES = frozenset(
         "meeting_agenda_items",
         "polls",
         "contracts",
+        # sözleşme performansı (SAT-06, 15.3; servis istekleri 68–70)
+        "contract_amounts",
+        "contract_kpis",
+        "contract_penalty_rules",
+        "contract_scorecards",
+        "contract_penalties",
+        "contract_escalations",
         "assets",
         "stock_items",
         "stock_moves",

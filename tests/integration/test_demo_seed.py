@@ -549,3 +549,43 @@ async def test_demo_belgeler(
     titles = {d["title"] for d in mine}
     assert {"Yönetim planı", "Site kuralları", "Tadilat izin belgesi"} <= titles
     assert not titles & {"Bina sigorta poliçesi", "Hukuk görüşü — icra takibi"}
+
+
+async def test_demo_sozlesme_performansi(
+    dev_settings: Settings,
+    session_factory: Factory,
+    admin_engine: object,
+    api: httpx2.AsyncClient,
+    seed_day: date,
+) -> None:
+    """Servis istekleri 68–70: temizlik ve güvenlik sözleşmesinin KPI'ları, geçen ayın karnesi,
+    onay bekleyen ceza, onaylı endeks artışı ve karar bekleyen artış; platformda endeks tablosu."""
+    await seed_demo(dev_settings, session_factory, today=SEED_DAY)
+    base = "/api/v1/sites/aksu-konaklari"
+    manager = await login_headers(api, "yonetici@demo.local", DEMO_PASSWORD)
+    contracts = {
+        c["category"]: c for c in (await api.get(f"{base}/contracts", headers=manager)).json()
+    }
+    cleaning, security = contracts["cleaning"], contracts["security"]
+    perf = (await api.get(f"{base}/contracts/{cleaning['id']}/performance", headers=manager)).json()
+    assert [k["source"] for k in perf["kpis"]] == ["inspection", "tasks"]
+    assert perf["escalation_preview"]["status"] == "due"
+    assert perf["last_scorecards"][0]["penalty_status"] == "pending"
+    card = (
+        await api.get(f"{base}/contracts/{cleaning['id']}/scorecards/2026-08", headers=manager)
+    ).json()
+    assert (card["status"], card["penalty"]["amount"]) == ("finalized", "1000.00")
+    accountant = await login_headers(api, "muhasebe@demo.local", DEMO_PASSWORD)
+    approved = await api.post(
+        f"{base}/contracts/{cleaning['id']}/scorecards/2026-08/penalty",
+        json={"decision": "approve"},
+        headers=accountant,
+    )
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["data"]["expected_invoice"] == "19000.00"
+    detail = (await api.get(f"{base}/contracts/{security['id']}", headers=manager)).json()
+    assert [h["source"] for h in detail["amount_history"]] == ["initial", "escalation"]
+    assert detail["amount"] == detail["latest_amount"] != "85000.00"
+    platform = await login_headers(api, "platform@demo.local", DEMO_PASSWORD)
+    index = (await api.get("/api/v1/platform/index-values", headers=platform)).json()
+    assert (index["total"], index["items"][0]["period"]) == (13, "2026-09")

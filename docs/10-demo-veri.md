@@ -128,3 +128,12 @@ Sonraki adım (kullanıcıya söylenir): daire listesini Excel'den aktarmak.
 - Demo: `src/SiteYonetimi.Infrastructure/Persistence/DemoDataSeeder.cs`, `DemoUserSeeder.cs`
 - Site kurulumu: `src/SiteYonetimi.Infrastructure/Provisioning/SiteProvisioningService.cs`
 - Müşteri kurulumu: `src/SiteYonetimi.Infrastructure/Provisioning/CustomerProvisioningService.cs`
+
+## Sözleşme performansı (servis istekleri 68–70)
+
+Aksu Konakları: **Parlak Temizlik** (20.000 TL/ay; denetim + görev KPI'ları, "denetim hedefin
+%10'undan fazla altındaysa %5" kuralı; geçen ayın karnesi kesinleşmiş, 1.000,00 TL kesinti onay
+bekliyor — Kerem kesinleştirdi, Selin Arı onaylayabilir; TÜFE'ye bağlı artışın tarihi 20 gün
+sonra, "Fiyat artışı" sekmesinde karar bekler) ve **Kale Güvenlik** (85.000 TL/ay; devriye + elle
+memnuniyet, sabit 2.500 TL kesinti kuralı; bir ay önce onaylanmış TÜFE artışı ve bedel geçmişi,
+cezasız geçen ay karnesi). Platform: son 13 ayın TÜFE/ÜFE değerleri.

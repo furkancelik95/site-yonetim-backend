@@ -16,6 +16,7 @@ from site_yonetim.api.v1 import (
     charge_schedule,
     charges,
     checklists,
+    contract_performance,
     contracts,
     custom_fields,
     dashboard,
@@ -30,6 +31,7 @@ from site_yonetim.api.v1 import (
     import_history,
     imports,
     incidents,
+    index_values,
     insurance,
     inventory,
     invitations,
@@ -135,6 +137,8 @@ api_router.include_router(setup.router)
 api_router.include_router(meetings.router)
 api_router.include_router(polls.router)
 api_router.include_router(contracts.router)
+api_router.include_router(contract_performance.router)
+api_router.include_router(index_values.router)
 api_router.include_router(inventory.router)
 api_router.include_router(keys.router)
 api_router.include_router(checklists.router)

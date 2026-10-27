@@ -41,7 +41,7 @@ kümesi tanımlanmalı.
 | `security.incidents` | Güvenlik olay kaydı ve kayıp eşya (okuma + yazma) |
 | `meetings.read` / `meetings.manage` | Toplantı ve genel kurul görüntüleme / planlama, karar, iptal |
 | `polls.manage` | Anket açma ve kapatma (okuma: `announcements.read`) |
-| `contracts.manage` | Hizmet sözleşmesi ekleme, düzenleme, arşivleme (okuma: `expenses.read`) |
+| `contracts.manage` | Hizmet sözleşmesi ekleme, düzenleme, arşivleme; performans kuralları (KPI, ceza, artış), karne değerleri ve kesinleştirme, artış kararı; onay kuralı yoksa ceza kesintisi kararı — karneyi kesinleştiren hariç (okuma: `expenses.read`). Endeks değerleri yalnız platform yöneticisi |
 | `inventory.read` / `inventory.manage` | Demirbaş ve stok görüntüleme / yönetimi (stok giriş-çıkışı ve sayım dahil); **teknik varlık**, yasal muayene ve periyodik bakım (K28 — ayrı liste, aynı izin) |
 | `staff.manage` | Site personeli kaydı; vardiya planı, izin, puantaj, aktarım ve giriş-çıkış ayarı (okuma: `people.read` — personel listesi ve vardiya planı; izin listesi ve puantaj yalnız `staff.manage`, raporlu izin sağlık verisi olabilir). Puantaj aktarımını `finance.read` de okur. Kartı bağlı personel (K29) kendi vardiyasını, izin talebini ve giriş-çıkışını `/me/*` ile kullanır — izin gerekmez |
 | `approvals.rules.read` | Onay kurallarını görür (Yazılım Dokümanı ONY-01) |

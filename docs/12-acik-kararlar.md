@@ -41,6 +41,22 @@ silinir ve ilgili dokümana taşınır.
 | **K31** | Anket gizliliği | Bölüm başına bir oy, kim verdiği tutulmaz | Yazılım Dokümanı ILT-03: anket bazında "anonim mi" ve "bölüm başına tek yanıt mı" seçeneği | Ürün + hukuk | Anket |
 | **K32** | Sakine gider şeffaflığı | Gerçekleşen giderler tedarikçi adı ve fatura görüntüsüyle açık | Yazılım Dokümanı RAP-02: kişi bilgisi içermeyen, onaylı özet | Ürün + hukuk | Şeffaflık |
 
+### Sözleşme performansı (P11, 27.10.2026) — uygulanan varsayımlar
+| Konu | Şu anki davranış | Bekleyen |
+|---|---|---|
+| Bedel geçmişi (Burhan'ın notu) | `contract_amounts` değişmez; artış ve bedel düzenlemesi `effective_from` ile yeni satır; o tarihten önceki hesap eski bedelle. `contracts.amount` en son yazılan bedel, API'de `amount` bugün geçerli bedel | — |
+| Tedarikçi kartı bağı | `contracts.vendor_id` saklanır, **FK ve doğrulama yok** (P10 `vendors` main'de değil); `vendor` yanıtta `null` | P10 birleşince FK + puan (`rating_avg`) |
+| Ceza kesintisinin faturaya yansıması | Kesinti `contract_penalties`'te; `expected_invoice` = aylık bedel − onaylı kesinti (karnede) | P10 birleşince tedarikçi faturası / ödenecekler beklenen tutarına bağlanır; Mod K'da Kivi'ye iletim (A-01) |
+| Onay | `penalty_deduction` ("Ceza kesintisi"), `contract_escalation` ("Sözleşme artışı"). Kural yoksa: kesinti `contracts.manage` (kesinleştiren hariç), artış doğrudan uygulanır | — |
+| Dönem kilidi | Kesinti onayı karne döneminin son gününe, artış onayı artış tarihine `ensure_writable` | — |
+| KPI kaynakları | Denetim: ayın denetim ortalaması; devriye: okutulan/plandaki nokta; görev: dünden geriye beklenen/tamamlanan; SLA: ayda çözülen talepler (`resolved_at ≤ due_at`), talep modülü kapalıysa elle; ek kaynak `asset_inspection` (sözleşmeye bağlı teknik varlıkların muayene olumlu oranı). Veri yoksa elle | — |
+| Toplam kesinti | Aylık bedeli aşamaz (bedel biliniyorsa) — dokümanda yok | Ürün onayı |
+| Geç karar | Tarihi geçmiş, karara bağlanmamış artış 30 gün daha "karar bekliyor" görünür; sonra sıradakine geçer | Ürün onayı |
+| Çerçeve sözleşme gider taslağı (SAT-06 adım 2) | Yok; Tekrarlanan giderler ayrı | Furkan kararı (sözleşmeye bağlama) |
+| Bütçe etkisi (8.10) | Artış önizlemesinde `annual_effect`; bütçe gerçekleşme ekranına yansımıyor | P03b bütçe–gerçekleşme ile birleşince |
+| Karne PDF'i / tedarikçiye gönderim | PDF yok; bildirim taslağı metin (`penalty.notice`); gönderim K5 | RAP belge üretimi, K5 |
+| Endeks eksik uyarısı | Site yöneticilerine bildirim + platformda `GET /platform/index-values/missing` (platform yöneticisi site üyesi değil, site bildirimini göremez) | K5 (e-posta) |
+
 ### Yapı, kişiler ve kayıt paketi (P02, 25.10.2026) — uygulanan varsayımlar
 | Konu | Şu anki davranış | Bekleyen |
 |---|---|---|

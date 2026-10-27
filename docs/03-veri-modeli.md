@@ -9,7 +9,7 @@ Tablo ve sütun adları `snake_case`, İngilizce. Kullanıcıya görünen etiket
 | Birincil anahtar | `id UUID` — **zaman sıralı UUIDv7** önerilir (indeks yerelliği için). Python 3.14+ `uuid.uuid7()`, öncesi `uuid_utils` paketi |
 | Zaman damgası | Her tabloda `created_at TIMESTAMPTZ NOT NULL DEFAULT now()`, `updated_at TIMESTAMPTZ NULL` |
 | Kiracı sütunu | **Kiracı tablolarında** `site_id UUID NOT NULL` + indeks. Aşağıda `[K]` ile işaretli |
-| Global tablolar | `[G]` ile işaretli — `site_id` yok: `plans`, `organizations`, `sites`, `users`, `organization_memberships` |
+| Global tablolar | `[G]` ile işaretli — `site_id` yok: `plans`, `organizations`, `sites`, `users`, `organization_memberships`, `index_values` (endeks, SAT-06) |
 | Para | `NUMERIC(18,2)`. Python'da `Decimal`. **Asla `float`/`REAL`/`DOUBLE`** |
 | Alan (m²) | `NUMERIC(10,2)` |
 | Ağırlık / oran | `NUMERIC(12,4)` (daire tipi ağırlığı, özel ağırlık, tüketim) |
@@ -496,7 +496,29 @@ Site içinde artan `number`; silinmez, içerik değişmez. Olay: `kind`, `locati
   `poll_votes(poll_id, unit_id)` **benzersiz** — bölüm başına bir oy. Oyu kimin verdiği tutulmaz;
   oy tablosu denetim kaydına yazılmaz (gizli oy).
 - `contracts` (`end_date ≥ start_date`, `amount?` NUMERIC(18,2), `notice_days` 0–365,
-  `is_archived`). `days_left`/`state` saklanmaz, okurken hesaplanır.
+  `is_archived`). `days_left`/`state` saklanmaz, okurken hesaplanır. Göç 0035: `vendor_id?`
+  (tedarikçi kartı, FK P10 `vendors` ile), artış kuralı `escalation_kind` `none` · `tufe` · `ufe` ·
+  `avg` · `fixed`, `escalation_fixed_rate?`, `escalation_period` `yearly` · `semiannual`,
+  `escalation_cap?` (NUMERIC(6,2), %0,01–200). `amount` **en son yazılan** bedeldir.
+- **Sözleşme performansı** (göç 0035; servis istekleri 68–70, SAT-06 / 15.3):
+  - `contract_amounts` **değişmez** bedel geçmişi: `amount?`, `period?`, `effective_from`, `source`
+    `initial` · `edit` · `escalation`, `escalation_id?`. Bedel/sıklık değişince yeni satır; bir
+    günün bedeli = `effective_from ≤ gün` olan son satır (önceki hesaplar eski bedelle). Göç mevcut
+    bedelli sözleşmelere başlangıçtan geçerli ilk satırı yazar.
+  - `contract_kpis` (`source` `inspection` · `patrol` · `tasks` · `sla` · `asset_inspection` ·
+    `manual`, `target` 0–100 NUMERIC(5,2), `weight` 1–100, `request_category?`),
+    `contract_penalty_rules` (`kpi_id` → KPI **ON DELETE CASCADE**, `below_percent` 0–99,
+    `cut_kind` `percent` · `fixed`, `cut_value`). Tanımlar ayardır, kaldırılabilir.
+  - `contract_scorecards` (`contract_id × period` tekil, `status` `draft` · `finalized`,
+    `manual_values` JSONB, `comment`, kesinleşince `rows` anlık görüntü + `total`,
+    `monthly_amount`, `finalized_by/at`).
+  - `contract_penalties` (karne başına bir; `amount > 0`, `reasons`, `status` `pending` ·
+    `approved` · `rejected`, `approval_request_id?`) — finansal kayıt, silinmez.
+  - `contract_escalations` (`due_date`, `kind`, `index_period?`, `rate`, `capped_rate`,
+    `old_amount`, `new_amount`, `status` `pending` · `approved` · `rejected` · `withdrawn`,
+    `approval_request_id?`); sözleşme × tarih başına tek etkin (geri çekilen hariç) kayıt.
+  - `index_values` [G] **değişmez**: `period` (YYYY-AA), `tufe`, `ufe` (yıllık %), `entered_by`.
+    Düzeltme yeni satırdır; geçerli değer dönemin en son satırı.
 - `assets` (`sequence` site içinde tekil → `code` `DB-0001`, `status` `in_use` · `broken` ·
   `retired`, `value?`). `stock_items` (`name_key` tekil, `quantity` NUMERIC(14,3) ≥ 0 — hareketle
   aynı işlemde satır kilidiyle güncellenir, `min_quantity`). `stock_moves` (`direction`,

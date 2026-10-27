@@ -24,6 +24,7 @@ GLOBAL_TABLES = {
     "rate_limits",  # herkese açık uçların istek sınırı; site bağlamından önce
     "notification_preferences",  # kişinin kanal tercihi, siteden bağımsız
     "push_tokens",  # cihazın push jetonu, siteden bağımsız
+    "index_values",  # TÜFE/ÜFE endeksi: tüm tesislerde ortak (SAT-06, 15.3)
 }
 
 TABLES: list[Table] = list(Base.metadata.sorted_tables)

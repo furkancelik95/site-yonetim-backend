@@ -24,6 +24,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from site_yonetim.db.base import Base, TenantMixin, enum_check, tenant_fk, tenant_table_args
+from site_yonetim.domain.contract_performance import EscalationKind, EscalationPeriod
 from site_yonetim.domain.management import (
     AgendaResult,
     AssetStatus,
@@ -38,6 +39,7 @@ from site_yonetim.domain.management import (
 from site_yonetim.models.finance import MONEY
 
 QUANTITY = Numeric(14, 3)
+RATE = Numeric(6, 2)  # yüzde oran (%0,01–200)
 
 # --- Toplantı (14) ------------------------------------------------------------------
 
@@ -148,6 +150,17 @@ class Contract(TenantMixin, Base):
         CheckConstraint("end_date >= start_date", name="dates"),
         CheckConstraint("notice_days BETWEEN 0 AND 365", name="notice_days"),
         CheckConstraint("amount IS NULL OR amount >= 0", name="amount"),
+        CheckConstraint(enum_check("escalation_kind", EscalationKind), name="escalation_kind"),
+        CheckConstraint(
+            enum_check("escalation_period", EscalationPeriod), name="escalation_period"
+        ),
+        CheckConstraint(
+            "escalation_fixed_rate IS NULL OR escalation_fixed_rate BETWEEN 0.01 AND 200",
+            name="escalation_fixed_rate",
+        ),
+        CheckConstraint(
+            "escalation_cap IS NULL OR escalation_cap BETWEEN 0.01 AND 200", name="escalation_cap"
+        ),
     )
 
     vendor: Mapped[str] = mapped_column(Text)
@@ -161,6 +174,18 @@ class Contract(TenantMixin, Base):
     auto_renew: Mapped[bool] = mapped_column(default=False)
     note: Mapped[str | None] = mapped_column(Text)
     is_archived: Mapped[bool] = mapped_column(default=False)
+    # Sözleşme performansı (servis istekleri 68–70). `amount` en son girilen bedeldir; hangi
+    # tarihte hangi bedelin geçerli olduğu `contract_amounts` geçmişindedir (effective_from).
+    # Tedarikçi kartı (P10 `vendors`) henüz main'de değil: FK satın alma paketiyle eklenecek.
+    vendor_id: Mapped[uuid.UUID | None]
+    escalation_kind: Mapped[str] = mapped_column(
+        Text, default=EscalationKind.NONE.value, server_default=EscalationKind.NONE.value
+    )
+    escalation_fixed_rate: Mapped[Decimal | None] = mapped_column(RATE)
+    escalation_period: Mapped[str] = mapped_column(
+        Text, default=EscalationPeriod.YEARLY.value, server_default=EscalationPeriod.YEARLY.value
+    )
+    escalation_cap: Mapped[Decimal | None] = mapped_column(RATE)
 
 
 # --- Demirbaş ve stok (17) ----------------------------------------------------------
