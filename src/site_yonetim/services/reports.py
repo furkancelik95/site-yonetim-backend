@@ -233,3 +233,45 @@ async def collections(session: AsyncSession, year: int) -> list[CollectionRow]:
         CollectionRow(year, int(month), Decimal(total), paid.get(int(month), ZERO))
         for month, total in sorted(charged, key=lambda row: row[0])
     ]
+
+
+# --- Aylık özet (şeffaflık raporu, RAP-02) ----------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class MonthSummary:
+    """Kişi ve bölüm bilgisi içermeyen aylık gelir–gider özeti."""
+
+    income: Decimal
+    expense: Decimal
+    categories: list[CategoryShare]
+    collection: CollectionRow | None
+
+
+async def month_summary(session: AsyncSession, year: int, month: int) -> MonthSummary:
+    rows = await session.execute(
+        select(ExpenseCategory.id, ExpenseCategory.name, func.sum(Expense.amount), func.count())
+        .join(
+            ExpenseCategory,
+            and_(
+                ExpenseCategory.id == Expense.expense_category_id,
+                ExpenseCategory.site_id == Expense.site_id,
+            ),
+        )
+        .where(
+            extract("year", Expense.date) == year,
+            extract("month", Expense.date) == month,
+            realized(),
+        )
+        .group_by(ExpenseCategory.id, ExpenseCategory.name)
+    )
+    categories = category_shares(
+        CategoryAmount(cid, name, Decimal(total), count) for cid, name, total, count in rows
+    )
+    collection = next((c for c in await collections(session, year) if c.month == month), None)
+    return MonthSummary(
+        income=(await _income(session, year)).get(month, ZERO),
+        expense=sum((c.amount for c in categories), ZERO),
+        categories=categories,
+        collection=collection,
+    )

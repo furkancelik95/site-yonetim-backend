@@ -421,11 +421,10 @@ async def test_closed_period_rejects_expense(kasa: Kasa) -> None:
     await kasa.expense("10.00")  # dönemi açar
     with site_scope(kasa.site_id):
         async with kasa.factory() as session, session.begin():
-            await session.execute(text("UPDATE periods SET status = 'closed'"))
+            await session.execute(text("UPDATE periods SET status = 'locked'"))
     response = await kasa.expense("10.00")
-    assert (
-        response.json()["error"]["message"] == "10/2026 dönemi kapalı, bu tarihe kayıt yazılamaz."
-    )
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "period_locked"
 
 
 async def test_idempotent_expense(kasa: Kasa) -> None:

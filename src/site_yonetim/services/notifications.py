@@ -5,8 +5,10 @@ servise "şu kişilere şu olay" der.
   geri alınırsa bildirim de alınır). Açık site kapsamında; transaction'ı çağıran yönetir.
 - Tekrar güvenli: aynı tekil anahtarla aynı kişiye ikinci bildirim üretilmez (benzersiz kısıt +
   `ON CONFLICT DO NOTHING`; olay iki kez yayınlansa da tek bildirim).
-- Dış kanallar (push, SMS, e-posta) açık karar K5'e kadar **yalnız kaydet**: tercihler ve push
-  jetonları saklanır, gönderim yapılmaz. Sessiz saat de o zaman gelir.
+- Dış kanallar (push, SMS, e-posta): yeni yazılan her bildirim için gönderim katmanı
+  (`services/delivery.py`, NotificationService) aynı transaction'da teslim kaydı üretir —
+  kişinin kanal tercihi, adresi ve sitenin sessiz saatleri uygulanır. Sağlayıcı K5'te seçilene
+  dek test sağlayıcısı: gönderim kayda geçer, dışarı gitmez.
 - 90 günden eski bildirim listede görünmez (saklama ayrı: K8).
 """
 
@@ -30,6 +32,7 @@ from site_yonetim.domain.notifications import (
     preference_matrix,
 )
 from site_yonetim.models import Notification, NotificationPreference, PushToken
+from site_yonetim.services import delivery
 
 LIST_WINDOW = timedelta(days=90)
 TITLE_MAX, BODY_MAX = 200, 1000
@@ -46,9 +49,15 @@ class Message:
 
 
 async def notify(
-    session: AsyncSession, user_ids: Iterable[uuid.UUID], message: Message, *, dedupe_key: str
+    session: AsyncSession,
+    user_ids: Iterable[uuid.UUID],
+    message: Message,
+    *,
+    dedupe_key: str,
+    now: datetime | None = None,
 ) -> int:
-    """Kişilere uygulama içi bildirim yazar; yeni yazılan sayısını döner (tekrarlar sayılmaz)."""
+    """Kişilere uygulama içi bildirim yazar ve dış kanal teslimlerini planlar; yeni yazılan
+    sayısını döner (tekrarlar sayılmaz — tekrar eden bildirime ikinci SMS de gitmez)."""
     recipients = sorted(set(user_ids))
     if not recipients:
         return 0
@@ -74,9 +83,16 @@ async def notify(
         insert(Notification)
         .values(rows)
         .on_conflict_do_nothing(index_elements=["site_id", "user_id", "dedupe_key"])
-        .returning(Notification.id)
+        .returning(Notification.id, Notification.user_id)
     )
-    return len(result.all())
+    written = [(notification_id, user_id) for notification_id, user_id in result.all()]
+    await delivery.plan(
+        session,
+        written,
+        delivery.Planned(message.category, message.kind, message.title, message.body),
+        now=now,
+    )
+    return len(written)
 
 
 def list_query(

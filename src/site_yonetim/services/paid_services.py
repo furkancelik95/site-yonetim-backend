@@ -23,7 +23,6 @@ from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from site_yonetim.domain.approvals import ActionType
-from site_yonetim.domain.charging.periods import DUE_AFTER_DAYS
 from site_yonetim.domain.finance import LedgerSource
 from site_yonetim.domain.money import round_money
 from site_yonetim.domain.operations import (
@@ -54,10 +53,13 @@ from site_yonetim.models import (
 )
 from site_yonetim.models.approvals import ApprovalRequest
 from site_yonetim.services import approvals as approvals_svc
-from site_yonetim.services import ledger
+from site_yonetim.services import ledger, period_lock
 from site_yonetim.services import requests as requests_svc
 
 NAME_MAX, UNIT_MAX, NOTE_MAX = 60, 20, 200
+# Ücretli hizmet borcunun vadesi (aidat vadesi K25 ile değişti; bu sabit kalır — dönem dışı ücret
+# ayarına taşınınca oradan okunacak).
+DUE_AFTER_DAYS = 14
 
 
 # --- Tarife ----------------------------------------------------------------------------------
@@ -311,6 +313,7 @@ async def get_quote(session: AsyncSession, quote_id: uuid.UUID) -> ServiceQuote 
 async def _bill(
     session: AsyncSession, quote: ServiceQuote, request: Request, amount: Decimal, today: date
 ) -> None:
+    await period_lock.ensure_writable(session, today)
     await ledger.lock_accounts(session, [quote.account_id])
     entry = LedgerEntry(
         id=uuid.uuid7(),

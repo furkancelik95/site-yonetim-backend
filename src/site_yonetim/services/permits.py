@@ -47,7 +47,7 @@ from site_yonetim.models import (
 )
 from site_yonetim.models.approvals import ApprovalRequest
 from site_yonetim.services import approvals as approvals_svc
-from site_yonetim.services import ledger, service_desk
+from site_yonetim.services import ledger, period_lock, service_desk
 from site_yonetim.services import notifications as notify_svc
 from site_yonetim.services import requests as requests_svc
 from site_yonetim.services.charging import BUSINESS_TZ
@@ -259,6 +259,7 @@ async def _approve(
             raise OperationRuleError(
                 "no_account", "Bu bölümde açık cari hesap yok; depozito yazılamaz.", conflict=True
             )
+        await period_lock.ensure_writable(session, today)
         await ledger.lock_accounts(session, [account.id])
         entry = LedgerEntry(
             id=uuid.uuid7(), account_id=account.id, date=today, due_date=permit.date_from,
@@ -418,6 +419,7 @@ async def complete(
         original = await session.get(LedgerEntry, permit.deposit_entry_id)
         if original is None:  # pragma: no cover
             raise OperationRuleError("deposit_missing", "Depozito kaydı bulunamadı.", conflict=True)
+        await period_lock.ensure_writable(session, today)
         await ledger.lock_accounts(session, [original.account_id])
         refund = LedgerEntry(
             id=uuid.uuid7(), account_id=original.account_id, date=today,

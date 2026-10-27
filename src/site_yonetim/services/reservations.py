@@ -27,7 +27,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from site_yonetim.db.tenancy import all_sites_scope, site_scope
 from site_yonetim.domain.access import Permission
 from site_yonetim.domain.approvals import OPEN_STATUSES, ActionType, ApprovalStatus, Decision
-from site_yonetim.domain.charging.periods import DUE_AFTER_DAYS
 from site_yonetim.domain.finance import LedgerSource
 from site_yonetim.domain.invitations import HouseholdStatus
 from site_yonetim.domain.money import EPSILON, ZERO, round_money
@@ -95,7 +94,7 @@ from site_yonetim.services import ledger, service_desk
 from site_yonetim.services import notifications as notify_svc
 from site_yonetim.services import requests as requests_svc
 from site_yonetim.services.charging import BUSINESS_TZ
-from site_yonetim.services.paid_services import billing_account
+from site_yonetim.services.paid_services import DUE_AFTER_DAYS, billing_account
 
 REASON_MIN, REASON_MAX, NAME_MAX = 5, 300, 60
 JOB_ACTOR = "Rezervasyon zamanlayıcısı"

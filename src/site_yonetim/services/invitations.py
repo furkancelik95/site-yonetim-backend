@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from site_yonetim.core.security import hash_password
 from site_yonetim.db.tenancy import all_sites_scope
-from site_yonetim.domain.access import SiteRole, UserKind
+from site_yonetim.domain.access import UserKind
 from site_yonetim.domain.invitations import (
     HOUSEHOLD_LIMIT,
     OPEN_INVITATION,
@@ -36,6 +36,7 @@ from site_yonetim.domain.invitations import (
     split_full_name,
     token_hash,
 )
+from site_yonetim.domain.roles import RESIDENT_KEY
 from site_yonetim.domain.structure import PartyRole, StructureRuleError
 from site_yonetim.domain.text import normalize_person_name
 from site_yonetim.models import (
@@ -45,10 +46,12 @@ from site_yonetim.models import (
     Person,
     Site,
     SiteMembership,
+    SiteRoleAssignment,
     Unit,
     UnitParty,
     User,
 )
+from site_yonetim.services import privacy as privacy_svc
 from site_yonetim.services import structure
 from site_yonetim.services.vehicles import read_settings
 
@@ -292,17 +295,18 @@ async def _login(
             await session.flush()
     member = await session.scalar(select(SiteMembership).where(SiteMembership.user_id == user.id))
     if member is None:
+        session.add(SiteMembership(user_id=user.id, person_id=person.id, is_active=True))
         session.add(
-            SiteMembership(
-                user_id=user.id, role=SiteRole.RESIDENT.value, person_id=person.id, is_active=True
-            )
+            SiteRoleAssignment(user_id=user.id, role_key=RESIDENT_KEY, assigned_by_name="Davet")
         )
     elif not member.is_active and member.person_id == person.id:
         member.is_active = True
     if person.user_id is None:
         person.user_id = user.id
     await session.flush()
-    return user.email, password
+    # Formdaki "aydınlatma metnini okudum" onayı hesaba bağlanır (P6) — o anki son sürüm.
+    await privacy_svc.link_invitation(session, user.id, None)
+    return user.email or user.phone or "", password
 
 
 async def accept(

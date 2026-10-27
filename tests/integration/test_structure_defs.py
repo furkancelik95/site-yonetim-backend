@@ -82,7 +82,7 @@ async def test_ozniteliklerde_kapanmis_doneme_yururluk_reddedilir(world: World) 
 async def test_kapali_donem_varsa_en_erken_sonraki_ay(world: World) -> None:
     with scope(world):
         async with world.factory() as session, session.begin():
-            session.add(Period(year=2026, month=6, status="closed"))
+            session.add(Period(year=2026, month=6, status="locked"))
 
     response = await call(
         world, "PATCH", f"/units/{world.unit_id}/attributes",

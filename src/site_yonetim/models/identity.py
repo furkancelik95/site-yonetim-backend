@@ -5,10 +5,12 @@ from datetime import datetime
 from enum import StrEnum
 
 from sqlalchemy import (
+    ARRAY,
     CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
+    SmallInteger,
     Text,
     UniqueConstraint,
     false,
@@ -17,21 +19,36 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from site_yonetim.db.base import Base, TenantMixin, enum_check, tenant_fk, tenant_table_args
-from site_yonetim.domain.access import OrganizationRole, SiteRole, UserKind
+from site_yonetim.domain.access import (
+    LEVEL_MAX,
+    LEVEL_MIN,
+    OrganizationRole,
+    RoleScope,
+    UserKind,
+)
+from site_yonetim.domain.otp import OtpChannel, OtpPurpose
 
 
 class User(Base):
-    """[G] Kullanıcı. Parola yalnız argon2id hash'i olarak saklanır."""
+    """[G] Kullanıcı. Parola yalnız argon2id hash'i olarak saklanır.
+
+    Hesap globaldir: bir telefon (E.164) ya da e-posta tek hesaptır (Ürün Dokümanı §6.5). Sakin
+    ve saha personeli telefon + SMS koduyla girer — parolası olmayabilir; yönetici rolleri
+    e-posta + parola + iki adımlı doğrulama. Davetle açılan hesabın parolası daveti kabul edince
+    belirlenir (o zamana dek `password_hash` boş)."""
 
     __tablename__ = "users"
     __table_args__ = (
         CheckConstraint(enum_check("kind", UserKind), name="kind"),
         CheckConstraint("email = lower(email)", name="email_lowercase"),
         CheckConstraint("failed_login_count >= 0", name="failed_login_count"),
+        CheckConstraint("email IS NOT NULL OR phone IS NOT NULL", name="contact_required"),
+        CheckConstraint(r"phone ~ '^\+[1-9][0-9]{7,14}$'", name="phone_e164"),
     )
 
-    email: Mapped[str] = mapped_column(Text, unique=True)
-    password_hash: Mapped[str] = mapped_column(Text)
+    email: Mapped[str | None] = mapped_column(Text, unique=True)
+    phone: Mapped[str | None] = mapped_column(Text, unique=True)
+    password_hash: Mapped[str | None] = mapped_column(Text)
     full_name: Mapped[str] = mapped_column(Text)
     kind: Mapped[str] = mapped_column(Text, default=UserKind.STAFF.value)
     is_active: Mapped[bool] = mapped_column(default=True)
@@ -42,6 +59,15 @@ class User(Base):
     # Geçici parola (platformun verdiği) ile açılan hesap: değiştirene kadar yalnız `/me`,
     # `/auth/*` ve parola değişikliği çalışır (docs/05 §8.1).
     must_change_password: Mapped[bool] = mapped_column(default=False, server_default=false())
+    # Telefon değişikliği: sonraki 24 saat finansal işlemlerde step-up (§4.7, PLT-10).
+    phone_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # İki adımlı doğrulama (TOTP): sır şifreli (`core/secretbox`); etkinleşince zaman dolu.
+    # Kurulum sürerken sır dolu, `mfa_enabled_at` boştur.
+    mfa_secret_sealed: Mapped[str | None] = mapped_column(Text)
+    mfa_enabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    mfa_last_step: Mapped[int | None]  # son kabul edilen TOTP adımı (tekrar oynatma engeli)
+    # Yönetici rolünde 2FA geçiş süresi: ilk girişte başlar (MFA_GRACE_DAYS).
+    mfa_grace_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class OrganizationMembership(Base):
@@ -60,20 +86,75 @@ class OrganizationMembership(Base):
 
 
 class SiteMembership(TenantMixin, Base):
-    """[K] Açık site üyeliği. Türetilmiş erişimi ezer."""
+    """[K] Açık site üyeliği (kullanıcı ↔ site). Türetilmiş erişimi ezer. Roller üyelikte değil,
+    `site_role_assignments`'tadır (P18: birden çok rol, kapsam, süre)."""
 
     __tablename__ = "site_memberships"
     __table_args__ = tenant_table_args(
         UniqueConstraint("site_id", "user_id"),
-        CheckConstraint(enum_check("role", SiteRole), name="role"),
         tenant_fk("person_id", "persons"),
     )
 
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
-    role: Mapped[str] = mapped_column(Text)
     # Sakin üyeliğinde dolu: kullanıcının bu sitedeki kişi kaydı (bileşik FK).
     person_id: Mapped[uuid.UUID | None]
     is_active: Mapped[bool] = mapped_column(default=True)
+
+
+class SiteRoleDefinition(TenantMixin, Base):
+    """[K] Siteye özel rol (şablon kopyası + izin seti) ya da hazır şablonun sitedeki düzeyi
+    (`is_system`, izinler koddan). Ad onay kurallarında rolü tanıtır — değişmez. Silinmez,
+    arşivlenir (`is_active = false`)."""
+
+    __tablename__ = "site_roles"
+    __table_args__ = tenant_table_args(
+        UniqueConstraint("site_id", "key"),
+        UniqueConstraint("site_id", "name"),
+        CheckConstraint(f"level BETWEEN {LEVEL_MIN} AND {LEVEL_MAX}", name="level"),
+        CheckConstraint("is_system OR permissions IS NOT NULL", name="permissions"),
+    )
+
+    key: Mapped[str] = mapped_column(Text)
+    name: Mapped[str] = mapped_column(Text)
+    description: Mapped[str | None] = mapped_column(Text)
+    base_key: Mapped[str | None] = mapped_column(Text)  # kopyalandığı rol
+    is_system: Mapped[bool] = mapped_column(default=False)
+    permissions: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    level: Mapped[int] = mapped_column(SmallInteger)
+    is_active: Mapped[bool] = mapped_column(default=True)
+    created_by_name: Mapped[str | None] = mapped_column(Text)
+
+
+class SiteRoleAssignment(TenantMixin, Base):
+    """[K] Rol ataması: kişi × rol × kapsam × (başlangıç–bitiş) — PLT-09, P18. Silinmez; kaldırma
+    bitiş zamanını doldurur (atama geçmişi). Etkin: başlangıç ≤ şimdi < bitiş."""
+
+    __tablename__ = "site_role_assignments"
+    __table_args__ = tenant_table_args(
+        tenant_fk("block_id", "blocks"),
+        CheckConstraint(enum_check("scope_kind", RoleScope), name="scope_kind"),
+        CheckConstraint(
+            "(scope_kind = 'site' AND block_id IS NULL AND gate_id IS NULL)"
+            " OR (scope_kind = 'block' AND block_id IS NOT NULL AND gate_id IS NULL)"
+            " OR (scope_kind = 'gate' AND gate_id IS NOT NULL AND block_id IS NULL)",
+            name="scope",
+        ),
+        CheckConstraint(
+            "starts_at IS NULL OR ends_at IS NULL OR ends_at >= starts_at", name="period"
+        ),
+        Index("ix_site_role_assignments_site_id_user_id", "site_id", "user_id"),
+    )
+
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
+    role_key: Mapped[str] = mapped_column(Text)
+    scope_kind: Mapped[str] = mapped_column(Text, default=RoleScope.SITE.value)
+    block_id: Mapped[uuid.UUID | None]
+    gate_id: Mapped[uuid.UUID | None]  # kapı tablosu (GUV-08) gelince bileşik FK olur
+    starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    assigned_by_name: Mapped[str | None] = mapped_column(Text)
+    removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    removed_by_name: Mapped[str | None] = mapped_column(Text)
 
 
 class AuthSession(Base):
@@ -93,6 +174,10 @@ class AuthSession(Base):
     # Oturum listesi (Yazılım Dokümanı PLT-10): kullanıcı kendi cihazlarını görür, kapatır.
     ip: Mapped[str | None] = mapped_column(Text)
     user_agent: Mapped[str | None] = mapped_column(Text)
+    # İki adımlı doğrulama bekleyen oturum: kod girilene dek her uç 401 `mfa_required`.
+    mfa_pending: Mapped[bool] = mapped_column(default=False, server_default=false())
+    # Son güçlü doğrulama (giriş, 2FA, step-up) — hassas işlemlerde son 5 dakika kuralı.
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class AuthEventKind(StrEnum):
@@ -103,6 +188,20 @@ class AuthEventKind(StrEnum):
     PASSWORD_CHANGED = "password_changed"  # noqa: S105  # nosec B105 — olay adı, sır değil
     SESSION_REVOKED = "session_revoked"  # kullanıcı bir cihazı kapattı
     TOKEN_REUSED = "token_reused"  # noqa: S105  # nosec B105 — jeton tekrarı olayı
+    # PLT-01 / PLT-10 / §4.7 (P5): kodla giriş, iki adımlı doğrulama, sıfırlama, davet
+    CODE_SENT = "code_sent"  # SMS/e-posta kodu gönderildi (hedef kayıtlı olmasa da)
+    CODE_FAILED = "code_failed"  # hatalı kod denemesi
+    CODE_LOCKED = "code_locked"  # 5 hatalı denemede hedef 15 dk kilitlendi
+    MFA_ENABLED = "mfa_enabled"
+    MFA_DISABLED = "mfa_disabled"
+    MFA_FAILED = "mfa_failed"
+    RECOVERY_CODE_USED = "recovery_code_used"
+    RECOVERY_CODES_REGENERATED = "recovery_codes_regenerated"
+    PASSWORD_RESET = "password_reset"  # noqa: S105  # nosec B105 — olay adı, sır değil
+    PHONE_CHANGED = "phone_changed"
+    STEP_UP = "step_up"
+    INVITATION_SENT = "invitation_sent"
+    INVITATION_ACCEPTED = "invitation_accepted"
 
 
 class AuthEvent(Base):
@@ -203,3 +302,61 @@ class Registration(TenantMixin, Base):
     person_id: Mapped[uuid.UUID | None]
     # Başvuranın formda listeden seçtiği bölüm (istek 23); onayda yönetici yine seçer.
     requested_unit_id: Mapped[uuid.UUID | None]
+
+
+class OtpChallenge(Base):
+    """[G] Tek kullanımlık kod (SMS/e-posta) — §4.7. Kodun **yalnız HMAC özeti** saklanır
+    (hedef ve amaca bağlı). Hedef kayıtlı olsun olmasın kod üretilir (numaralandırma yok);
+    `user_id` yalnız eşleşen hesap varsa dolu. Kilit (`locked_until`) hedefin son kodunda
+    tutulur: 5 hatalı denemede 15 dakika."""
+
+    __tablename__ = "otp_challenges"
+    __table_args__ = (
+        CheckConstraint(enum_check("purpose", OtpPurpose), name="purpose"),
+        CheckConstraint(enum_check("channel", OtpChannel), name="channel"),
+        CheckConstraint("attempts >= 0", name="attempts"),
+        Index("ix_otp_challenges_target_created", "purpose", "target", "created_at"),
+    )
+
+    purpose: Mapped[str] = mapped_column(Text)
+    channel: Mapped[str] = mapped_column(Text)
+    target: Mapped[str] = mapped_column(Text)  # E.164 telefon ya da küçük harf e-posta
+    user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), index=True)
+    code_digest: Mapped[str] = mapped_column(Text)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    attempts: Mapped[int] = mapped_column(default=0)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Gönderim kaydı (platform hesabı; site kotasından düşmez)
+    provider: Mapped[str | None] = mapped_column(Text)
+    provider_ref: Mapped[str | None] = mapped_column(Text)
+    cost_units: Mapped[int] = mapped_column(default=0)
+    ip: Mapped[str | None] = mapped_column(Text)
+
+
+class MfaRecoveryCode(Base):
+    """[G] İki adımlı doğrulamanın yedek kodu: yalnız SHA-256 özeti; bir kez kullanılır."""
+
+    __tablename__ = "mfa_recovery_codes"
+    __table_args__ = (UniqueConstraint("user_id", "code_digest"),)
+
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    code_digest: Mapped[str] = mapped_column(Text)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class UserInvitation(Base):
+    """[G] Hesap daveti (PLT-09): 72 saat geçerli, tek kullanımlık bağlantı. Jetonun yalnız
+    SHA-256 özeti saklanır. Kabul edilince kişi parolasını belirler; yeni davet eskisini
+    geçersiz kılar. Site kimliği tutulmaz (hesap global); gösterim için site adı."""
+
+    __tablename__ = "user_invitations"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    token_digest: Mapped[str] = mapped_column(Text, unique=True)
+    site_name: Mapped[str | None] = mapped_column(Text)
+    role_label: Mapped[str | None] = mapped_column(Text)
+    invited_by_name: Mapped[str | None] = mapped_column(Text)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

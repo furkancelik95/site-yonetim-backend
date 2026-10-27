@@ -104,7 +104,7 @@ async def test_oldest_debt_is_closed_first(charged: World) -> None:
     ]
     account = (await charged.get(f"/accounts/{charged.account_id}/statement")).json()["account"]
     assert account["balance"] == "500.00"
-    assert account["oldest_open_due_date"] == "2026-07-15"
+    assert account["oldest_open_due_date"] == "2026-07-10"  # K25 vade ayın 10'u
 
 
 async def test_reversed_debt_is_not_open(charged: World) -> None:
@@ -154,12 +154,13 @@ async def test_payment_rules(charged: World) -> None:
 async def test_closed_account_and_closed_period(charged: World) -> None:
     with site_scope(charged.site_id):
         async with charged.factory() as session, session.begin():
-            await session.execute(update(Period).values(status="closed"))
+            await session.execute(update(Period).values(status="locked"))
     closed_period = await pay(charged, "10.00")
     assert closed_period.status_code == 409
-    assert (
-        closed_period.json()["error"]["message"]
-        == "06/2026 dönemi kapalı; bu tarihe tahsilat yazılamaz."
+    assert closed_period.json()["error"]["code"] == "period_locked"
+    assert closed_period.json()["error"]["message"] == (
+        "Tarih kilitli döneme düşüyor (Haziran 2026); kayıt yazılamaz — en erken Temmuz 2026 "
+        "(01.07.2026)."
     )
     with site_scope(charged.site_id):
         async with charged.factory() as session, session.begin():
@@ -220,7 +221,11 @@ async def test_debtors(charged: World) -> None:
     body = (await charged.get("/debtors")).json()
     assert body["total"] == 1
     [row] = body["items"]
-    assert (row["reference_code"], row["balance"], row["overdue_days"]) == ("A1-O", "2000.00", 66)
+    assert (row["reference_code"], row["balance"], row["overdue_days"]) == (
+        "A1-O",
+        "2000.00",
+        71,
+    )  # vade 10 Haziran (K25)
     assert row["person_name"] == "Ayşe YILMAZ"
     assert body["summary"] == {
         "total_balance": "2000.00",

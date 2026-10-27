@@ -11,7 +11,7 @@
 - Cari defter kaynağı: `reservation` (ücretli rezervasyon; iptalde ters kayıt).
 
 Revision ID: 0033
-Revises: 0031
+Revises: 0038
 Create Date: 2026-10-27 12:01:47.965116
 """
 
@@ -25,7 +25,7 @@ from site_yonetim.db.rls import disable_tenant_rls, enable_tenant_rls
 TABLES = ("reservation_settings", "reservation_rules", "reservations", "reservation_waitlist")
 _SOURCES_OLD = (
     "charge", "payment", "late_fee", "adjustment", "transfer", "advance", "opening", "refund",
-    "service", "deposit",
+    "service", "deposit", "ad_hoc_charge", "payment_plan",
 )  # fmt: skip
 _SOURCES_NEW = (*_SOURCES_OLD, "reservation")
 
@@ -64,7 +64,7 @@ def _exclusion() -> None:
 
 
 revision: str = "0033"
-down_revision: str | None = "0031"
+down_revision: str | None = "0038"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

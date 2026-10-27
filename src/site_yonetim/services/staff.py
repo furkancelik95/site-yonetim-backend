@@ -19,16 +19,26 @@ from sqlalchemy import Select, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from site_yonetim.db.tenancy import all_sites_scope, site_scope
-from site_yonetim.domain.access import SiteRole
 from site_yonetim.domain.management import Employer
 from site_yonetim.domain.members import FormFieldError, check_full_name
+from site_yonetim.domain.roles import RESIDENT_KEY
 from site_yonetim.domain.staffing import LeaveStatus, check_payroll_no
 from site_yonetim.domain.validation import normalize_tr_mobile
-from site_yonetim.models import LeaveRequest, ShiftAssignment, SiteMembership, StaffMember, User
+from site_yonetim.models import (
+    LeaveRequest,
+    ShiftAssignment,
+    SiteMembership,
+    SiteRoleAssignment,
+    StaffMember,
+    User,
+)
 from site_yonetim.models.audit import Actor, ActorType, set_actor
+from site_yonetim.services import roles as roles_svc
 
 NAME_MAX = 60
 JOB_ACTOR = "Zamanlanmış iş (personel ayrılışı)"
+# Bu sitede personel (sakin olmayan) rolü olmuş kullanıcılar (P18: roller atamadadır)
+_STAFF_USERS = select(SiteRoleAssignment.user_id).where(SiteRoleAssignment.role_key != RESIDENT_KEY)
 
 
 def _clean(value: str | None, limit: int = 120) -> str:
@@ -149,7 +159,7 @@ async def _check_unique(session: AsyncSession, data: StaffData, item_id: uuid.UU
         membership = await session.scalar(
             select(SiteMembership.id).where(
                 SiteMembership.user_id == data.user_id,
-                SiteMembership.role != SiteRole.RESIDENT.value,
+                SiteMembership.user_id.in_(_STAFF_USERS),
             )
         )
         if membership is None:
@@ -171,7 +181,15 @@ async def close_access(session: AsyncSession, item: StaffMember, now: datetime) 
     membership = await session.scalar(
         select(SiteMembership).where(SiteMembership.user_id == item.user_id).with_for_update()
     )
-    if membership is not None and membership.role != SiteRole.RESIDENT.value:
+    is_staff = await session.scalar(
+        select(SiteRoleAssignment.id)
+        .where(
+            SiteRoleAssignment.user_id == item.user_id,
+            SiteRoleAssignment.role_key != RESIDENT_KEY,
+        )
+        .limit(1)
+    )
+    if membership is not None and is_staff is not None:
         membership.is_active = False
     item.access_closed_at = now
     await session.flush()
@@ -260,13 +278,31 @@ class Linkable:
 async def linkable_users(session: AsyncSession) -> list[Linkable]:
     """K29: karta bağlanabilecek hesaplar — bu sitede açık (sakin olmayan) etkin üyeliği olanlar."""
     rows = await session.execute(
-        select(User, SiteMembership.role, StaffMember.id)
+        select(User, StaffMember.id)
         .join(SiteMembership, SiteMembership.user_id == User.id)
         .outerjoin(StaffMember, StaffMember.user_id == User.id)
-        .where(SiteMembership.role != SiteRole.RESIDENT.value, SiteMembership.is_active)
+        .where(SiteMembership.user_id.in_(_STAFF_USERS), SiteMembership.is_active)
         .order_by(User.full_name, User.id)
     )
-    return [Linkable(u.id, u.full_name, u.email, role, sid) for u, role, sid in rows.all()]
+    found = rows.all()
+    catalog = await roles_svc.load_catalog(session)
+    names: dict[uuid.UUID, list[tuple[int, str]]] = {}
+    for a in await session.scalars(
+        select(SiteRoleAssignment).where(
+            SiteRoleAssignment.user_id.in_([u.id for u, _ in found]),
+            SiteRoleAssignment.role_key != RESIDENT_KEY,
+            SiteRoleAssignment.removed_at.is_(None),
+        )
+    ):
+        role = catalog.by_key(a.role_key)
+        if role is not None:
+            names.setdefault(a.user_id, []).append((role.level, role.name))
+    return [
+        Linkable(
+            u.id, u.full_name, u.email or u.phone or "", min(names.get(u.id, [(0, "")]))[1], sid
+        )
+        for u, sid in found
+    ]
 
 
 async def user_names(session: AsyncSession, ids: set[uuid.UUID]) -> dict[uuid.UUID, str]:

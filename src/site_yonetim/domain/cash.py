@@ -12,7 +12,6 @@ from enum import StrEnum
 
 from site_yonetim.domain.finance import FinanceRuleError
 from site_yonetim.domain.money import ZERO, round_money
-from site_yonetim.domain.text import format_period_tr
 
 ACCOUNT_NAME_MIN, ACCOUNT_NAME_MAX = 2, 60
 TEXT_MIN, TEXT_MAX = 3, 200
@@ -113,14 +112,6 @@ def check_reason(reason: str) -> str:
             "reason_too_short", "Gerekçe en az 3 karakter olmalı.", field="reason"
         )
     return text
-
-
-def closed_period_error(day: date) -> FinanceRuleError:
-    return FinanceRuleError(
-        "period_closed",
-        f"{format_period_tr(day.year, day.month)} dönemi kapalı, bu tarihe kayıt yazılamaz.",
-        conflict=True,
-    )
 
 
 def inactive_account_error() -> FinanceRuleError:
