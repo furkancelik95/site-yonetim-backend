@@ -104,7 +104,7 @@ async def test_oldest_debt_is_closed_first(charged: World) -> None:
     ]
     account = (await charged.get(f"/accounts/{charged.account_id}/statement")).json()["account"]
     assert account["balance"] == "500.00"
-    assert account["oldest_open_due_date"] == "2026-07-15"
+    assert account["oldest_open_due_date"] == "2026-07-10"  # K25 vade ayın 10'u
 
 
 async def test_reversed_debt_is_not_open(charged: World) -> None:
@@ -221,7 +221,11 @@ async def test_debtors(charged: World) -> None:
     body = (await charged.get("/debtors")).json()
     assert body["total"] == 1
     [row] = body["items"]
-    assert (row["reference_code"], row["balance"], row["overdue_days"]) == ("A1-O", "2000.00", 66)
+    assert (row["reference_code"], row["balance"], row["overdue_days"]) == (
+        "A1-O",
+        "2000.00",
+        71,
+    )  # vade 10 Haziran (K25)
     assert row["person_name"] == "Ayşe YILMAZ"
     assert body["summary"] == {
         "total_balance": "2000.00",

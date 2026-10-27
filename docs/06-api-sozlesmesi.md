@@ -201,15 +201,29 @@ Her hata aynı gövdeyi döner:
 | POST | `/sites/{slug}/budget-plans` | `finance.budget.manage` | Y | `{fiscal_year, name}` → taslak |
 | POST · PUT · DELETE | `/sites/{slug}/budget-plans/{id}/items[/{item_id}]` | `finance.budget.manage` | Y | kalem ekle/güncelle/kaldır — **yalnız taslakta** (aksi 409). `{name, expense_category_id, charge_type_id, allocation_rule_id, annual_amount, frequency, scope_kind, scope_block_ids?, scope_unit_type_ids?, scope_usage?, sort_order}` |
 | POST | `/sites/{slug}/budget-plans/{id}/notify` | `finance.budget.manage` | Y | `{notified_on}` → `notified`, itiraz son günü = +7 gün |
-| POST | `/sites/{slug}/budget-plans/{id}/finalize` | `finance.budget.manage` | Y | itiraz süresi **dolduktan sonra** (son günün ertesi); öncekiler `superseded` |
+| POST | `/sites/{slug}/budget-plans/{id}/finalize` | `finance.budget.manage` | Y | itiraz süresi **dolduktan sonra** (son günün ertesi); öncekiler `superseded`. "Bütçe" onay kuralı varsa **202** ve `finalize_request_id` dolar, onaylanınca kesinleşir (D-16); 409 `finalize_pending` |
+| GET · POST | `/sites/{slug}/budgets[?fiscal_year=]` | `finance.read` · `finance.budget.manage` | Y | **yıllık bütçe** (FIN-17, B17) sayfalı · `{fiscal_year, name, income_target?, budget_plan_id?}` → taslak (proje verilirse kalemler kategori × aya `distribute`) |
+| GET · PUT | `/sites/{slug}/budgets/{id}` | `finance.read` · `finance.budget.manage` | Y | `{…, lines[{expense_category_id, category_name, months[12], total}], month_totals[12], total}` · `{name?, income_target?, lines?[{expense_category_id, months[12]}]}` yalnız taslak (409 `budget_not_editable`) |
+| POST | `/sites/{slug}/budgets/{id}/submit` · `/revise` | `finance.budget.manage` | Y | "Bütçe" onay kuralı varsa 202, yoksa yürürlüğe girer (aynı yılın öncekisi `superseded`); 409 `budget_empty` · revizyon yeni sürüm taslağı (409 `budget_not_active`, `budget_draft_exists`) |
+| GET | `/sites/{slug}/budgets/{id}/actuals?month=` | `finance.read` | Y | bütçe–gerçekleşme: `rows[{expense_category_id, category_name, month_budget, month_actual, cumulative_budget, cumulative_actual, annual_budget, remaining, usage_percent, deviation_percent, level ok/warn/over}]`, `totals`, `warn_percent` |
+| GET · POST | `/sites/{slug}/billing-rules` | `finance.read` · `finance.budget.manage` | Y | **aidat kuralları** (FIN-02, K23): kural + `current_version` + `versions[]` · `{name, charge_type_id, owner_item, version{effective_period, kind, area_basis, amount, frequency, components[], type_coefficients[], exemptions[], scope_kind, scope_*, discontinued, basis_note, basis_document_id?}}` → taslak |
+| GET · PATCH | `/sites/{slug}/billing-rules/{id}` | `finance.read` · `finance.budget.manage` | Y | ayrıntı · `{name, charge_type_id, owner_item}` (yürürlükteki kuralda tip değişmez: 409 `rule_in_use`) |
+| POST · PUT | `/sites/{slug}/billing-rules/{id}/versions[/{vid}]` | `finance.budget.manage` | Y | yeni sürüm taslağı (409 `open_version_exists`) · taslak/reddedilmiş sürümü düzenle |
+| POST | `/sites/{slug}/billing-rules/{id}/versions/{vid}/submit` | `finance.budget.manage` | Y | "Aidat kuralı" onay kuralı varsa 202, yoksa yürürlükte. 422 geçmiş dönem; 409 `period_locked`, `missing_unit_data` (eksik m²/arsa payı/tip), `scope_overlap` (aynı kalem tipinde çakışan kapsam) |
+| POST | `/sites/{slug}/billing-rules/trial` · `/{id}/versions/{vid}/trial` | `finance.read` | Y | **deneme hesabı** (kayıt yok): `{lines[{unit_id, unit_name, amount, explanation}], unit_count, period_total, pool, exempted, annual_total, budget_income_target, warnings}` |
 | GET | `/sites/{slug}/charge-types` · `/allocation-rules` · `/expense-categories` | `finance.read` | Y | seçim listeleri (site açılışında varsayılanlar kurulur — `10` §3) |
 | GET | `/sites/{slug}/charge-runs` · `/charge-runs/{id}` | `finance.read` | R | geçmiş koşular (sayfalı, en yeni üstte) · ayrıntı |
 | GET | `/sites/{slug}/charge-runs/{id}/charges` | `finance.read` | Y | koşunun borçları + kalem dökümü (sayfalı) |
-| GET | `/sites/{slug}/charge-runs/preview?charge_date=&due_date=` | `finance.charge.post` | R | varsayılan **sıradaki dönem** — `04` §4, §7.2. Hiçbir şey yazılmaz. Özet + uyarılar + kalem toplamları + `not_due_items` + sayfalı `charges` |
-| POST | `/sites/{slug}/charge-runs` | `finance.charge.post` | R | `{charge_date?, due_date?}` → kaydet (201). 409: dönem zaten kesilmiş, kesinleşmiş proje yok, kesilecek tahakkuk yok. `Idempotency-Key`. Büyük sitede arka plan işi (`202`) — **henüz yok**, istek içinde çalışır |
+| GET | `/sites/{slug}/charge-runs/preview?charge_date=&due_date=` | `finance.charge.post` | R | varsayılan **sıradaki dönem** — `04` §4, §7.2. Hiçbir şey yazılmaz. Özet + uyarılar + kalem toplamları (`exempted`) + `not_due_items` + sayfalı `charges` (`days`/`period_days` kıst). `source` (K23), `proration` (K9), `approval_required`, `open_draft_id`; `budget_plan` aidat kuralı kaynağında null. Vade varsayılanı `due_day` (K25) |
+| POST | `/sites/{slug}/charge-runs` | `finance.charge.post` | R | `{charge_date?, due_date?}` → "Tahakkuk" onay kuralı yoksa kaydet (201); varsa taslak onaya gider (**202**, `status: approval_pending`). 409: dönem zaten kesilmiş, kaynak yok (`no_finalized_budget`, `no_billing_rules`), kesilecek tahakkuk yok, `draft_exists`. `Idempotency-Key` |
+| POST | `/sites/{slug}/charge-runs/drafts` | `finance.charge.post` | R | taslak hazırla (201, deftere yazılmaz; önizleme saklanır) |
+| POST | `/sites/{slug}/charge-runs/{id}/refresh` · `/submit` · `/cancel` | `finance.charge.post` | R | taslağı yeniden hesapla · gönder (201 kesinleşti / 202 onaya gitti; `Idempotency-Key`) · iptal (onay bekleyen 409) |
+| GET | `/sites/{slug}/charge-runs/{id}/diff` · `/summary` | `finance.read` | R | taslağın fark raporu · uyarılar + kalem toplamları |
+| POST | `/sites/{slug}/charge-runs/lines/{line_id}/adjustments` | `finance.charge.post` | R | **satır düzeltmesi** (D-10): `{new_amount, reason}` → 201 uygulandı / 202 "Tahakkuk düzeltme" onayı. Kilitli dönemde `prior_period: true`. 409 `charge_not_posted`, `adjustment_pending`. `Idempotency-Key` |
+| GET | `/sites/{slug}/charge-runs/{id}/adjustments` | `finance.read` | R | koşunun düzeltmeleri; `/charges` satırlarında `id`, `current_amount` |
 | POST | `/sites/{slug}/charge-runs/{id}/reverse` | `finance.charge.post` | R | `{reason}` (3–500). 409: zaten ters kaydedilmiş / ters kayıt koşusu. `Idempotency-Key` |
-| GET | `/sites/{slug}/charge-schedule` | `finance.read` | R | **otomatik aylık tahakkuk**: `{enabled, charge_day, due_days, notify_on_run, next_run_on, last_run{run_id, period, ran_at, status, message}}`. Kaydedilmediyse varsayılan (kapalı, gün 1, vade 14). `next_run_on` kapalıyken null (İstanbul tarihi). `last_run.status`: `posted` · `skipped` · `failed`; `run_id` yalnız kesildiyse dolu |
-| PUT | `/sites/{slug}/charge-schedule` | `finance.charge.post` | R | `{enabled, charge_day (1–28), due_days (0–60), notify_on_run}` → aynı nesne + mesaj. Sınır dışı 422 `fields.charge_day` / `fields.due_days`. Kesimi gece işi yapar, **elle kaydetmeyle aynı servis**: dönem kesilmişse, proje yoksa ya da önizlemede uyarı varsa kesmez (`skipped`). Açıldığı günden önceki kesim günü geriye dönük kesilmez; sunucu kesim günü çalışmadıysa ay içinde ertesi gün yetişir |
+| GET | `/sites/{slug}/charge-schedule` | `finance.read` | R | **otomatik aylık tahakkuk**: `{enabled, charge_day, draft_lead_days, due_day (salt okunur, K25), approval_required, notify_on_run, next_run_on, last_run{run_id, period, ran_at, status, message}}`. Kaydedilmediyse varsayılan (kapalı, gün 1, taslak −5). `last_run.status`: `posted` · `drafted` · `skipped` · `failed` |
+| PUT | `/sites/{slug}/charge-schedule` | `finance.charge.post` | R | `{enabled, charge_day (1–28), draft_lead_days (0–15), notify_on_run}` → aynı nesne + mesaj (`due_days` kalktı — vade finans parametresi). Gece işi: onaylı taslakları tahakkuk tarihinde kesinleştirir; "Tahakkuk" kuralı varsa kesimden `draft_lead_days` gün önce taslağı ayarı açan adına onaya gönderir (`drafted`); yoksa kesim günü **elle kaydetmeyle aynı servis**le keser (uyarı varsa `skipped`) |
 | POST | `/sites/{slug}/payments` | `finance.payment.record` | R | `{ledger_account_id, amount, date, method, reference?, note?, cash_account_id?}` → `{payment, applied, unapplied, closed_debt_count, balance}` (201). `method`: `cash` · `bank_transfer` · `credit_card` · `other`. Kasa seçildiyse kasaya giriş hareketi de yazılır. `Idempotency-Key` |
 | GET | `/sites/{slug}/payments?account_id=&from=&to=` | `finance.read` | Y | sayfalı, en yeni üstte |
 | GET | `/sites/{slug}/payments/{id}` | `finance.read` veya kendi hesabı | Y | **makbuz verisi**: site, tahsilat, hesap, kapatılan borçlar (`allocations`), `applied`/`unapplied`. `receipt_number` şimdilik `null` (`12` K15) |
@@ -300,10 +314,17 @@ budget_plan` (K23), `late_fee_enabled false` · `late_fee_monthly_rate_percent "
 `late_fee_method daily` · `late_fee_grace_days 5` (K2), `allocation_order late_fee_first` (K24),
 `debtor_restriction_enabled false` · `_min_amount "0.00"` · `_min_days 90` (K11). Finansal etkili
 (sonraki dönemden, onaya tabi): kıst, vade günü, tahakkuk kaynağı, gecikme alanları, mahsup sırası,
-plan süresince gecikme. **Tahakkuk motoru bu parametreleri henüz okumuyor (P03b).**
+plan süresince gecikme, gecikme tavanı (`late_fee_cap_percent 0`) ve asgari tutarı
+(`late_fee_minimum_amount "0.00"`). Tahakkuk motoru (P03b) kaynak, kıst ve vade gününü; tahsilat
+mahsup sırasını; gecikme işi gecikme alanlarını dönemin sürümünden okur.
 
 Gece/saatlik iş `run-finance-jobs`: süresi dolan süreli açmayı kilitler, borç takibi kademelerini
-(aynı açık vade için bir kez; ödeme planındaki hesaba yazılmaz) kaydeder, bozulan planı bildirir.
+(aynı açık vade için bir kez; ödeme planındaki hesaba yazılmaz) kaydeder, bozulan planı bildirir,
+gecikme açıksa önceki ayın ay sonu gecikme kaydını bir kez yazar (`04` §6), bütçe %90/%100 eşik
+uyarısını kategori ve eşik başına bir kez bildirir (FIN-17).
+
+Cari ekstre satırı (`/accounts/{id}/statement`, sakin `/me/statement`): `allocated` (borca yapılan
+mahsup) ve `advance_applied` (önceden yatırılmış avanstan mahsup, D-6) alanları.
 
 ### 2.9 Rapor
 | Yöntem | Yol | İzin | Durum | Not |

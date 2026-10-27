@@ -8,7 +8,7 @@ kapatır (docs/07 §3.8).
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from enum import StrEnum
 
@@ -135,3 +135,81 @@ def late_fee(
     daily_rate = policy.monthly_rate_percent / Decimal(100) / Decimal(30)
     fee = round_money(outstanding * daily_rate * late_days)
     return ZERO if fee < policy.minimum_amount else fee
+
+
+@dataclass(frozen=True, slots=True)
+class LateFeeRule:
+    """Sitenin gecikme yöntemi (FIN-03, §8.8; finans parametreleri `late_fee_*` — K2)."""
+
+    monthly_rate_percent: Decimal
+    grace_days: int
+    method: str = "daily"  # daily: oran × gün / 30 · full_month: başlamış ay = tam ay
+    cap_percent: int = 0  # tavan: ana borcun %X'i (0 = yok)
+    minimum_amount: Decimal = ZERO
+
+
+def accrued_late_fee(
+    principal: Decimal,
+    due_date: date,
+    reductions: Sequence[tuple[date, Decimal]],
+    as_of: date,
+    rule: LateFeeRule,
+    *,
+    start_floor: date | None = None,
+) -> Decimal:
+    """Bir ana borca `as_of` gününe kadar işlemiş **toplam** gecikme (basit; FIN-03 formülleri).
+
+    - Gecikme günü = gün − (vade + tolerans); ≤ 0 ise yok. `as_of` günü sayılır.
+    - Kısmi ödemede kalan ana borç üzerinden günlük dilimlerle: `reductions` (tarih, tutar)
+      o günün **ertesinden** itibaren açık tutarı düşürür (ödeme günü hâlâ gecikmiş sayılır).
+    - `daily`: Σ açık × aylık oran / 30 · `full_month`: her başlamış 30 günlük dilim için o dilimin
+      başındaki açık × aylık oran.
+    - `start_floor`: yöntem yürürlüğü — bu günden önceki günlere gecikme işletilmez.
+    - Tavan ve asgari tutar en sonda uygulanır. Tazminata tazminat işletilmez.
+    """
+    start = due_date + timedelta(days=rule.grace_days)  # bu gün dahil gecikme yok
+    if as_of <= start or principal <= ZERO:
+        return ZERO
+    ordered = sorted(reductions)
+
+    def open_on(day: date) -> Decimal:
+        paid = sum((amount for when, amount in ordered if when < day), ZERO)
+        return max(principal - paid, ZERO)
+
+    rate = rule.monthly_rate_percent / Decimal(100)
+    total = ZERO
+    if rule.method == "full_month":
+        late_days = (as_of - start).days
+        months = -(-late_days // 30)
+        for k in range(months):
+            first_day = start + timedelta(days=30 * k + 1)
+            if start_floor is not None and first_day < start_floor:
+                continue
+            total += open_on(first_day) * rate
+    else:
+        first = start + timedelta(days=1)
+        if start_floor is not None and first < start_floor:
+            first = start_floor
+        # açık tutarın değiştiği günlerle dilimlere böl (gün gün değil)
+        bounds = sorted(
+            {
+                first,
+                *(
+                    when + timedelta(days=1)
+                    for when, _ in ordered
+                    if first < when + timedelta(days=1) <= as_of
+                ),
+            }
+        )
+        for index, segment_start in enumerate(bounds):
+            if segment_start > as_of:
+                break
+            segment_end = (
+                bounds[index + 1] if index + 1 < len(bounds) else as_of + timedelta(days=1)
+            )
+            days = (segment_end - segment_start).days
+            total += open_on(segment_start) * rate / Decimal(30) * days
+    fee = round_money(total)
+    if rule.cap_percent > 0:
+        fee = min(fee, round_money(principal * Decimal(rule.cap_percent) / Decimal(100)))
+    return ZERO if fee < rule.minimum_amount else fee

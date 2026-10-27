@@ -5,7 +5,8 @@ döneme kadar başlamış en son (onaylı) sürümdür. Geçmiş dönemler deği
 parametreler en erken bir sonraki dönemden geçerli olur ve "Finans parametresi" onay kuralından
 geçer.
 
-PM kararlarının ayar noktaları (motor değişikliği P03b'de; burada yalnız parametre):
+PM kararlarının ayar noktaları (P03b tahakkuk motoru bunları okur — `services/charging.prepare`,
+`services/late_fees`, `services/payments`):
 - K9 kıst `proration`: `day` (varsayılan, PM kararı — doküman "ay bazlı" diyordu) | `month`
 - K25 vade günü `due_day`: varsayılan dokümandaki gibi ayın 10'u; site değiştirebilir
 - K23 tahakkuk kaynağı `charge_source`: `budget_plan` | `billing_rule` (site seçer)
@@ -62,6 +63,8 @@ DEFAULTS: dict[str, Any] = {
     "late_fee_monthly_rate_percent": "5.00",
     "late_fee_method": LateFeeMethod.DAILY.value,
     "late_fee_grace_days": 5,
+    "late_fee_cap_percent": 0,  # tavan: ana borcun %X'i (0 = tavan yok) — FIN-03
+    "late_fee_minimum_amount": "0.00",  # bu tutarın altındaki gecikme yazılmaz
     "allocation_order": AllocationOrder.LATE_FEE_FIRST.value,
     "debtor_restriction_enabled": False,
     "debtor_restriction_min_amount": "0.00",
@@ -79,6 +82,8 @@ FINANCIAL = frozenset(
         "late_fee_monthly_rate_percent",
         "late_fee_method",
         "late_fee_grace_days",
+        "late_fee_cap_percent",
+        "late_fee_minimum_amount",
         "allocation_order",
     }
 )
@@ -97,6 +102,7 @@ _INT_RANGES: dict[str, tuple[int, int, str]] = {
     "budget_warn_percent": (50, 100, "50–100 arası olmalı."),
     "due_day": (1, 28, "Vade günü ayın 1'i ile 28'i arası olmalı."),
     "late_fee_grace_days": (0, 30, "Tolerans 0–30 gün olmalı."),
+    "late_fee_cap_percent": (0, 100, "Tavan ana borcun %0–100'ü olmalı (0 = tavan yok)."),
     "debtor_restriction_min_days": (0, 365, "0–365 gün olmalı."),
 }
 _BOOLS = ("plan_suspends_late_fee", "late_fee_enabled", "debtor_restriction_enabled")
@@ -157,6 +163,15 @@ def merge(base: dict[str, Any], changes: dict[str, Any]) -> tuple[dict[str, Any]
         )
     else:
         values["late_fee_monthly_rate_percent"] = f"{rate:.2f}"
+    fee_minimum = _decimal(values["late_fee_minimum_amount"])
+    if (
+        fee_minimum is None
+        or fee_minimum < 0
+        or fee_minimum != fee_minimum.quantize(Decimal("0.01"))
+    ):
+        errors["late_fee_minimum_amount"] = "Tutar sıfır ya da daha büyük olmalı."
+    else:
+        values["late_fee_minimum_amount"] = f"{fee_minimum:.2f}"
     minimum = _decimal(values["debtor_restriction_min_amount"])
     if minimum is None or minimum < 0 or minimum != minimum.quantize(Decimal("0.01")):
         errors["debtor_restriction_min_amount"] = "Tutar sıfır ya da daha büyük olmalı."

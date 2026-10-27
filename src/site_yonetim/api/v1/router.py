@@ -10,7 +10,9 @@ from site_yonetim.api.v1 import (
     audit,
     auth,
     bank_imports,
+    billing_rules,
     budget,
+    budgets,
     cash,
     cash_days,
     certificates,
@@ -106,6 +108,8 @@ api_router.include_router(structure_defs.router)
 api_router.include_router(vehicles.router)
 api_router.include_router(custom_fields.router)
 api_router.include_router(budget.router)
+api_router.include_router(budgets.router)
+api_router.include_router(billing_rules.router)
 api_router.include_router(charges.router)
 api_router.include_router(fiscal_periods.router)
 api_router.include_router(finance_params.router)

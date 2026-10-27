@@ -45,7 +45,11 @@ async def test_pano_tek_istekte_ozet_doner(charged: World) -> None:
         "average_debt": "600.00",
     }
     [debtor] = body["top_debtors"]
-    assert (debtor["unit_name"], debtor["balance"], debtor["overdue_days"]) == ("A-1", "600.00", 5)
+    assert (debtor["unit_name"], debtor["balance"], debtor["overdue_days"]) == (
+        "A-1",
+        "600.00",
+        10,
+    )  # vade 10 Haziran (K25)
     assert debtor["person_name"] == "Ayşe YILMAZ"
     assert body["cash_balance"] == "0.00"
     assert body["expenses"] == []

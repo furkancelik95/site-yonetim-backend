@@ -83,13 +83,26 @@ class ScopeKind(StrEnum):
 
 
 class ChargeRunStatus(StrEnum):
-    DRAFT = "draft"
+    """FIN-05 dönem durum modeli: Taslak → Onay bekliyor → Onaylandı → Kesinleşti (`posted`).
+    Kesinleşmiş koşu yalnız ters kayıtla düzeltilir (`reversed`)."""
+
+    DRAFT = "draft"  # taslak: önizleme anlık görüntüsü saklanır, deftere yazılmaz
+    APPROVAL_PENDING = "approval_pending"  # "Tahakkuk" onay kuralında
+    APPROVED = "approved"  # onaylandı; tahakkuk tarihinde kesinleşir
+    REJECTED = "rejected"  # onay reddedildi / geri çekildi — taslak düzeltilip yeniden gönderilir
+    CANCELLED = "cancelled"  # taslaktan vazgeçildi
     POSTED = "posted"
     REVERSED = "reversed"
 
 
+OPEN_DRAFT_STATUSES = frozenset(
+    {ChargeRunStatus.DRAFT, ChargeRunStatus.APPROVAL_PENDING, ChargeRunStatus.APPROVED}
+)
+
+
 class ScheduleRunStatus(StrEnum):
     POSTED = "posted"  # tahakkuk kesildi
+    DRAFTED = "drafted"  # taslak hazırlandı ve "Tahakkuk" onayına gönderildi (FIN-05)
     SKIPPED = "skipped"  # dönem zaten kesilmiş / proje yok / önizlemede uyarı
     FAILED = "failed"  # beklenmeyen hata — ertesi gün yeniden denenir
 
