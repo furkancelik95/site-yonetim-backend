@@ -46,6 +46,7 @@ class AuditAction(StrEnum):
     IMPORT = "import"
     DOWNLOAD = "download"
     EXPORT = "export"  # dışa aktarma (Excel) — Yazılım Dokümanı M-24, PLT-07
+    CONTACT_VIEW = "contact_view"  # maskeli kişisel verinin açılması (YAP-03 S2, KVKK)
 
 
 class ActorType(StrEnum):
@@ -189,6 +190,14 @@ AUDITED_TABLES = frozenset(
         "persons",
         "unit_parties",
         "registration_links",
+        "common_areas",
+        "unit_attribute_changes",
+        "structure_settings",
+        "household_members",
+        "vehicles",
+        "invitations",
+        "custom_fields",
+        "custom_field_values",
         # onay mekanizması (kararlar değişmez; vekâleten karar `delegate` aktörüyle)
         "approval_rules",
         "approval_rule_versions",
@@ -202,7 +211,8 @@ AUDITED_TABLES = frozenset(
         "site_memberships",
     }
 )
-_SKIPPED_COLUMNS = frozenset({"id", "site_id", "created_at", "updated_at"})
+# `token_hash`: davet belirtecinin özeti bile kayda girmez.
+_SKIPPED_COLUMNS = frozenset({"id", "site_id", "created_at", "updated_at", "token_hash"})
 _PENDING = "audit_pending"
 
 

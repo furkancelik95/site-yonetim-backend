@@ -27,6 +27,7 @@ from site_yonetim.domain.finance import (
     PayerRule,
     ScopeKind,
 )
+from site_yonetim.domain.invitations import token_hash
 from site_yonetim.domain.management import Employer
 from site_yonetim.domain.modules import ModuleKey
 from site_yonetim.domain.money import distribute, round_money
@@ -41,8 +42,9 @@ from site_yonetim.domain.parking import check_space
 from site_yonetim.domain.patrol import check_plan, check_point
 from site_yonetim.domain.security import VisitorKind
 from site_yonetim.domain.staffing import week_start
-from site_yonetim.domain.structure import AccountKind, PartyRole
+from site_yonetim.domain.structure import AccountKind, CommonAreaKind, PartyRole
 from site_yonetim.domain.text import normalize_person_name
+from site_yonetim.domain.vehicles import VehicleKind, VehicleStatus
 from site_yonetim.models import (
     AccountBalance,
     AllocationRule,
@@ -53,7 +55,11 @@ from site_yonetim.models import (
     CashAccount,
     Charge,
     ChargeType,
+    CommonArea,
+    CustomField,
     ExpenseCategory,
+    HouseholdMember,
+    Invitation,
     LedgerAccount,
     Organization,
     OrganizationMembership,
@@ -61,10 +67,12 @@ from site_yonetim.models import (
     Plan,
     Site,
     SiteMembership,
+    StructureSettings,
     Unit,
     UnitParty,
     UnitType,
     User,
+    Vehicle,
 )
 from site_yonetim.models.audit import bulk_operation
 from site_yonetim.seed.demo_data import (
@@ -223,6 +231,7 @@ async def _seed_demo(
                 await _seed_finance(session, spec, today)
                 await _seed_operations(session, spec, today)
                 await _seed_gate(session, spec, today)
+                await _seed_directory(session, spec, today)
                 await _seed_security_setup(session, spec, today)
                 if ModuleKey.DOCUMENTS in await available_modules(session, site):
                     await _seed_documents(session, store, today)
@@ -851,3 +860,111 @@ async def _seed_staff(
 def _person(first: str, last: str) -> Person:
     first_name, last_name = normalize_person_name(first, last)
     return Person(first_name=first_name, last_name=last_name)
+
+
+# --- Yapı, kişiler ve kayıt (servis istekleri 19–26) ------------------------------------
+
+COMMON_AREAS = (
+    ("Açık havuz", CommonAreaKind.POOL, True),
+    ("Toplantı salonu", CommonAreaKind.HALL, True),
+    ("Kapalı otopark", CommonAreaKind.PARKING, False),
+    ("Çocuk parkı", CommonAreaKind.PLAYGROUND, False),
+)
+VEHICLE_MODELS = ("Renault Clio", "Fiat Egea", "Toyota Corolla", "VW Golf", "Hyundai i20")
+VEHICLE_COLORS = ("Beyaz", "Gri", "Siyah", "Kırmızı", "Lacivert")
+PLATE_LETTERS = ("ABC", "KL", "TR", "MN", "YZ", "BD")
+
+
+async def _seed_directory(session: AsyncSession, spec: SiteSpec, today: date) -> None:
+    """Ortak alanlar, araçlar, hane üyeleri, davet ve özel alan örnekleri — ekranlar boş
+    görünmesin (docs/10)."""
+    rng = random.Random(f"{SEED}:directory:{spec.slug}")  # noqa: S311  # nosec B311
+    session.add_all(
+        CommonArea(name=name, kind=kind.value, is_reservable=reservable)
+        for name, kind, reservable in COMMON_AREAS
+    )
+    occupied = list(
+        await session.execute(
+            select(UnitParty.unit_id, UnitParty.person_id)
+            .where(UnitParty.role.in_([PartyRole.OWNER.value, PartyRole.TENANT.value]))
+            .order_by(UnitParty.unit_id, UnitParty.role.desc())
+        )
+    )
+    owners: dict[uuid.UUID, uuid.UUID] = {}
+    for unit_id, person_id in occupied:
+        owners.setdefault(unit_id, person_id)  # kiracı varsa kiracı (role desc: tenant > owner)
+    unit_ids = sorted(owners)
+    city = "34" if spec.city != "Ankara" else "06"
+    for index, unit_id in enumerate(unit_ids):
+        if rng.random() > 0.35:
+            continue
+        plate = f"{city}{rng.choice(PLATE_LETTERS)}{rng.randint(100, 9999)}"
+        session.add(
+            Vehicle(
+                unit_id=unit_id, plate=plate, brand_model=rng.choice(VEHICLE_MODELS),
+                color=rng.choice(VEHICLE_COLORS), kind=VehicleKind.PERMANENT.value,
+                status=(VehicleStatus.PENDING if index % 17 == 0 else VehicleStatus.ACTIVE).value,
+                owner_person_id=owners[unit_id], created_by_name="Demo verisi",
+            )
+        )  # fmt: skip
+    if unit_ids:
+        session.add(
+            Vehicle(
+                unit_id=unit_ids[0], plate=f"{city}MS{rng.randint(10, 99)}",
+                brand_model="Misafir aracı", kind=VehicleKind.GUEST.value,
+                valid_until=today + timedelta(days=5), owner_person_id=owners[unit_ids[0]],
+                created_by_name="Demo verisi",
+            )
+        )  # fmt: skip
+    now = datetime.combine(today, time(10), BUSINESS_TZ)
+    for index, unit_id in enumerate(unit_ids[1:4]):
+        phone = f"+90532{rng.randint(1000000, 9999999)}"
+        invitation = Invitation(
+            id=uuid.uuid7(), full_name=("Can Yılmaz", "Ece Demir", "Mert Kaya")[index],
+            phone=phone, unit_id=unit_id, relation="household", status="sent",
+            token_hash=token_hash(f"demo-{spec.slug}-{index}"), sent_by_name="Demo verisi",
+            sent_at=now - timedelta(days=index), expires_at=now + timedelta(days=7 - index),
+        )  # fmt: skip
+        session.add(invitation)
+        await session.flush()  # üye satırı davete bağlı (FK)
+        session.add(
+            HouseholdMember(
+                unit_id=unit_id, invitation_id=invitation.id, full_name=invitation.full_name,
+                phone=phone, invited_by_name="Demo verisi",
+                can_reservations=index == 0, can_requests=index == 1,
+            )
+        )  # fmt: skip
+    for index, unit_id in enumerate(unit_ids[5:7]):
+        session.add(
+            Invitation(
+                full_name=("Selin Aydın", "Burak Şahin")[index],
+                phone=f"+90533{rng.randint(1000000, 9999999)}", unit_id=unit_id,
+                relation="tenant", status="sent" if index == 0 else "completed",
+                token_hash=token_hash(f"demo-invite-{spec.slug}-{index}"),
+                sent_by_name="Demo verisi", sent_at=now - timedelta(days=2 + index),
+                expires_at=now + timedelta(days=5 - index),
+                completed_at=now - timedelta(days=1) if index else None,
+            )
+        )  # fmt: skip
+    session.add_all(
+        (
+            CustomField(
+                entity="unit", label="Evcil hayvan", key="evcil_hayvan", type="select",
+                options=["Yok", "Kedi", "Köpek", "Diğer"], kvkk_category="other",
+                view_roles=["Yönetici", "Güvenlik"], edit_roles=["Yönetici"],
+                resident_can_view=True, resident_can_edit=True, sort_order=1,
+            ),
+            CustomField(
+                entity="unit", label="Depo no", key="depo_no", type="text",
+                kvkk_category="other", view_roles=["Yönetici"], edit_roles=["Yönetici"],
+                sort_order=2,
+            ),
+            CustomField(
+                entity="person", label="İkinci telefon", key="ikinci_telefon", type="text",
+                kvkk_category="contact", view_roles=["Yönetici"], edit_roles=["Yönetici"],
+                sort_order=1,
+            ),
+        )
+    )  # fmt: skip
+    session.add(StructureSettings(kvkk_published=False))
+    await session.flush()

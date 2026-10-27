@@ -7,6 +7,7 @@ uv run python -m site_yonetim.cli reconcile [--fix]    # özet bakiye ↔ defter
 uv run python -m site_yonetim.cli run-charge-schedules # otomatik aylık tahakkuk (günde bir)
 uv run python -m site_yonetim.cli run-recurring-expenses # tekrarlanan giderler (günde bir)
 uv run python -m site_yonetim.cli run-approval-jobs      # onay hatırlatma/eskalasyon (saatlik)
+uv run python -m site_yonetim.cli run-structure-jobs     # öznitelik yürürlüğü, davet (günde bir)
 uv run python -m site_yonetim.cli run-staff-jobs         # ayrılan personelin erişimini kapat (gece)
 uv run python -m site_yonetim.cli run-document-expiry    # belge geçerlilik uyarısı (günde bir)
 """
@@ -33,6 +34,7 @@ from site_yonetim.services import (
     recurring_expenses,
     security_jobs,
     staff,
+    structure_jobs,
 )
 from site_yonetim.services.charging import BUSINESS_TZ
 from site_yonetim.services.imports import ImportStore
@@ -209,6 +211,22 @@ async def _run_patrol_checks() -> int:
     return 0
 
 
+async def _run_structure_jobs() -> int:
+    """Yürürlük tarihi gelen bölüm öznitelikleri ve süresi dolan davetler (günde bir)."""
+    engine = create_engine_from_settings(get_settings())
+    now = datetime.now(UTC)
+    try:
+        results = await structure_jobs.run_all(
+            create_session_factory(engine), today=now.astimezone(BUSINESS_TZ).date(), now=now
+        )
+    finally:
+        await engine.dispose()
+    for r in results:
+        print(f"{r.site_id}: öznitelik {r.applied}, süresi dolan davet {r.expired}")
+    print(f"{len(results)} sitede yapı işleri çalıştı.")
+    return 0
+
+
 async def _run_staff_jobs() -> int:
     """K29 / IK-01 adım 4: ayrılış tarihi geçen personelin site erişimini kapatır (gece)."""
     engine = create_engine_from_settings(get_settings())
@@ -255,6 +273,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser(
         "run-patrol-checks", help="Başlamayan/geciken devriye bildirimi (5 dakikada bir)"
     )
+    sub.add_parser("run-structure-jobs", help="Öznitelik yürürlüğü, davet süresi (günde bir)")
     sub.add_parser("run-staff-jobs", help="Ayrılan personelin site erişimini kapat (gece)")
     sub.add_parser("run-document-expiry", help="Belge geçerlilik uyarısı (günde bir)")
     reconcile = sub.add_parser("reconcile", help="Özet bakiyeleri defterle karşılaştır")
@@ -273,6 +292,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_run_patrol_checks())
     if args.command == "run-approval-jobs":
         return asyncio.run(_run_approval_jobs())
+    if args.command == "run-structure-jobs":
+        return asyncio.run(_run_structure_jobs())
     if args.command == "run-staff-jobs":
         return asyncio.run(_run_staff_jobs())
     if args.command == "run-document-expiry":

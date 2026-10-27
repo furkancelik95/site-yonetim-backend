@@ -96,7 +96,16 @@ from site_yonetim.models.operations import (
 )
 from site_yonetim.models.parking import ParkingAllocation, ParkingSpace
 from site_yonetim.models.patrol import PatrolPlan, PatrolPoint, PatrolRun, PatrolScan
-from site_yonetim.models.people import LedgerAccount, Person, UnitParty
+from site_yonetim.models.people import (
+    CustomField,
+    CustomFieldValue,
+    HouseholdMember,
+    Invitation,
+    LedgerAccount,
+    Person,
+    UnitParty,
+    Vehicle,
+)
 from site_yonetim.models.platform import Organization, Plan, PropertyKind, Site
 from site_yonetim.models.security import Incident, LostItem, Package, Visitor
 from site_yonetim.models.staffing import (
@@ -111,7 +120,15 @@ from site_yonetim.models.staffing import (
     TimesheetFix,
     TimesheetLine,
 )
-from site_yonetim.models.structure import Block, Unit, UnitType
+from site_yonetim.models.structure import (
+    Block,
+    CommonArea,
+    ImportBatch,
+    StructureSettings,
+    Unit,
+    UnitAttributeChange,
+    UnitType,
+)
 
 __all__ = [
     "AccountBalance",
@@ -147,7 +164,10 @@ __all__ = [
     "ChargeScheduleRun",
     "ChargeType",
     "ClearanceCertificate",
+    "CommonArea",
     "Contract",
+    "CustomField",
+    "CustomFieldValue",
     "Document",
     "DocumentAccessLog",
     "DocumentVersion",
@@ -155,8 +175,11 @@ __all__ = [
     "ExpenseCategory",
     "Gate",
     "GateLog",
+    "HouseholdMember",
     "IdempotencyKey",
+    "ImportBatch",
     "Incident",
+    "Invitation",
     "LateFeePolicy",
     "LeaveRequest",
     "LedgerAccount",
@@ -212,16 +235,19 @@ __all__ = [
     "StockItem",
     "StockMove",
     "StoredFile",
+    "StructureSettings",
     "TimesheetDay",
     "TimesheetExport",
     "TimesheetFix",
     "TimesheetLine",
     "Unit",
+    "UnitAttributeChange",
     "UnitParty",
     "UnitType",
     "UnitUsage",
     "UnitWeight",
     "User",
+    "Vehicle",
     "VisitRequest",
     "Visitor",
     "VisitorInvite",

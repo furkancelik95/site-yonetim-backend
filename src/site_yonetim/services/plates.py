@@ -1,16 +1,15 @@
 """Plaka sorgu, giriş-çıkış kaydı ve otopark ihlali (servis isteği 43; GUV-04, OTP-02).
 
-Kaynaklar: kayıtlı araçlar (servis isteği 22 — **P02 araç tablosu gelince bağlanacak**; o zamana
-kadar "kayıtlı" sonucu dönmez), geçerli ön davet plakaları, bugün kullanılmış tek kullanımlık davet
-plakaları ve bugün içeride olan ziyaretçilerin plakaları. Görevli telefon görmez; yalnız bölüm
-ve ad.
+Kaynaklar: kayıtlı araçlar (servis isteği 22, `vehicles`), geçerli ön davet plakaları, bugün
+kullanılmış tek kullanımlık davet plakaları ve bugün içeride olan ziyaretçilerin plakaları.
+Görevli telefon görmez; yalnız bölüm ve ad.
 """
 
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, time
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from site_yonetim.domain.gatehouse import (
@@ -28,7 +27,16 @@ from site_yonetim.domain.members import FormFieldError
 from site_yonetim.domain.notifications import NotificationCategory
 from site_yonetim.domain.operations import OperationRuleError
 from site_yonetim.domain.security import VisitorStatus
-from site_yonetim.models import GateLog, ParkingViolation, Site, Visitor, VisitorInvite
+from site_yonetim.domain.vehicles import VehicleStatus
+from site_yonetim.models import (
+    GateLog,
+    ParkingViolation,
+    Person,
+    Site,
+    Vehicle,
+    Visitor,
+    VisitorInvite,
+)
 from site_yonetim.services import notifications as notify_svc
 from site_yonetim.services.charging import BUSINESS_TZ
 from site_yonetim.services.gatehouse import manager_user_ids, unit_user_ids
@@ -56,10 +64,31 @@ def _clean(raw: str | None) -> str:
 
 
 async def registered_vehicle(session: AsyncSession, plate: str, today: date) -> PlateInfo | None:
-    """Kayıtlı araç (YAP-05, servis isteği 22). Araç tablosu P02 paketiyle gelir; bağlanınca
-    bölüm ve sahip adı buradan döner (misafir aracı `valid_until`'a kadar)."""
-    del session, plate, today
-    return None
+    """Kayıtlı araç (YAP-05, servis isteği 22): etkin araç; misafir aracı `valid_until`'a kadar.
+    Görevli yalnız bölüm ve sahip adını görür (telefon yok)."""
+    vehicle = await session.scalar(
+        select(Vehicle)
+        .where(
+            Vehicle.plate == plate,
+            Vehicle.status == VehicleStatus.ACTIVE.value,
+            or_(Vehicle.valid_until.is_(None), Vehicle.valid_until >= today),
+        )
+        .order_by(Vehicle.created_at.desc())
+        .limit(1)
+    )
+    if vehicle is None:
+        return None
+    names = await unit_names(session, {vehicle.unit_id})
+    owner = await session.get(Person, vehicle.owner_person_id) if vehicle.owner_person_id else None
+    return PlateInfo(
+        plate=plate,
+        plate_display=display_plate(plate),
+        result=PlateResult.REGISTERED,
+        unit_id=vehicle.unit_id,
+        unit_name=names.get(vehicle.unit_id),
+        owner_name=owner.full_name if owner else None,
+        valid_until=vehicle.valid_until,
+    )
 
 
 async def lookup(session: AsyncSession, raw: str | None, now: datetime) -> PlateInfo:

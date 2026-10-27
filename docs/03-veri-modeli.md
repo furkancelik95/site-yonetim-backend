@@ -699,6 +699,22 @@ UPDATE/DELETE tetikleyiciyle reddedilir.
 
 ---
 
+## 9a. Yapı, kişiler ve kayıt (servis istekleri 19–26, göç 0026)
+
+| Tablo | Not |
+|---|---|
+| `common_areas` [K] | ortak alan: ad (sitede tekil), tür, blok (boşsa site geneli), rezerve edilebilir, etkin. Silinmez |
+| `unit_attribute_changes` [K] | yürürlük tarihli m² / arsa payı / tip değişikliği: `effective_from`, `changes {alan: {from, to}}`, `applied`. Silinmez; uygulanmış satır değişmez (tetikleyici `guard_unit_attribute_change`) |
+| `structure_settings` [K] | site başına bir satır: araç ayarı, kayıt yöntemleri, KVKK yayında bayrağı, açılış mutabakatı işareti |
+| `import_batches` [K] | aktarım partisi (`units`/`vehicles`/`opening_balances`): `previewed → imported → rolled_back`, geri alma için oluşan kayıt kimlikleri (`created` JSONB), 7 gün |
+| `household_members` [K] | hane üyesi: bölüm, telefon, yetkiler, `invited → active → ended`; bölümde aynı telefonla tek açık üye |
+| `vehicles` [K] | plaka (normalize), tür (kalıcı/misafir), durum (`active/pending/inactive`), sahip kişi; bölümde aynı plaka tek açık kayıt |
+| `invitations` [K] | davet: telefon, bölüm, ilişki (`owner/tenant/household`), durum; belirtecin **yalnız SHA-256 özeti** (`token_hash`, global tekil) |
+| `custom_fields` · `custom_field_values` [K] | özel alan tanımı (anahtar ve tip değişmez, arşivlenir) ve bölüm/kişi başına JSON değer |
+| `persons.merged_into_id`, `merged_at` | kişi birleştirme izi; birleşen kişi listelenmez |
+| `registrations.requested_unit_id` | herkese açık formda listeden seçilen bölüm |
+| `sites.lifecycle_status`, `went_live_at` | `setup` / `live` (YAP-01); mevcut siteler `live` |
+
 ### Güvenlik, devriye, otopark (göç 0030 — servis istekleri 40–46, K30) [K]
 
 | Tablo | Özet |

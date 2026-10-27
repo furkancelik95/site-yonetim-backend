@@ -105,3 +105,76 @@ def check_party_end(start: date, current_end: date | None, end_date: date) -> No
         raise StructureRuleError(
             "end_before_start", "end_date", "Bitiş tarihi başlangıç tarihinden önce olamaz."
         )
+
+
+# --- Yapı tanımları (servis isteği 19, Yazılım Dokümanı YAP-02) ---------------------------
+
+
+class CommonAreaKind(StrEnum):
+    POOL = "pool"  # havuz
+    HALL = "hall"  # salon
+    GYM = "gym"  # spor salonu
+    GARDEN = "garden"  # bahçe
+    PLAYGROUND = "playground"  # oyun alanı
+    PARKING = "parking"  # otopark
+    TECHNICAL = "technical"  # teknik oda
+    ROOF = "roof"  # çatı / teras
+    OTHER = "other"
+
+
+# Yürürlük tarihli (versiyonlu) bölüm öznitelikleri: m², arsa payı, tip (YAP-02 S3).
+VERSIONED_FIELDS: tuple[str, ...] = (
+    "gross_area",
+    "net_area",
+    "land_share_numerator",
+    "land_share_denominator",
+    "unit_type_id",
+)
+SHARE_TOLERANCE = Decimal("0.01")
+
+
+def month_start(day: date) -> date:
+    return day.replace(day=1)
+
+
+def next_month(day: date) -> date:
+    return date(day.year + (day.month == 12), day.month % 12 + 1, 1)
+
+
+def earliest_effective_date(today: date, closed_months: Iterable[tuple[int, int]]) -> date:
+    """Yürürlük/devir tarihinin en erkeni: içinde bulunulan ayın başı; o ay (ve sonrakiler)
+    kapatılmışsa ilk açık ayın başı. Geçmiş tahakkuklar değişmesin (YAP-02 S2: PERIOD_LOCKED)."""
+    closed = set(closed_months)
+    earliest = month_start(today)
+    while (earliest.year, earliest.month) in closed:
+        earliest = next_month(earliest)
+    return earliest
+
+
+def check_effective_date(effective: date, earliest: date, field: str) -> None:
+    if effective < earliest:
+        raise StructureRuleError(
+            "period_locked",
+            field,
+            f"Yürürlük tarihi geçmiş bir döneme düşemez; en erken {earliest:%d.%m.%Y}.",
+        )
+
+
+def check_full_owner_shares(shares: Iterable[Decimal]) -> None:
+    """Malik değişiminde yeni maliklerin hisse toplamı tam %100 (±0,01)."""
+    total = sum(shares, Decimal(0))
+    if abs(total - FULL_SHARE) > SHARE_TOLERANCE:
+        shown = f"{total:.2f}".replace(".", ",")
+        raise StructureRuleError(
+            "shares_not_full",
+            "new_owners",
+            f"Yeni maliklerin hisse toplamı tam %100 olmalı (şu an %{shown}).",
+        )
+
+
+def most_common_count(counts: dict[int, int]) -> int | None:
+    """`{değer: adet}` içinde en sık değer; eşitlikte küçük olan (yapı özeti: etkin
+    bölümlerde en sık payda)."""
+    if not counts:
+        return None
+    return min(counts, key=lambda v: (-counts[v], v))

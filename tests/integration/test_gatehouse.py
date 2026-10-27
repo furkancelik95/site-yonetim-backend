@@ -480,6 +480,20 @@ async def test_sakin_onayi_zaman_asimi_ve_gorevli_karari(gw: GateWorld) -> None:
 # --- 43: plaka, giriş-çıkış, ihlal -----------------------------------------------------------
 
 
+async def test_plaka_kayitli_arac(gw: GateWorld) -> None:
+    """Kayıtlı araç (servis isteği 22) kapıda bölüm ve sahip adıyla döner; telefon yok."""
+    car = {"unit_id": gw.w.unit_id, "plate": "34 reg 01", "kind": "permanent"}
+    added = await gw.api.post(gw.url("/vehicles"), json=car, headers=gw.manager)
+    assert added.status_code == 201, added.text
+    found = (await gw.get("/plates/lookup", gw.guard, params={"plate": "34REG01"})).json()
+    assert (found["result"], found["unit_name"], found["plate_display"]) == (
+        "registered",
+        "A-1",
+        "34 REG 01",
+    )
+    assert "phone" not in found
+
+
 async def test_plaka_kaydi_ve_otopark_ihlali(gw: GateWorld) -> None:
     unknown = (await gw.get("/plates/lookup", gw.guard, params={"plate": "34 xyz 99"})).json()
     assert unknown == {

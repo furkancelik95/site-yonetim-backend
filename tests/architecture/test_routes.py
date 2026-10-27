@@ -28,6 +28,10 @@ PUBLIC_ROUTES = {
     # Sakinin kendini kaydetmesi (servis isteği 13): IP başına istek sınırı, tahmin edilemez kod,
     # yalnız site adı döner, başvuru yönetici onayı bekler.
     "/api/v1/public/registration/{code}",
+    # Davetle kayıt (servis isteği 23): IP başına istek sınırı, belirtecin yalnız özeti saklanır,
+    # telefon davetteki numarayla tam eşleşmeli; yanıt yalnız site/bölüm adı ve son 4 hane.
+    "/api/v1/public/invitations/{token}",
+    "/api/v1/public/invitations/{token}/accept",
 }
 # Geçici parolalı oturumun erişebildiği uçlar (docs/05 §8.1). Gerisi `password_changed` ister.
 PASSWORD_PENDING_ROUTES = {"/api/v1/me", "/api/v1/auth/change-password"}
