@@ -14,7 +14,7 @@ import uuid
 from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import ColumnElement, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -174,9 +174,12 @@ async def role_holders(
 
 
 async def permission_holders(
-    session: AsyncSession, site: Site, permission: Permission, now: datetime
+    session: AsyncSession, site: Site, permission: Permission, now: datetime | None = None
 ) -> set[uuid.UUID]:
-    return {h.user.id for h in await holders(session, site, now) if permission in h.permissions}
+    """İzni (tesis genelinde) taşıyan etkin kullanıcılar — bildirim alıcıları, yönetici kontrolü.
+    `now` verilmezse saat okunur (zamanlanmış işler, bildirim)."""
+    moment = now or datetime.now(UTC)
+    return {h.user.id for h in await holders(session, site, moment) if permission in h.permissions}
 
 
 @asynccontextmanager

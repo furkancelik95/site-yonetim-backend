@@ -1055,9 +1055,16 @@ async def _seed_keys(session: AsyncSession, today: date, now: datetime) -> None:
         )
     )
     member = await session.scalar(
-        select(SiteMembership).where(
-            SiteMembership.role == RESIDENT.site_role, SiteMembership.person_id.is_not(None)
+        select(SiteMembership)
+        .where(
+            SiteMembership.user_id.in_(
+                select(SiteRoleAssignment.user_id).where(
+                    SiteRoleAssignment.role_key == RESIDENT_KEY
+                )
+            ),
+            SiteMembership.person_id.is_not(None),
         )
+        .limit(1)
     )
     if member is None or member.person_id is None:
         return

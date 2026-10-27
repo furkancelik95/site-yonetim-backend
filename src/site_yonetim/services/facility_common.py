@@ -18,12 +18,12 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from site_yonetim.db.tenancy import current_scope
-from site_yonetim.domain.access import ROLE_PERMISSIONS, Permission
+from site_yonetim.domain.access import Permission
 from site_yonetim.domain.facility import ANOMALY_PERCENT_DEFAULT
 from site_yonetim.domain.files import kind_from_content
 from site_yonetim.domain.members import FormFieldError
 from site_yonetim.models import OperationSettings, Site, StoredFile
-from site_yonetim.services import members as members_svc
+from site_yonetim.services import roles as roles_svc
 from site_yonetim.services.files import FileStore
 
 MAX_PHOTO_BYTES = 2 * 1024 * 1024
@@ -99,11 +99,7 @@ async def stored_file(session: AsyncSession, file_id: uuid.UUID) -> StoredFile |
 
 async def holders(session: AsyncSession, site: Site, permission: Permission) -> set[uuid.UUID]:
     """İzne sahip etkin site personeli (bildirim alıcıları)."""
-    return {
-        m.user.id
-        for m in await members_svc.list_members(session, site)
-        if m.is_active and m.user.is_active and permission in ROLE_PERMISSIONS[m.role]
-    }
+    return await roles_svc.permission_holders(session, site, permission)
 
 
 async def settings(session: AsyncSession) -> OperationSettings:
