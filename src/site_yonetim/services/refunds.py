@@ -13,18 +13,23 @@ bakiyeyi sıfıra doğru çeker) ve kasa/bankada **çıkış** hareketi (`CashSo
 """
 
 import uuid
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from site_yonetim.domain.approvals import ActionType
 from site_yonetim.domain.cash import CashSource
 from site_yonetim.domain.finance import FinanceRuleError, LedgerSource
 from site_yonetim.domain.money import EPSILON, ZERO, round_money
 from site_yonetim.domain.text import format_money_tr
-from site_yonetim.models import LedgerAccount, LedgerEntry, Refund
+from site_yonetim.models import CashAccount, LedgerAccount, LedgerEntry, Refund, Site
+from site_yonetim.models.approvals import ApprovalRequest
+from site_yonetim.services import approvals as approvals_svc
 from site_yonetim.services import cash, ledger, period_lock
+from site_yonetim.services.approvals import ExecutionError, Person
+from site_yonetim.services.charging import BUSINESS_TZ
 
 
 async def _ledger_balance(session: AsyncSession, account_id: uuid.UUID) -> Decimal:
@@ -36,7 +41,7 @@ async def _ledger_balance(session: AsyncSession, account_id: uuid.UUID) -> Decim
     return round_money(value if value is not None else ZERO)
 
 
-async def record(
+async def _validate(
     session: AsyncSession,
     account: LedgerAccount,
     *,
@@ -45,8 +50,8 @@ async def record(
     cash_account_id: uuid.UUID,
     reason: str | None,
     today: date,
-    recorded_by: str,
-) -> Refund:
+) -> tuple[str, CashAccount]:
+    """Alan, dönem ve bakiye denetimi (hesabı kilitler); hiçbir şey yazmaz."""
     reason = " ".join((reason or "").split())
     if not reason:
         raise FinanceRuleError("reason_required", "Gerekçe zorunlu.", field="reason")
@@ -73,6 +78,24 @@ async def record(
             f"En fazla {format_money_tr(credit)} iade edilebilir.",
             field="amount",
         )
+    return reason, cash_account
+
+
+async def record(
+    session: AsyncSession,
+    account: LedgerAccount,
+    *,
+    amount: Decimal,
+    day: date,
+    cash_account_id: uuid.UUID,
+    reason: str | None,
+    today: date,
+    recorded_by: str,
+) -> Refund:
+    reason, cash_account = await _validate(
+        session, account, amount=amount, day=day, cash_account_id=cash_account_id,
+        reason=reason, today=today,
+    )  # fmt: skip
     refund = Refund(
         id=uuid.uuid7(),
         ledger_account_id=account.id,
@@ -101,3 +124,82 @@ async def record(
         source_id=refund.id, created_by=recorded_by,
     )  # fmt: skip
     return refund
+
+
+async def request_if_ruled(
+    session: AsyncSession,
+    site: Site,
+    account: LedgerAccount,
+    *,
+    amount: Decimal,
+    day: date,
+    cash_account_id: uuid.UUID,
+    reason: str,
+    requester: Person,
+    today: date,
+    now: datetime,
+) -> ApprovalRequest | None:
+    """İade onay kuralı (K21) varsa talep açar (iade yazılmaz); yoksa None. Alan ve bakiye
+    denetimi onay öncesi yapılır."""
+    if (
+        await approvals_svc.match_rule(
+            session, ActionType.REFUND, amount=amount, source=None, today=today
+        )
+        is None
+    ):
+        return None
+    await _validate(
+        session, account, amount=amount, day=day, cash_account_id=cash_account_id,
+        reason=reason, today=today,
+    )  # fmt: skip
+    return await approvals_svc.request_approval(
+        session,
+        site,
+        approvals_svc.NewRequest(
+            action_type=ActionType.REFUND,
+            title=f"İade — {account.reference_code}, {format_money_tr(amount)}",
+            summary={
+                "reference_code": account.reference_code,
+                "amount": f"{amount:.2f}",
+                "date": day.isoformat(),
+                "reason": " ".join(reason.split()),
+            },
+            payload={
+                "ledger_account_id": str(account.id),
+                "amount": str(amount),
+                "date": day.isoformat(),
+                "cash_account_id": str(cash_account_id),
+                "reason": reason,
+            },
+            amount=amount,
+            subject_type="ledger_accounts",
+            subject_id=account.id,
+        ),
+        requester=requester,
+        today=today,
+        now=now,
+    )
+
+
+async def _execute(session: AsyncSession, request: ApprovalRequest) -> None:
+    payload = request.payload or {}
+    account = await session.get(LedgerAccount, uuid.UUID(payload["ledger_account_id"]))
+    if account is None:
+        raise ExecutionError("Cari hesap bulunamadı.")
+    decided = (request.decided_at or datetime.now().astimezone()).astimezone(BUSINESS_TZ)
+    try:
+        await record(
+            session,
+            account,
+            amount=Decimal(payload["amount"]),
+            day=date.fromisoformat(payload["date"]),
+            cash_account_id=uuid.UUID(payload["cash_account_id"]),
+            reason=payload["reason"],
+            today=decided.date(),
+            recorded_by=request.requested_by_name,
+        )
+    except FinanceRuleError as exc:
+        raise ExecutionError(f"İade artık yapılamıyor: {exc.message}") from exc
+
+
+approvals_svc.register_executor(ActionType.REFUND, _execute)

@@ -28,11 +28,12 @@ from site_yonetim.api.deps import (
     SettingsDep,
     SiteContext,
     SiteContextDep,
+    TodayDep,
     client_ip,
     require_permission,
     user_agent,
 )
-from site_yonetim.api.schemas import Page, PageParams, Written
+from site_yonetim.api.schemas import ApprovalPendingOut, Page, PageParams, Written
 from site_yonetim.core.config import Settings
 from site_yonetim.core.errors import ApiError, ForbiddenError, NotFoundError
 from site_yonetim.domain.access import Permission, RoleScope
@@ -47,8 +48,9 @@ from site_yonetim.domain.roles import (
 )
 from site_yonetim.models import Block, SiteRoleAssignment, User
 from site_yonetim.services import members as svc
+from site_yonetim.services import role_approvals, user_invitations
 from site_yonetim.services import roles as roles_svc
-from site_yonetim.services import user_invitations
+from site_yonetim.services.approvals import ApprovalError, Person
 from site_yonetim.services.auth_events import Client
 from site_yonetim.services.channels import Channels
 
@@ -491,6 +493,8 @@ class RoleAssignmentIn(AssignmentFields):
     "/members/{member_id}/role-assignments",
     status_code=status.HTTP_201_CREATED,
     summary="Kişiye rol ata (kapsam ve süre isteğe bağlı)",
+    response_model=Written[MemberOut] | Written[ApprovalPendingOut],
+    responses={202: {"description": "`status: approval_pending` — kritik rol ataması onayda"}},
 )
 async def add_role_assignment(
     member_id: uuid.UUID,
@@ -498,14 +502,34 @@ async def add_role_assignment(
     ctx: MembersManage,
     current: CurrentUserDep,
     now: NowDep,
-) -> Written[MemberOut]:
+    today: TodayDep,
+    response: Response,
+) -> Written[MemberOut] | Written[ApprovalPendingOut]:
+    """Kritik izin içeren rol için `role_change` onay kuralı tanımlıysa 202 `approval_pending`:
+    rol onaylanınca atanır."""
     try:
         member = await svc.get_member(ctx.session, ctx.site, member_id, now)
+        request = await role_approvals.request_if_critical(
+            ctx.session, ctx.site, user_id=member.user.id, user_name=member.user.full_name,
+            data=_assignment(body.role_key, body),
+            requester=Person(current.user.id, current.user.full_name),
+            actor_permissions=ctx.access.permissions, today=today, now=now,
+        )  # fmt: skip
+        if request is not None:
+            await ctx.session.commit()
+            response.status_code = status.HTTP_202_ACCEPTED
+            return Written(
+                data=ApprovalPendingOut(approval_request_id=request.id),
+                message=f"{member.user.full_name} için rol ataması onaya gönderildi (talep "
+                f"#{request.number}); onaylanınca atanır.",
+            )
         assignment = await roles_svc.assign_role(
             ctx.session, ctx.site, user_id=member.user.id,
             data=_assignment(body.role_key, body), actor_id=current.user.id,
             actor_permissions=ctx.access.permissions, actor_name=current.user.full_name, now=now,
         )  # fmt: skip
+    except ApprovalError as exc:
+        raise ApiError(exc.status, exc.code, exc.message) from exc
     except LookupError:
         raise NotFoundError("Kullanıcı bulunamadı.") from None
     except FormFieldError as exc:

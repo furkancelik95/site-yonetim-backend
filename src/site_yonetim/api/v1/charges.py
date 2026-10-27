@@ -12,13 +12,13 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, func, select
 
 from site_yonetim.api.deps import CurrentUserDep, NowDep, SiteContext, TodayDep
-from site_yonetim.api.schemas import Money, Page, PageParams, Written
+from site_yonetim.api.schemas import ApprovalPendingOut, Money, Page, PageParams, Written
 from site_yonetim.api.v1.finance_common import (
     ChargePost,
     FinanceRead,
@@ -27,7 +27,7 @@ from site_yonetim.api.v1.finance_common import (
     finance_error,
     replayed,
 )
-from site_yonetim.core.errors import NotFoundError
+from site_yonetim.core.errors import ApiError, NotFoundError
 from site_yonetim.domain.access import Permission
 from site_yonetim.domain.charging.engine import PreviewCharge, PreviewLine, WarningKind
 from site_yonetim.domain.charging.periods import YearMonth
@@ -45,8 +45,10 @@ from site_yonetim.models import (
     Person,
     Unit,
 )
-from site_yonetim.services import charge_diff
+from site_yonetim.services import charge_approvals, charge_diff
 from site_yonetim.services import charging as svc
+from site_yonetim.services.approvals import ApprovalError
+from site_yonetim.services.approvals import Person as Requester
 
 router = APIRouter(prefix="/sites/{slug}/charge-runs", tags=["tahakkuk"])
 Paging = Annotated[PageParams, Depends()]
@@ -436,8 +438,11 @@ class PostIn(BaseModel):
     "",
     status_code=status.HTTP_201_CREATED,
     summary="Tahakkuku kaydet",
-    response_model=Written[ChargeRunOut],
-    responses={409: {"description": "Dönem zaten kesilmiş / kesinleşmiş proje yok"}},
+    response_model=Written[ChargeRunOut] | Written[ApprovalPendingOut],
+    responses={
+        202: {"description": "`status: approval_pending` — tahakkuk onaya gönderildi"},
+        409: {"description": "Dönem zaten kesilmiş / kesinleşmiş proje yok"},
+    },
 )
 async def post_run(
     ctx: ChargePost,
@@ -446,16 +451,38 @@ async def post_run(
     idem: IdempotencyDep,
     today: TodayDep,
     now: NowDep,
-) -> Written[ChargeRunOut] | JSONResponse:
+    response: Response,
+) -> Written[ChargeRunOut] | Written[ApprovalPendingOut] | JSONResponse:
+    """Tahakkuk onay kuralı (`charge_run`) tanımlıysa 202 `approval_pending`: dönem onaylanınca
+    kesilir."""
     try:
         if (stored := await idem.replay(ctx.session, now)) is not None:
             return replayed(stored.status_code, stored.body)
         prepared = await svc.prepare(
             ctx.session, today, charge_date=body.charge_date, due_date=body.due_date
         )
+        request = await charge_approvals.request_post_if_ruled(
+            ctx.session,
+            ctx.site,
+            prepared,
+            requester=Requester(current.user.id, current.user.full_name),
+            today=today,
+            now=now,
+        )
+        if request is not None:
+            pending = Written(
+                data=ApprovalPendingOut(approval_request_id=request.id),
+                message=f"{prepared.period.name} tahakkuku onaya gönderildi (talep "
+                f"#{request.number}); onaylanınca kesilir.",
+            )
+            response.status_code = status.HTTP_202_ACCEPTED
+            await commit_with_key(ctx.session, idem, status.HTTP_202_ACCEPTED, pending)
+            return pending
         posted = await svc.post(ctx.session, prepared, posted_by=current.user.full_name, now=now)
     except FinanceRuleError as exc:
         raise finance_error(exc) from exc
+    except ApprovalError as exc:
+        raise ApiError(exc.status, exc.code, exc.message) from exc
     [run] = await _runs_out(ctx, [posted.run])
     result = Written(
         data=run,
@@ -473,8 +500,11 @@ class ReverseIn(BaseModel):
 @router.post(
     "/{run_id}/reverse",
     summary="Koşuyu ters kayıtla iptal et",
-    response_model=Written[ChargeRunOut],
-    responses={409: {"description": "Zaten ters kaydedilmiş / ters kaydedilemez"}},
+    response_model=Written[ChargeRunOut] | Written[ApprovalPendingOut],
+    responses={
+        202: {"description": "`status: approval_pending` — iptal onaya gönderildi"},
+        409: {"description": "Zaten ters kaydedilmiş / ters kaydedilemez"},
+    },
 )
 async def reverse_run(
     run_id: uuid.UUID,
@@ -484,11 +514,33 @@ async def reverse_run(
     idem: IdempotencyDep,
     today: TodayDep,
     now: NowDep,
-) -> Written[ChargeRunOut] | JSONResponse:
+    response: Response,
+) -> Written[ChargeRunOut] | Written[ApprovalPendingOut] | JSONResponse:
+    """Onay kuralı (`charge_run_reversal`) tanımlıysa 202 `approval_pending`."""
     try:
         if (stored := await idem.replay(ctx.session, now)) is not None:
             return replayed(stored.status_code, stored.body)
         run = await _run(ctx, run_id)
+        [current_run] = await _runs_out(ctx, [run])
+        request = await charge_approvals.request_reversal_if_ruled(
+            ctx.session,
+            ctx.site,
+            run,
+            reason=" ".join(body.reason.split()),
+            total=current_run.total_amount,
+            requester=Requester(current.user.id, current.user.full_name),
+            today=today,
+            now=now,
+        )
+        if request is not None:
+            pending = Written(
+                data=ApprovalPendingOut(approval_request_id=request.id),
+                message=f"{current_run.period} tahakkuk iptali onaya gönderildi (talep "
+                f"#{request.number}); onaylanınca ters kayıt yazılır.",
+            )
+            response.status_code = status.HTTP_202_ACCEPTED
+            await commit_with_key(ctx.session, idem, status.HTTP_202_ACCEPTED, pending)
+            return pending
         reversal = await svc.reverse(
             ctx.session,
             run,
@@ -499,6 +551,8 @@ async def reverse_run(
         )
     except FinanceRuleError as exc:
         raise finance_error(exc) from exc
+    except ApprovalError as exc:
+        raise ApiError(exc.status, exc.code, exc.message) from exc
     [out] = await _runs_out(ctx, [reversal])
     result = Written(
         data=out,
