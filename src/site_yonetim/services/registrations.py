@@ -23,8 +23,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from site_yonetim.core.security import hash_password
 from site_yonetim.db.tenancy import all_sites_scope, current_scope
-from site_yonetim.domain.access import SiteRole, UserKind
+from site_yonetim.domain.access import UserKind
 from site_yonetim.domain.members import Applicant, Relation
+from site_yonetim.domain.roles import RESIDENT_KEY
 from site_yonetim.domain.structure import FULL_SHARE, PartyRole
 from site_yonetim.models import (
     Block,
@@ -33,6 +34,7 @@ from site_yonetim.models import (
     RegistrationLink,
     Site,
     SiteMembership,
+    SiteRoleAssignment,
     Unit,
     User,
 )
@@ -258,9 +260,10 @@ async def _login(session: AsyncSession, r: Registration, person: Person) -> tupl
         select(SiteMembership.id).where(SiteMembership.user_id == user.id)
     )
     if member is None:
+        session.add(SiteMembership(user_id=user.id, person_id=person.id, is_active=True))
         session.add(
-            SiteMembership(
-                user_id=user.id, role=SiteRole.RESIDENT.value, person_id=person.id, is_active=True
+            SiteRoleAssignment(
+                user_id=user.id, role_key=RESIDENT_KEY, assigned_by_name="Kayıt başvurusu"
             )
         )
     if person.user_id is None:

@@ -116,7 +116,7 @@ Her hata aynı gövdeyi döner:
 | POST | `/auth/change-password` | giriş | R | `{current_password, new_password}` → 204. Geçici parolada (`must_change_password: true`) zorunlu; o zamana kadar `/me` dışındaki uçlar 403 `password_change_required`. Hatalar 422: `invalid_current_password` (hesap kilidi sayacını artırır), `weak_password` (en az 8), `password_unchanged`. Başarılıysa **diğer oturumlar iptal**, bu oturum sürer |
 | POST | `/auth/refresh` | çerez | Y | gövde yok; çerezle → yeni `access_token` + yeni çerez. Geçersiz/süresi dolmuş: 401 `session_expired`. Frontend `credentials: "include"` ile çağırır |
 | POST | `/auth/logout` | — | R | Bearer ve/veya çerez; oturumu iptal eder, çerezi siler. Her zaman 204 |
-| GET | `/me` | giriş | R | `UserAccess` — `05-yetki.md` §4 + `must_change_password`. Frontend yönlendirmesi buna bakar (geçici paroladayken de çalışır) |
+| GET | `/me` | giriş | R | `UserAccess` — `05-yetki.md` §4 + `must_change_password`. Site başına `role` (ana rol), `roles[]` (`{key, name, level, scope_kind, block_id, ends_at}`), `permissions` (birleşim) ve `scoped_permissions` (blokla sınırlı izinler). `GET /sites/{slug}` aynı alanları taşır. Frontend yönlendirmesi buna bakar (geçici paroladayken de çalışır) |
 | GET | `/me/sessions` | giriş | R | açık oturumlarım, son kullanılan üstte: `[{id, device ("Chrome · Windows"), user_agent, ip, created_at, last_used_at, expires_at, is_current}]` (Yazılım Dokümanı PLT-10) |
 | DELETE | `/me/sessions/{id}` | giriş | R | bir cihazı kapatır → 204; o cihazın jetonu bir sonraki istekte 401. Başkasının ya da kapalı oturum 404 |
 | DELETE | `/me/sessions?keep_current=true` | giriş | R | "tüm cihazlardan çık" → `{revoked, current_revoked}`; `keep_current=false` bu oturumu da kapatır (frontend girişe döner) |
@@ -453,10 +453,16 @@ içindir"). Sakin, `requests.read` izni olmadan da kendi taleplerini görür (`0
 ### 2.16 Site kullanıcıları (servis isteği 12)
 | Yöntem | Yol | İzin | Durum | Not |
 |---|---|---|---|---|
-| GET | `/sites/{slug}/roles` | `members.manage` | R | sabit roller `[{key, name, description}]`: `manager` · `board` · `auditor` · `accounting` · `security` · `technical` |
-| GET | `/sites/{slug}/members` | `members.manage` | R | personel (sakinler hariç), dizi: `{id, full_name, email, role_key, role_name, is_active, source: site\|organization, last_login_at, invited_at}`. `organization`: yönetim şirketinden gelen erişim |
-| POST | `/sites/{slug}/members` | `members.manage` | R | `{full_name, email, role_key}` → `{member, temporary_password}` (201, `Cache-Control: no-store`). Yeni e-posta → yeni kullanıcı + geçici parola (yalnız bu yanıtta; ilk girişte değiştirme zorunlu). Kayıtlı e-posta → mevcut kullanıcıya rol, `temporary_password: null`. Zaten sitede 409 `already_member` |
-| PATCH | `/sites/{slug}/members/{id}` | `members.manage` | R | `{role_key?, is_active?}`. Kapatma kullanıcının oturumlarını sonlandırır. 409: `derived_membership` (şirketten gelen erişim), `last_manager` (en az bir etkin yönetici kalır), `self_change` (kendi kaydı) |
+| GET | `/permissions` | giriş | R | izin ağacı `[{group, permissions: [{key, description, sensitivity: normal\|sensitive\|critical}]}]` (PLT-09) |
+| GET | `/sites/{slug}/roles?include_archived=` | `members.manage` ya da `approvals.rules.read` | R | roller (sakin hariç), düzey sırasıyla: `{key, name, description, kind: system\|custom, base_key, level, permissions, is_active, is_critical, holder_count}`. Şablonlar: `manager` · `board` · `auditor` · `accounting` · `hr` · `security` · `technical` · `attendant` |
+| POST | `/sites/{slug}/roles` | `members.manage` | R | kopyala ve özelleştir `{base_key, name, description?, permissions?, level?}` → 201. Ad değişmez, sitede benzersiz. 403 `exceeds_own_permissions`: kendinizde olmayan izin |
+| PATCH | `/sites/{slug}/roles/{key}` | `members.manage` | R | özel rol `{description?, permissions?, level?, is_active?}`; hazır şablonda yalnız `{level}` (aksi 409 `system_role`). Arşivde etkin atama varsa 409 `role_in_use`; son yönetici kuralı (409 `last_manager`) |
+| GET | `/sites/{slug}/members` | `members.manage` | R | personel (sakinler hariç), dizi: `{id, full_name, email, role_key, role_name, roles: [{assignment_id, role_key, role_name, level, scope_kind, block_id, block_name, starts_at, ends_at, is_current}], is_active, source: site\|organization, last_login_at, invited_at}`. `role_key`/`role_name` ana rol (geriye uyum; rolü yoksa null). `organization`: yönetim şirketinden gelen erişim |
+| POST | `/sites/{slug}/members` | `members.manage` | R | `{full_name, email, role_key, scope_kind?, block_id?, starts_at?, ends_at?}` → `{member, temporary_password}` (201, `Cache-Control: no-store`). Yeni e-posta → yeni kullanıcı + geçici parola (yalnız bu yanıtta; ilk girişte değiştirme zorunlu). Kayıtlı e-posta → mevcut kullanıcıya rol, `temporary_password: null`. Zaten sitede 409 `already_member` |
+| PATCH | `/sites/{slug}/members/{id}` | `members.manage` | R | `{role_key?, is_active?}`. `role_key`: **ana rolü değiştir** (diğer tesis kapsamlı personel rolleri kapanır). Kapatma kullanıcının oturumlarını sonlandırır. 409: `derived_membership` (şirketten gelen erişim), `last_manager` (`members.manage` izinli en az bir etkin kullanıcı kalır), `self_change` (kendi kaydı); 403 `exceeds_own_permissions` |
+| POST | `/sites/{slug}/members/{id}/role-assignments` | `members.manage` | R | rol ata `{role_key, scope_kind: site\|block, block_id?, starts_at?, ends_at?}` → 201 güncel üye. 422 (rol, blok, tarih; `gate` kapı tanımları gelene kadar 422), 403 `exceeds_own_permissions`, 409 `assignment_exists` · `self_change` |
+| DELETE | `/sites/{slug}/members/{id}/role-assignments/{assignment_id}` | `members.manage` | R | rolü kaldır: atama bitiş zamanıyla kapanır (silinmez). 403 `exceeds_own_permissions`, 409 `assignment_ended` · `last_manager` · `self_change` |
+| GET | `/sites/{slug}/role-assignments?user_id=&page=` | `members.manage` | R | rol atama geçmişi (sayfalı, yeni üstte): `{id, user_id, user_name, role_key, role_name, scope_kind, block_name, starts_at, ends_at, assigned_by, assigned_at, removed_by, removed_at}` |
 
 ### 2.17 Sakin kayıt başvurusu (servis isteği 13)
 | Yöntem | Yol | İzin | Durum | Not |
@@ -621,8 +627,9 @@ henüz bağlı değil (K21). Diğer işlem tipleri için kural şimdiden tanıml
 | POST | `/sites/{slug}/approvals/{id}/reject` · `/request-revision` | onaycı | R | `{comment}` zorunlu (422 `fields.comment`) |
 | POST | `/sites/{slug}/approvals/{id}/withdraw` | talep eden | R | bekleyen ya da revizyondaki talep |
 | POST | `/sites/{slug}/approvals/{id}/resubmit` | talep eden | R | revizyondan sonra: `{title?, amount?, rule? (kural değişikliğinde yeni öneri)}` → yeni sürüm, zincir baştan |
-| GET · POST | `/sites/{slug}/delegations` | personel | R | devirlerim `[{…, state: scheduled\|active\|ended, direction: given\|received}]`; POST `{to_user_id, roles: [kendi rolüm], starts_at, ends_at, note?}` |
-| GET | `/sites/{slug}/delegations/candidates` | personel | R | devredebileceğim kişiler (aynı rol) |
+| GET · POST | `/sites/{slug}/delegations` | personel | R | devirlerim `[{…, state: scheduled\|active\|ended, direction: given\|received}]`; POST `{to_user_id, roles: [kendi rollerim (ad)], starts_at, ends_at, note?}`; devralan aynı ya da üst düzeyde role sahip olmalı (422 `to_user_id`) |
+| GET | `/sites/{slug}/delegations/candidates` | personel | R | `{my_roles, candidates: [{user_id, name, role, roles, can_take}]}` — aynı ya da üst düzeyde role sahip kişiler; `can_take`: rollerimden alabildikleri (ONY-03, K20) |
+| GET | `/sites/{slug}/approval-rules/escalation-suggestion?roles=&roles=` | `approvals.rules.read` | R | `{role}` — adımlardaki en üst rolün hemen üst düzeyinden rol önerisi (K20); yoksa null |
 | POST | `/sites/{slug}/delegations/{id}/end` | devreden | R | erken sonlandırma |
 
 `status`: `pending` · `revision_requested` · `approved` · `executed` · `execution_failed`

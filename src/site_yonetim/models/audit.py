@@ -248,6 +248,8 @@ AUDITED_TABLES = frozenset(
         "document_versions",
         # yetki / üyelik
         "site_memberships",
+        "site_roles",
+        "site_role_assignments",
     }
 )
 # `token_hash`: davet belirtecinin özeti bile kayda girmez.

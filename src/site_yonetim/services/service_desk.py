@@ -25,7 +25,7 @@ from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from site_yonetim.db.tenancy import all_sites_scope, site_scope
-from site_yonetim.domain.access import ROLE_PERMISSIONS, Permission
+from site_yonetim.domain.access import Permission
 from site_yonetim.domain.notifications import NotificationCategory
 from site_yonetim.domain.operations import (
     ACTIVE_STATUSES,
@@ -46,10 +46,10 @@ from site_yonetim.models import (
     Unit,
 )
 from site_yonetim.models.audit import Actor, set_actor
-from site_yonetim.services import members as members_svc
 from site_yonetim.services import notifications as notify_svc
 from site_yonetim.services import request_setup
 from site_yonetim.services import requests as requests_svc
+from site_yonetim.services import roles as roles_svc
 
 NOTE_MIN, NOTE_MAX = 2, 2000
 JOB_ACTOR = "Talep zamanlayıcısı"
@@ -62,11 +62,7 @@ async def staff_user_ids(
     session: AsyncSession, site: Site, permission: Permission
 ) -> set[uuid.UUID]:
     """İzni taşıyan etkin personel (izne bakar, rol adına değil). `requests.settings` = yönetici."""
-    return {
-        m.user.id
-        for m in await members_svc.list_members(session, site)
-        if m.is_active and m.user.is_active and permission in ROLE_PERMISSIONS[m.role]
-    }
+    return await roles_svc.permission_holders(session, site, permission)
 
 
 async def notify_staff(

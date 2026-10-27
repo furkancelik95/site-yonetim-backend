@@ -41,6 +41,7 @@ from site_yonetim.domain.operations import (
 )
 from site_yonetim.domain.parking import check_space
 from site_yonetim.domain.patrol import check_plan, check_point
+from site_yonetim.domain.roles import RESIDENT_KEY, TEMPLATE_BY_NAME
 from site_yonetim.domain.security import VisitorKind
 from site_yonetim.domain.service_desk import PermitType
 from site_yonetim.domain.staffing import week_start
@@ -72,6 +73,7 @@ from site_yonetim.models import (
     ServiceTariff,
     Site,
     SiteMembership,
+    SiteRoleAssignment,
     StaffMember,
     StructureSettings,
     Unit,
@@ -263,11 +265,17 @@ async def _seed_demo(
                 await seed_finance_ops(session, site, first_month, today)
                 if ModuleKey.DOCUMENTS in await available_modules(session, site):
                     await _seed_documents(session, store, today)
-                session.add_all(
-                    SiteMembership(user_id=user_ids[account.email], role=account.site_role)
-                    for account in ACCOUNTS
-                    if account.site_slug == spec.slug
-                )
+                for account in ACCOUNTS:
+                    if account.site_slug == spec.slug and account.site_role:
+                        user_id = user_ids[account.email]
+                        session.add(SiteMembership(user_id=user_id))
+                        session.add(
+                            SiteRoleAssignment(
+                                user_id=user_id,
+                                role_key=TEMPLATE_BY_NAME[account.site_role].key,
+                                assigned_by_name="Demo verisi",
+                            )
+                        )
                 await session.flush()  # kiracı satırları kapsam kapanmadan yazılmalı
 
     async with factory() as session:
@@ -765,8 +773,11 @@ async def _seed_resident(
         user_id = user.id
     with site_scope(site_id):
         async with factory() as session, session.begin():
+            session.add(SiteMembership(user_id=user_id, person_id=person.id))
             session.add(
-                SiteMembership(user_id=user_id, role=RESIDENT.site_role, person_id=person.id)
+                SiteRoleAssignment(
+                    user_id=user_id, role_key=RESIDENT_KEY, assigned_by_name="Demo verisi"
+                )
             )
             linked = await session.get(Person, person.id)
             if linked is not None:
@@ -1049,9 +1060,16 @@ async def _seed_keys(session: AsyncSession, today: date, now: datetime) -> None:
         )
     )
     member = await session.scalar(
-        select(SiteMembership).where(
-            SiteMembership.role == RESIDENT.site_role, SiteMembership.person_id.is_not(None)
+        select(SiteMembership)
+        .where(
+            SiteMembership.user_id.in_(
+                select(SiteRoleAssignment.user_id).where(
+                    SiteRoleAssignment.role_key == RESIDENT_KEY
+                )
+            ),
+            SiteMembership.person_id.is_not(None),
         )
+        .limit(1)
     )
     if member is None or member.person_id is None:
         return

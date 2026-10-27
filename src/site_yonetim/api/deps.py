@@ -147,8 +147,10 @@ async def password_changed(current: AuthenticatedUserDep) -> CurrentUser:
 CurrentUserDep = Annotated[CurrentUser, Depends(password_changed)]
 
 
-async def user_access(current: CurrentUserDep, factory: FactoryDep, today: TodayDep) -> UserAccess:
-    return await load_user_access(factory, current.user, today=today)
+async def user_access(
+    current: CurrentUserDep, factory: FactoryDep, today: TodayDep, now: NowDep
+) -> UserAccess:
+    return await load_user_access(factory, current.user, today=today, now=now)
 
 
 UserAccessDep = Annotated[UserAccess, Depends(user_access)]

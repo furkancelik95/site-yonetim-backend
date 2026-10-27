@@ -14,15 +14,17 @@ Kurallar (6.2–6.5, ONY-01..03):
   baştan başlar, eski kararlar geçmişte kalır. Talep eden onay bitmeden geri çekebilir.
 - Hatırlatma X gün, eskalasyon Y gün sonra (gece işi); **otomatik onay/ret yok**. Eskalasyon
   hedefi kuralda seçilmemişse yalnız hatırlatma gider (K20).
-- Yetki devri: aynı role sahip kişiye (K20), aynı rol için tek aktif devir, zincirleme yok;
-  devralan, devredenin kendi talebini onaylayamaz; kararlar "vekâleten" yazılır.
+- Yetki devri: aynı **veya üst** role sahip kişiye (ONY-03, K20: rol düzeyi veridir), aynı rol
+  için tek aktif devir, zincirleme yok; devralan, devredenin kendi talebini onaylayamaz; kararlar
+  "vekâleten" yazılır.
+- Adım rolleri rol **adıyla** saklanır; hazır şablon da siteye özel rol da olabilir (P18).
 """
 
 import uuid
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -30,7 +32,6 @@ from sqlalchemy import Select, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from site_yonetim.db.tenancy import all_sites_scope, current_scope, site_scope
-from site_yonetim.domain.access import SiteRole
 from site_yonetim.domain.approvals import (
     ACTION_LABELS,
     DEFAULT_STEPS,
@@ -55,6 +56,7 @@ from site_yonetim.domain.approvals import (
 )
 from site_yonetim.domain.members import FormFieldError
 from site_yonetim.domain.notifications import NotificationCategory
+from site_yonetim.domain.roles import RoleCatalog, can_take_over
 from site_yonetim.domain.text import format_money_tr
 from site_yonetim.models import Site
 from site_yonetim.models.approvals import (
@@ -66,12 +68,11 @@ from site_yonetim.models.approvals import (
     ApprovalRuleVersion,
 )
 from site_yonetim.models.audit import Actor, ActorType, current_actor, set_actor
-from site_yonetim.services import members as members_svc
 from site_yonetim.services import notifications as notify_svc
+from site_yonetim.services import roles as roles_svc
 from site_yonetim.services.charging import BUSINESS_TZ
 
 _NUMBER_LOCK = text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))")
-APPROVER_ROLES = frozenset(r for r in SiteRole if r is not SiteRole.RESIDENT)
 COMMENT_MAX, TITLE_MAX = 1000, 200
 
 
@@ -145,7 +146,15 @@ class RuleData:
     basis_note: str | None = None
 
 
-def _steps(raw: list[dict[str, Any]] | None, errors: dict[str, str]) -> list[Step]:
+def _approver(catalog: RoleCatalog, name: object) -> str | None:
+    """Onaycı olabilecek rolün sitedeki adı (personel rolü, etkin) — yoksa None."""
+    role = catalog.by_name(name) if isinstance(name, str) else None
+    return role.name if role is not None and role.is_staff and role.is_active else None
+
+
+def _steps(
+    raw: list[dict[str, Any]] | None, errors: dict[str, str], catalog: RoleCatalog
+) -> list[Step]:
     if not raw or len(raw) > STEPS_MAX:
         errors["steps"] = f"1 ile {STEPS_MAX} arasında onay adımı tanımlayın."
         return []
@@ -153,12 +162,13 @@ def _steps(raw: list[dict[str, Any]] | None, errors: dict[str, str]) -> list[Ste
     for index, item in enumerate(raw, start=1):
         key = f"steps.{index}"
         try:
-            roles = tuple(SiteRole(r) for r in item.get("roles") or [])
             kind = QuorumKind(item.get("quorum") or "")
         except ValueError:
             errors[key] = f"{index}. adımda rol ve gereken onay türünü seçin."
             continue
-        if not roles or any(r not in APPROVER_ROLES for r in roles):
+        names = [_approver(catalog, r) for r in item.get("roles") or []]
+        roles = tuple(dict.fromkeys(n for n in names if n is not None))
+        if not roles or None in names:
             errors[key] = f"{index}. adımda en az bir personel rolü seçin."
             continue
         count = item.get("count")
@@ -179,17 +189,20 @@ class CheckedRule:
     remind_after_days: int
     escalate_after_days: int
     day_basis: DayBasis
-    escalation_role: SiteRole | None
+    escalation_role: str | None
     effective_from: date
     basis_note: str | None
     warnings: list[str] = field(default_factory=list)
 
 
-async def _holder_counts(session: AsyncSession, site: Site) -> dict[SiteRole, int]:
-    counts: dict[SiteRole, int] = {}
-    for m in await members_svc.list_members(session, site):
-        if m.is_active and m.user.is_active:
-            counts[m.role] = counts.get(m.role, 0) + 1
+async def _holder_counts(
+    session: AsyncSession, site: Site, now: datetime | None = None
+) -> dict[str, int]:
+    """Rol adı → şu an etkin (tesis kapsamlı) sahip sayısı; kişi birden çok rolde sayılabilir."""
+    counts: dict[str, int] = {}
+    for holder in await roles_svc.holders(session, site, now or datetime.now(UTC)):
+        for role in holder.roles:
+            counts[role.name] = counts.get(role.name, 0) + 1
     return counts
 
 
@@ -200,15 +213,17 @@ async def check_rule(
     *,
     today: date,
     exclude_rule_id: uuid.UUID | None = None,
+    now: datetime | None = None,
 ) -> CheckedRule:
     """ONY-01 iş akışı 2–3: alan, çakışma, rolde aktif kullanıcı ve M ≤ N denetimi."""
     errors: dict[str, str] = {}
+    catalog = await roles_svc.load_catalog(session)
     action: ActionType | None = None
     try:
         action = ActionType(data.action_type or "")
     except ValueError:
         errors["action_type"] = "İşlem tipini seçin."
-    steps = _steps(data.steps, errors)
+    steps = _steps(data.steps, errors, catalog)
     try:
         mode = StepMode(data.mode or "")
     except ValueError:
@@ -228,14 +243,13 @@ async def check_rule(
         errors["remind_after_days"] = "Hatırlatma ve eskalasyon gününü yazın."
     else:
         errors.update(check_timing(data.remind_after_days, data.escalate_after_days))
-    escalation: SiteRole | None = None
+    escalation: str | None = None
     if data.escalation_role:
-        try:
-            escalation = SiteRole(data.escalation_role)
-        except ValueError:
+        escalation = _approver(catalog, data.escalation_role)
+        if escalation is None:
             errors["escalation_role"] = "Geçerli bir eskalasyon rolü seçin."
         else:
-            if escalation not in APPROVER_ROLES or any(escalation in s.roles for s in steps):
+            if any(escalation in s.roles for s in steps):
                 errors["escalation_role"] = (
                     "Eskalasyon hedefi adımların onaycı rolünden farklı olmalı."
                 )
@@ -252,7 +266,7 @@ async def check_rule(
         errors["amount_max"] = "Üst sınır alt sınırdan büyük olmalı."
     condition = Condition(data.amount_min, data.amount_max, (data.source or "").strip() or None)
 
-    counts = await _holder_counts(session, site)
+    counts = await _holder_counts(session, site, now)
     for index, step in enumerate(steps, start=1):
         n = sum(counts.get(r, 0) for r in step.roles)
         if n == 0:
@@ -376,7 +390,7 @@ async def match_rule(
 def _steps_json(steps: list[Step]) -> list[dict[str, Any]]:
     return [
         {
-            "roles": [r.value for r in s.roles],
+            "roles": list(s.roles),
             "quorum": s.quorum.kind.value,
             "count": s.quorum.count,
         }
@@ -415,7 +429,7 @@ def snapshot_of(version: ApprovalRuleVersion | None) -> dict[str, Any]:
 def snapshot_steps(snapshot: dict[str, Any]) -> list[Step]:
     return [
         Step(
-            tuple(SiteRole(r) for r in s["roles"]),
+            tuple(str(r) for r in s["roles"]),
             Quorum(QuorumKind(s["quorum"]), s.get("count")),
         )
         for s in snapshot["steps"]
@@ -453,7 +467,7 @@ async def _write_rule(
             remind_after_days=checked.remind_after_days,
             escalate_after_days=checked.escalate_after_days,
             day_basis=checked.day_basis.value,
-            escalation_role=checked.escalation_role.value if checked.escalation_role else None,
+            escalation_role=checked.escalation_role,
             effective_from=checked.effective_from,
             steps=_steps_json(checked.steps),
             basis_note=checked.basis_note,
@@ -537,7 +551,7 @@ async def save_rule(
     if rule is not None and data.action_type != rule.action_type:
         raise FormFieldError({"action_type": "Kuralın işlem tipi değiştirilemez; yeni kural açın."})
     checked = await check_rule(
-        session, site, data, today=today, exclude_rule_id=rule.id if rule else None
+        session, site, data, today=today, exclude_rule_id=rule.id if rule else None, now=now
     )
     if await _change_needs_approval(session, today):
         label = ACTION_LABELS[checked.action]
@@ -754,13 +768,10 @@ async def _next_number(session: AsyncSession) -> int:
 
 
 async def _role_holders(
-    session: AsyncSession, site: Site, roles: tuple[SiteRole, ...]
-) -> list[tuple[uuid.UUID, str, SiteRole]]:
-    return [
-        (m.user.id, m.user.full_name, m.role)
-        for m in await members_svc.list_members(session, site)
-        if m.is_active and m.user.is_active and m.role in roles
-    ]
+    session: AsyncSession, site: Site, roles: tuple[str, ...], now: datetime
+) -> list[tuple[uuid.UUID, str, str]]:
+    """(kullanıcı, ad, rol adı): rollerden birine şu an sahip etkin kullanıcılar, kişi başına."""
+    return await roles_svc.role_holders(session, site, roles, now)
 
 
 def _steps_to_open(request: ApprovalRequest) -> list[int]:
@@ -789,7 +800,7 @@ async def _open_steps(
     for index in indexes:
         holders = [
             h
-            for h in await _role_holders(session, site, steps[index].roles)
+            for h in await _role_holders(session, site, steps[index].roles, now)
             if h[0] != request.requested_by and h[0] not in already
         ]
         for user_id, name, role in holders:
@@ -800,7 +811,7 @@ async def _open_steps(
                     step_index=index,
                     user_id=user_id,
                     user_name=name,
-                    role=role.value,
+                    role=role,
                 )
             )
             recipients.add(user_id)
@@ -935,26 +946,24 @@ async def create_delegation(
     now: datetime,
 ) -> ApprovalDelegation:
     errors: dict[str, str] = {}
-    members = {
-        m.user.id: m
-        for m in await members_svc.list_members(session, site)
-        if m.is_active and m.user.is_active
-    }
-    own = members.get(delegator.user_id)
-    try:
-        chosen = {SiteRole(r) for r in roles or []}
-    except ValueError:
-        chosen = set()
-    if not chosen:
+    catalog = await roles_svc.load_catalog(session)
+    holders = {h.user.id: h for h in await roles_svc.holders(session, site, now, catalog)}
+    own = holders.get(delegator.user_id)
+    own_names = {r.name for r in own.roles} if own else set()
+    names = [_approver(catalog, r) for r in roles or []]
+    chosen = {n for n in names if n is not None}
+    if not chosen or None in names:
         errors["roles"] = "Devredilecek rolü seçin."
-    elif own is None or chosen != {own.role}:
+    elif not chosen <= own_names:
         errors["roles"] = "Yalnız kendi rolünüzü devredebilirsiniz."
-    target = members.get(to_user_id) if to_user_id else None
+    target = holders.get(to_user_id) if to_user_id else None
     if target is None or to_user_id == delegator.user_id:
         errors["to_user_id"] = "Devralacak kişiyi seçin."
-    elif own is not None and target.role != own.role:
-        # K20: rol sırası tanımlanana kadar yalnız aynı rol (ONY-03 S1)
-        errors["to_user_id"] = "Devralan aynı role sahip olmalı."
+    elif "roles" not in errors and not all(
+        can_take_over(catalog.level_of(n) or 0, [r.level for r in target.roles]) for n in chosen
+    ):
+        # ONY-03 adım 2 (K20): aynı ya da daha üst düzeyde bir role sahip olmalı
+        errors["to_user_id"] = "Devralan aynı ya da daha üst bir role sahip olmalı."
     if starts_at is None or ends_at is None:
         errors["starts_at"] = "Başlangıç ve bitiş zamanını seçin."
     elif ends_at <= starts_at:
@@ -971,7 +980,7 @@ async def create_delegation(
             ApprovalDelegation.ended_at.is_(None),
             ApprovalDelegation.ends_at > starts_at,
             ApprovalDelegation.starts_at < ends_at,
-            ApprovalDelegation.roles.overlap([r.value for r in chosen]),
+            ApprovalDelegation.roles.overlap(sorted(chosen)),
         )
     )
     if overlapping is not None:
@@ -984,7 +993,7 @@ async def create_delegation(
         from_name=delegator.name,
         to_user_id=target.user.id,
         to_name=target.user.full_name,
-        roles=sorted(r.value for r in chosen),
+        roles=sorted(chosen),
         starts_at=starts_at,
         ends_at=ends_at,
         note=" ".join((note or "").split())[:500] or None,
@@ -1093,6 +1102,28 @@ async def find_slot(
     return None
 
 
+async def _still_eligible(
+    session: AsyncSession, site: Site, slot: Slot, decider: uuid.UUID, now: datetime
+) -> bool:
+    """Karar anında yetki hâlâ geçerli mi: asıl onaycı rolünü koruyor mu; devirde devralan hâlâ
+    aynı ya da üst bir role sahip mi (ONY-03)?"""
+    catalog = await roles_svc.load_catalog(session)
+    by_user = {h.user.id: h for h in await roles_svc.holders(session, site, now, catalog)}
+    role = slot.assignment.role
+    original = by_user.get(slot.assignment.user_id)
+    if original is None or role not in {r.name for r in original.roles}:
+        return False
+    if slot.delegation is None:
+        return decider == slot.assignment.user_id
+    level = catalog.level_of(role)
+    taker = by_user.get(decider)
+    return (
+        level is not None
+        and taker is not None
+        and can_take_over(level, [r.level for r in taker.roles])
+    )
+
+
 @contextmanager
 def _as_delegate(delegation: ApprovalDelegation | None) -> Iterator[None]:
     """Vekâleten verilen kararın denetim satırı `delegate` aktör tipiyle yazılır."""
@@ -1132,8 +1163,7 @@ async def decide(
     if slot is None:
         raise ApprovalError(403, "not_an_approver", "Bu talepte karar verme hakkınız yok.")
     # Karar anında yetki hâlâ geçerli mi: asıl onaycı rolünü koruyor mu (devirde devralan da)?
-    holders = {h[0] for h in await _role_holders(session, site, (SiteRole(slot.assignment.role),))}
-    if slot.assignment.user_id not in holders or decider.user_id not in holders:
+    if not await _still_eligible(session, site, slot, decider.user_id, now):
         raise ApprovalError(403, "role_changed", "Bu sitedeki yetkiniz değişti.")
     with _as_delegate(slot.delegation):
         session.add(
@@ -1458,7 +1488,7 @@ async def run_timers(
             result.reminded += 1
         if request.escalated_at is None and today >= escalate_on:
             request.escalated_at = now
-            await _escalate(session, site, request)
+            await _escalate(session, site, request, now)
             result.escalated += 1
     starting = await session.scalars(
         select(ApprovalDelegation).where(
@@ -1486,7 +1516,9 @@ async def _undecided(session: AsyncSession, request: ApprovalRequest) -> list[uu
     )
 
 
-async def _escalate(session: AsyncSession, site: Site, request: ApprovalRequest) -> None:
+async def _escalate(
+    session: AsyncSession, site: Site, request: ApprovalRequest, now: datetime
+) -> None:
     """Y gün dolunca: eskalasyon hedefi rolü de karar verebilir (asıl onaycının hakkı sürer).
     Hedef seçilmemişse (K20) yalnız etiket konur — hatırlatma zaten gitti."""
     role = request.snapshot.get("escalation_role")
@@ -1503,7 +1535,7 @@ async def _escalate(session: AsyncSession, site: Site, request: ApprovalRequest)
     }
     added: set[uuid.UUID] = set()
     for index in _open_indexes(request):
-        for user_id, name, holder_role in await _role_holders(session, site, (SiteRole(role),)):
+        for user_id, name, holder_role in await _role_holders(session, site, (str(role),), now):
             if user_id == request.requested_by or (index, user_id) in existing:
                 continue
             session.add(
@@ -1513,7 +1545,7 @@ async def _escalate(session: AsyncSession, site: Site, request: ApprovalRequest)
                     step_index=index,
                     user_id=user_id,
                     user_name=name,
-                    role=holder_role.value,
+                    role=holder_role,
                     source="escalation",
                 )
             )
