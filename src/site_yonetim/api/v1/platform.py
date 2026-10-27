@@ -307,6 +307,7 @@ async def create_site_endpoint(
             district=body.district,
             iban=body.iban,
             bank_name=body.bank_name,
+            lifecycle_status="setup",  # YAP-01: kontrol listesi tamamlanınca canlıya alınır
         )
     except (PlatformRuleError, ProvisioningError) as exc:
         raise _rule_error(exc) from None
@@ -314,7 +315,10 @@ async def create_site_endpoint(
     await session.commit()
     return Written(
         data=out,
-        message=f"{site.name} sitesi açıldı. Sıradaki adım: daire listesini Excel'den aktarın.",
+        message=(
+            f"{site.name} sitesi kurulum durumunda açıldı. Sıradaki adım: daire listesini "
+            "Excel'den aktarın; kontrol listesi tamamlanınca site yöneticisi canlıya alır."
+        ),
     )
 
 

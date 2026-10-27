@@ -14,15 +14,19 @@ from site_yonetim.api.v1 import (
     charges,
     checklists,
     contracts,
+    custom_fields,
     dashboard,
     departments,
     documents,
     expenses,
+    gatehouse,
     health,
+    import_history,
     imports,
     incidents,
     insurance,
     inventory,
+    invitations,
     keys,
     leaves,
     me,
@@ -30,7 +34,10 @@ from site_yonetim.api.v1 import (
     members,
     meters,
     notifications,
+    parking,
+    patrol,
     payments,
+    plates,
     platform,
     polls,
     portfolio,
@@ -41,15 +48,21 @@ from site_yonetim.api.v1 import (
     resident,
     routine_tasks,
     security,
+    service_desk,
     sessions,
+    setup,
+    shift_log,
     shifts,
     sites,
     staff,
     staff_self,
     structure,
+    structure_defs,
     subject_documents,
     technical_assets,
     timesheets,
+    vehicles,
+    visits,
 )
 
 API_V1_PREFIX = "/api/v1"
@@ -64,17 +77,29 @@ api_router.include_router(sites.router)
 api_router.include_router(platform.router)
 api_router.include_router(security.router)  # /units/lookup, /units/{id}'den önce
 api_router.include_router(incidents.router)
+# Güvenlik, devriye, otopark (servis istekleri 40–46, K30); /units/{id}/… yapıdan önce
+api_router.include_router(gatehouse.router)
+api_router.include_router(visits.router)
+api_router.include_router(plates.router)
+api_router.include_router(shift_log.router)
+api_router.include_router(patrol.router)
+api_router.include_router(parking.router)
 api_router.include_router(structure.router)
+api_router.include_router(structure_defs.router)
+api_router.include_router(vehicles.router)
+api_router.include_router(custom_fields.router)
 api_router.include_router(budget.router)
 api_router.include_router(charges.router)
 api_router.include_router(charge_schedule.router)
 api_router.include_router(imports.router)
+api_router.include_router(import_history.router)
 api_router.include_router(payments.router)
 api_router.include_router(bank_imports.router)
 api_router.include_router(certificates.router)
 api_router.include_router(account_ops.router)
 api_router.include_router(requests.router)
 api_router.include_router(departments.router)
+api_router.include_router(service_desk.router)
 api_router.include_router(announcements.router)
 api_router.include_router(cash.router)
 api_router.include_router(recurring_expenses.router)
@@ -89,6 +114,9 @@ api_router.include_router(audit.router)
 api_router.include_router(members.router)
 api_router.include_router(registrations.router)
 api_router.include_router(registrations.public_router)
+api_router.include_router(invitations.router)
+api_router.include_router(invitations.public_router)
+api_router.include_router(setup.router)
 api_router.include_router(meetings.router)
 api_router.include_router(polls.router)
 api_router.include_router(contracts.router)

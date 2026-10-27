@@ -67,3 +67,10 @@ def mask_value(column: str, value: object) -> object:
     if masker is None or not isinstance(value, str) or not value:
         return value
     return masker(value)
+
+
+def mask_phone_display(value: str) -> str:
+    """Ekranda maskeli telefon: "+905321112233" → "+90 532 *** ** 33" (YAP-03 S2)."""
+    if value.startswith("+90") and len(value) == 13:
+        return f"+90 {value[3:6]} *** ** {value[-2:]}"
+    return mask_phone(value)

@@ -43,7 +43,7 @@ TABLES = (
 IMMUTABLE = ("checklist_inspections", "task_completions", "asset_inspection_records")
 
 revision: str = "0032"
-down_revision: str | None = "0029"
+down_revision: str | None = "0031"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

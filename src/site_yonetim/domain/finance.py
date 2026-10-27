@@ -98,3 +98,5 @@ class LedgerSource(StrEnum):
     ADVANCE = "advance"
     OPENING = "opening"  # devir bakiye: sisteme geçişte önceki yönetimden kalan (hesap başına bir)
     REFUND = "refund"  # alacaklı bakiyenin sakine geri ödenmesi — açık borç sayılmaz
+    SERVICE = "service"  # ücretli hizmet (HIZ-04): sakinin onayladığı teklif
+    DEPOSIT = "deposit"  # tadilat depozitosu (HIZ-05); iadesi ters kayıt

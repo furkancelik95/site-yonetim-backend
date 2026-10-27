@@ -144,11 +144,11 @@ Her hata aynı gövdeyi döner:
 | GET | `/sites/{slug}/units` | `units.read` | R | sayfalı; `q` (no / blok+no / unvan), `block_id`, `is_active`. bölüm, blok, tip, m², arsa payı, kullanım, **bugünkü** malik ve kiracı adları. Bakiye finans diliminde eklenecek |
 | GET | `/sites/{slug}/units/{id}` | `units.read` | Y | bölüm ayrıntısı + taraflar (geçmiş dahil) + hesaplar |
 | POST | `/sites/{slug}/units` | `units.manage` | Y | elle bölüm ekleme |
-| PATCH | `/sites/{slug}/units/{id}` | `units.manage` | Y | |
+| PATCH | `/sites/{slug}/units/{id}` | `units.manage` | Y | m², arsa payı, tip değişirse **bugünden geçerli** öznitelik geçmişi satırı yazılır (üzerine yazılmaz, YAP-02 S3); ileri tarih için `…/attributes` |
 | POST | `/sites/{slug}/units/{id}/parties` | `people.manage` | Y | `{role, start_date, share_percent?, person_id \| person}` — gerekli cari hesapları da açar (`03` §5); malik hisseleri toplamı ≤ 100 (409) |
 | POST | `/sites/{slug}/units/{id}/parties/{party_id}/end` | `people.manage` | Y | `{end_date}` — kiracı çıkışı. **Silme değil, bitiş tarihi** |
 | POST · PATCH | `/sites/{slug}/blocks`, `/blocks/{id}` | `units.manage` | Y | blok ekle/güncelle; ad sitede benzersiz (Türkçe harf duyarsız) |
-| GET | `/sites/{slug}/people` | `people.read` | Y | sayfalı; `q` ad soyad içinde (Türkçe harf duyarsız) |
+| GET | `/sites/{slug}/people` | `people.read` | Y | sayfalı; `q` ad soyad içinde (Türkçe harf duyarsız). Birleştirilmiş kişi listelenmez. `phone`/`email` **maskeli** (`+90 532 *** ** 33`, `a***@ornek.com`) ve yalnız `people.contact` ile; aksi halde null (bölüm ayrıntısındaki taraflarda da aynı) |
 | POST · PATCH | `/sites/{slug}/people`, `/people/{id}` | `people.manage` | Y | ad baş harf büyük, soyad tamamı büyük; telefon E.164 (cep); e-posta küçük harf |
 | GET | `/sites/{slug}/blocks`, `/unit-types` | `units.read` | R | |
 
@@ -164,7 +164,9 @@ Her hata aynı gövdeyi döner:
   `fields.file` dolu) · 5 MB üstü **413**.
 - Önizleme: `{import_id | null, expires_at, total_rows, importable_count, new_count,
   existing_count, error_count, warning_count, rows[], issues[]}`. Satırda `already_exists`
-  (onayda atlanır); telefon/e-posta yalnız `people.read` ile. Sorun: `{row_number | null,
+  (onayda atlanır); telefon/e-posta maskeli ve yalnız `people.contact` ile. `person_merges[]`
+  (K16): `{full_name, phone, row_numbers, existing}` — ad + telefonu aynı satırlar tek kişi
+  olur, sitede kayıtlı aynı kişi yeniden açılmaz (`existing: true`); kişi birden çok bölüme bağlanır. Sorun: `{row_number | null,
   column, message, severity: "error" | "warning"}` — `row_number` Excel satır numarasıdır;
   `null` dosya geneli (ör. plan tavanı uyarısı).
 - Onay → `Written`: `{created_units, created_people, created_accounts, created_blocks,
@@ -242,18 +244,42 @@ açıklama formül olarak çalışmaz (`09` §3.3).
 ### 2.10 Talep
 | Yöntem | Yol | İzin | Durum | Not |
 |---|---|---|---|---|
-| GET | `/sites/{slug}/requests?status=&category=&priority=&department_id=` | `requests.read` veya kendi talepleri | R | sayfalı, yeni üstte. İzni olmayan sakin yalnız kendi açtıklarını görür. Satırda `department_id`, `department_name` |
+| GET | `/sites/{slug}/requests?status=&category=&priority=&department_id=&sla_breached=` | `requests.read` veya kendi talepleri | R | sayfalı, yeni üstte. İzni olmayan sakin yalnız kendi açtıklarını görür. Satırda `department_id`, `department_name`, `category_name`, `allowed_transitions` (personelin seçebileceği durumlar), `can_cancel`, `sla {due_at, hour_type, target_hours, used_minutes, remaining_minutes, state: ok\|warning\|breached\|met\|missed, paused}`, `outage` (ana olay özeti), `feedback` (son sakin değerlendirmesi), `quote` (son ücretli hizmet teklifi), `auto_close_at`, `closed_at` |
 | GET | `/sites/{slug}/requests/{id}` | `requests.read` veya kendi talebi | R | + olay geçmişi (`events`, eskiden yeniye). Başkasının talebi 404 |
-| POST | `/sites/{slug}/requests` | `requests.create` | R | `{title, description?, category, priority, unit_id?, location?, reported_by_person_id?}` → numara site içinde artan. Sakin kendi adına ve yalnız kendi bölümü (ya da ortak alan) için açar (422 `unit_not_yours`) |
-| POST | `/sites/{slug}/requests/{id}/status` | `requests.assign` | R | `{status, resolution?}` — çözüldü/kapandı yapılırken `resolution` zorunlu (422); aynı durum 409 |
-| POST | `/sites/{slug}/requests/{id}/assign` | `requests.assign` | R | `{assignee}` |
+| POST | `/sites/{slug}/requests` | `requests.create` | R | `{title, description?, category (site kategorisi anahtarı), priority?, unit_id?, location?, reported_by_person_id?}` → numara site içinde artan. Öncelik boşsa kategorinin varsayılanı; **sakinde öncelik her zaman kategoriden** (HIZ-01). Kategorinin ekibi varsa talep o departmana gider; SLA kural anlık görüntüsü talebe yazılır. Pasif/olmayan kategori 422 `fields.category`. Sakin kendi adına ve yalnız kendi bölümü (ya da ortak alan) için açar (422 `unit_not_yours`) |
+| POST | `/sites/{slug}/requests/{id}/status` | `requests.assign` | R | `{status, resolution?}` — geçiş tablosu (K18): Açık → Atandı → İşlemde ⇄ Beklemede → Çözüldü → Kapandı; İptal (açık/atandı/işlemde/beklemede'den). Tablo dışı 409 `invalid_transition`; kapandı/iptal 409 `request_finished`; atanmamış talep "Atandı" olamaz 409 `assignee_required`; sakinin açtığı çözüldü talep personelce kapatılamaz 409 `awaiting_confirmation`. Çözüldü ve iptalde `resolution` zorunlu (422); aynı durum 409 |
+| POST | `/sites/{slug}/requests/{id}/assign` | `requests.assign` | R | `{assignee}` — açık talep "Atandı" olur; kapanmış talep 409 |
+| GET · POST | `/sites/{slug}/requests/{id}/internal-notes` | `requests.assign` | R | iç not (K26): `{body}` → `{id, body, author_name, created_at}`; değişmez. Sakin uçlarında, talep yanıtında, olay geçmişinde ve bildirimlerde **hiç dönmez** |
+| GET | `/sites/{slug}/requests/{id}/merge-suggestions` | `requests.assign` | R | `{linked_outage, similar: [{id, number, title, unit_name, location, created_at}], open_outages: [{id, title, request_count}], window_hours}` — kural tabanlı: aynı kategori + (aynı konum metni ya da ikisi de ortak alan ya da aynı blok) + pencere; bitmemiş ve olaya bağlı olmayan talepler |
+| POST | `/sites/{slug}/requests/{id}/quotes` | `requests.assign` | R | ücretli hizmet teklifi `{lines: [{description, qty, unit_price}], note?}` → `ServiceQuoteOut`. Ortak alan talebi 409 `not_unit_request`; açık teklif varken 409 `quote_open`; bölümde açık cari hesap yoksa 409 `no_account`; kalem 422 `fields.lines` |
 | POST | `/sites/{slug}/requests/{id}/department` | `requests.assign` | R | `{department_id \| null}` → talep ayrıntısı; geçmişe `department_changed` olayı. Pasif ya da başka sitenin departmanı 422 `fields.department_id` |
 | GET | `/sites/{slug}/departments` | `requests.read` | R | dizi `{id, name, is_active, request_count}`; site açılışında Teknik, Temizlik, Güvenlik, Bahçe, Yönetim |
 | POST · PATCH | `/sites/{slug}/departments[/{id}]` | `requests.assign` | R | `{name}` / `{name?, is_active?}`. Ad site içinde benzersiz (Türkçe harf duyarsız) → 409 `already_exists`. Silme yok, pasifleştirme var |
 | POST | `/sites/{slug}/requests/{id}/comments` | `requests.read` veya kendi talebi | R | `{body}` |
 
 Modül kapalıysa tüm talep uçları 404. `reporter_name` `people.read` izni ya da kendi talebi
-değilse `null`. Durum geçişleri serbest (açık karar `12` K18).
+değilse `null`. Durum geçişleri dokümandaki akışla (K18, 25.10.2026).
+
+### 2.10a Hizmetler — kategori, SLA, hazır yanıt, ana olay, ücretli hizmet, tadilat (HIZ-02..05)
+Modül `requests`. Ayar yazma izni `requests.settings` (yalnız Yönetici).
+
+| Yöntem | Yol | İzin | Durum | Not |
+|---|---|---|---|---|
+| GET | `/sites/{slug}/request-categories?active=` | talep açabilen herkes (sakin dahil) | R | dizi `{id, key, name, hour_type: 24x7\|business, resolve_hours: {low, normal, high, urgent}, default_priority, department_id, is_active}`. Site açılışında HIZ-03 varsayılanları (eski sabit liste anahtarları korunur) |
+| POST · PATCH | `/sites/{slug}/request-categories[/{id}]` | `requests.settings` | R | `{name, hour_type, resolve_hours, default_priority, department_id?, is_active}`; anahtar addan üretilir, değişmez; ad site içinde benzersiz (422 `fields.name`); saat 1–2160 (422 `fields.resolve_hours.{öncelik}`). Silme yok, pasifleştirme var |
+| GET · PUT | `/sites/{slug}/settings/requests` | okuma `requests.read`, yazma `requests.settings` | R | `{categories: {anahtar: {hour_type, resolve_hours}}, calendar: [{closed, open, close}] × 7 (0 = pazartesi), auto_close_days 1–30, merge_window_hours 1–168, low_rating_threshold 1–4}`. Değişiklik yalnız yeni talepleri etkiler |
+| GET · POST · PATCH | `/sites/{slug}/reply-templates[/{id}]` | okuma `requests.assign`, yazma `requests.settings` | R | `{title, category?, body, is_active}`; değişkenler `{{sakin.ad}}`, `{{talep.no}}`, `{{talep.konu}}` ekranda doldurulur |
+| GET | `/sites/{slug}/outages?status=` | `requests.read` | R | sayfalı ana olaylar `{id, title, category, location, public_description, status: open\|resolved, request_ids, created_by, created_at, resolved_at, resolution}` |
+| POST | `/sites/{slug}/outages` | `requests.assign` | R | `{title, category, location?, public_description, request_ids?}`; bağlı talep 409 `already_linked`, bitmiş talep 409 `request_not_active` |
+| POST | `/sites/{slug}/outages/{id}/links` · `/unlink` | `requests.assign` | R | `{request_id}`; çözülmüş olay 409 `outage_resolved` |
+| POST | `/sites/{slug}/outages/{id}/resolve` | `requests.assign` | R | `{resolution}` — bağlı açık talepler aynı işlemde "çözüldü" olur, her sakine bildirim |
+| GET | `/sites/{slug}/service-tariffs` | `requests.assign` | R | dizi `{id, name, unit, price, is_active}` |
+| POST · PATCH | `/sites/{slug}/service-tariffs[/{id}]` | `requests.settings` | R | `{name, unit, price, is_active}` → `{status: saved\|approval_pending, tariff, approval_request_id}`; "Ücretli hizmet tarifesi" onay kuralı varsa **202** |
+| POST | `/sites/{slug}/quotes/{id}/complete` | `requests.assign` | R | `{actual_total}` — yalnız sakinin onayladığı teklif (409 `invalid_status`); gerçekleşen ≤ teklif → cariye yazılır (kaynak `service`); aşarsa `extra_pending` (sakin onayı) |
+| GET · PUT | `/sites/{slug}/settings/permits` | okuma `requests.read`, yazma `requests.settings` | R | `{weekday_hours "SS:DD-SS:DD", saturday_hours? (boş = yasak), sunday_allowed, deposit_amount, checklist[]}` |
+| GET | `/sites/{slug}/permits?status=` | `requests.read` | R | sayfalı başvurular `{id, unit_id, unit_name, type: renovation\|move_in\|move_out, date_from, date_to, contractor, description, status: pending\|approved\|rejected\|completed, approval_request_id, approval_status, reject_reason, checklist, deposit, deposit_refunded, …}` |
+| POST | `/sites/{slug}/permits/{id}/approve` | `requests.assign` | R | "Tadilat / taşınma izni" onay kuralı varsa **202** `{status: approval_pending, approval_request_id}`; yoksa onaylanır: sakine, komşu bölümlere (aynı blok, ±1 kat) ve güvenliğe bildirim; tadilatta depozito > 0 ise malik hesabına borç (kaynak `deposit`) |
+| POST | `/sites/{slug}/permits/{id}/reject` · `/complete` | `requests.assign` | R | ret `{reason}` (422 `fields.reason`); tamamlama `{checklist: [{item, ok}], refund_deposit}` — giriş taşınması dışında liste zorunlu; depozito iadesi ters kayıt |
 
 ### 2.11 Duyuru
 | Yöntem | Yol | İzin | Durum | Not |
@@ -290,6 +316,52 @@ Modül kapalıysa ilgili uçlar 404; `units/lookup` için iki modülden biri aç
 | GET · POST | `/sites/{slug}/lost-items?status=waiting\|returned\|disposed` | `{description, location, found_by?, found_at?}` |
 | POST | `/sites/{slug}/lost-items/{id}/return` | `{returned_to}` teslim ya da `{disposed: true}`; yalnız bekleyen (409 `not_waiting`) |
 
+**Kapılar, ön davet, sakin onayı, plaka, nöbet defteri, devriye** (servis istekleri 40–46,
+Yazılım Dokümanı GUV-02..09, OTP-02; 25.10.2026). Modül `visitors` (kargo yetkilisi ve uzun
+bekleyen kargo `packages`); kapalıysa 404. Bildirimler uygulama içi (dış kanal K5).
+
+| Yöntem | Yol | İzin | Not |
+|---|---|---|---|
+| GET | `/sites/{slug}/gates` | `modules.manage` ya da `security.*` | küçük liste (sayfasız) `[{id, name, kind: vehicle\|pedestrian\|service, block_ids, always_open, is_active}]` |
+| POST · PATCH | `/sites/{slug}/gates` · `/gates/{id}` | `modules.manage` | ad harf duyarsız tekil (422 `fields.name`); kapı silinmez, pasifleşir |
+| GET · PUT | `/sites/{slug}/settings/security` | okuma `security.*`, yazma `modules.manage` | `{unannounced_method: info\|approval, approval_timeout_seconds 30–600, gate_methods {gate_id: yöntem}, parcel_method code\|qr\|both, visitor_fields {plate, phone, id_seen}, retention_months 1–24, auto_anonymize, parcel_long_wait_days 1–60, guest_parking_capacity 0–500, version, updated_at, updated_by}`. 24 ay üstü 422 `retention_limit`. Kapalı ziyaretçi alanı kaydedilmez. Her kayıt `version` artırır (geçmiş denetim kaydında) |
+| GET · POST | `/sites/{slug}/resident/visitor-invites` | sakin (kişiye bağlı üyelik) | `{unit_id?, visitor_name, type: once\|range\|recurring, date_from, date_to, weekdays (0=pzt), time_from, time_to, plate, note}`. **Kod (6 hane) yalnız oluşturma yanıtında**; sunucuda HMAC özeti. Plakalı davet misafir parkına sayılır: dolu 409 `guest_parking_full` |
+| POST | `…/resident/visitor-invites/{id}/cancel` · `/new-code` | sakin | iptal (etkin değilse 409 `invalid_status`); yeni kod (eski kod hemen geçersiz) |
+| GET | `/sites/{slug}/visitor-invites/expected` | `security.visitors` | bugün geçerli davetler: ad, bölüm, tip, saat, plaka (kod ve not yok) |
+| POST | `/sites/{slug}/visitor-invites/check-in` | `security.visitors` | `{code}` → ziyaretçi kaydı `entered`, davet sahibine bildirim; yok 404 `invite_not_found`, kullanılmış/geçerlilik dışı 409 `invite_not_valid`. Kullanıcı başına 5 dakikada 30 deneme (429) |
+| POST | `/sites/{slug}/visit-requests` | `security.visitors` | `{unit_id, full_name, kind, plate, gate_id}` — yöntem: kapı istisnası → site ayarı. `info`: hemen `allowed` + ziyaretçi kaydı + sakine bilgi; `approval`: `awaiting`, `expires_at = şimdi + süre`, sakine onay isteği |
+| GET | `/sites/{slug}/visit-requests?status=` | `security.visitors` | bugünkü (tesis saati) ve bekleyen talepler; `timed_out`, `seconds_left` |
+| POST | `/sites/{slug}/visit-requests/{id}/decide` | `security.visitors` | `{decision: allow\|deny, reason}` yalnız süre dolunca (409 `awaiting_resident`); gerekçe zorunlu (422 `fields.reason`) |
+| GET · POST | `/sites/{slug}/resident/visit-approvals` · `/{id}` | sakin | yalnız kendi bölümünün talepleri; `{decision}` süre içinde (dolunca 409 `timed_out`), verilmişse 409 `already_decided`. Kararlar denetim kaydında (ad/plaka olmadan) |
+| GET | `/sites/{slug}/plates/lookup?plate=` | `security.visitors` ya da `units.read` | `{plate, plate_display, result: registered\|guest\|unknown, unit_name, owner_name, valid_until, detail}`; kaynak: geçerli ya da bugün kullanılmış davet plakası, bugün içerideki ziyaretçi. **Kayıtlı araç P02 araç tablosu gelince** bağlanır. Hız sınırlı (5 dakikada 120) |
+| GET · POST | `/sites/{slug}/gate-logs?date=` | okuma: aynı; yazma `security.visitors` | sayfalı; `{plate, direction: in\|out, gate_id}` — sorgu sonucu kayda dondurulur |
+| GET · POST | `/sites/{slug}/parking-violations` | okuma: aynı; yazma `security.visitors` | sayfalı; `{plate, location, note}` — yetkili plakada not zorunlu (409 `plate_authorized`); bölüme bağlıysa o bölümün sakinlerine, değilse yönetime bildirim (`notified`) |
+| GET · POST | `/sites/{slug}/resident/parcel-delegates` · `/{id}/remove` | sakin (modül `packages`) | `{name, unit_id?}`; bölüm başına en fazla 3 (409 `delegate_limit`) |
+| GET | `/sites/{slug}/units/{id}/parcel-delegates` | `security.packages` | yalnız `[{id, name}]` |
+| GET | `/sites/{slug}/packages/long-waiting` | `security.packages` | `{days, items: [{id, unit_id, unit_name, carrier, received_at, waiting_days, delegates}]}` (en eski üstte, en fazla 200) |
+| GET · POST | `/sites/{slug}/shift-log?date=` | `security.incidents` | nöbet defteri (gün, tesis saati); `{kind: note\|event\|handover, text ≥ 5, gate_id}`; yanıtta `by_me`. **Değişmez** (tetikleyici) |
+| POST | `…/shift-log/{id}/addenda` · `/acknowledge` | `security.incidents` | ek not; devri yazan onaylayamaz (409 `same_person`), onay bir kez (409 `already_acknowledged`) |
+| GET · POST · PATCH | `/sites/{slug}/patrol-points` · `/{id}` | okuma `modules.manage` ya da `security.incidents`; yazma `modules.manage` | `{name, location, area, tag: qr\|nfc\|both, is_active}`; `code` 6 hane, sunucu üretir (QR: `SY-DEVRIYE:{kod}`) |
+| GET · POST · PATCH | `/sites/{slug}/patrol-plans` · `/{id}` | aynı | `{name, point_ids (sıralı), ordered, start_times ["22:00"], allowed_minutes 5–240, assignee, is_active}` |
+| GET | `/sites/{slug}/patrol-schedule?date=` | `security.incidents` | `[{plan_id, plan_name, slot, status: upcoming\|due\|not_started\|running\|overdue\|done\|done_with_deviation, run_id, report}]` — 15 dakikada başlamayan `not_started` |
+| GET · POST | `/sites/{slug}/patrol-runs?date=` | `security.incidents` | başlat `{plan_id, slot?}` — açık yürütme varsa 409 `run_open`; plan dondurulur |
+| POST | `…/patrol-runs/{id}/scans` · `/finish` | `security.incidents` | `{code, note}`: kod yok 422 `fields.code`, planda yok 409 `not_in_plan`, tekrar 409 `already_scanned`, sıralı turda beklenmeyen nokta `out_of_order` (kabul edilir). Rapor `{missed, out_of_order, duration_minutes, overtime, late_start_minutes, total_points, scanned_points, ok}`; bitişte yöneticiye özet |
+
+**Otopark — park yeri ve tahsis** (PM kararı K30, OTP-01; modül kapısı yok — yapı verisi):
+
+| Yöntem | Yol | İzin | Not |
+|---|---|---|---|
+| GET | `/sites/{slug}/parking-spaces?kind=&q=&unit_id=` | `units.read` ya da `security.visitors` | sayfalı; `{id, code, kind: standard\|disabled\|ev\|guest, location, is_paid, is_active, note, current}` (`current`: bugünkü tahsis ya da `null`) |
+| POST · PATCH | `/sites/{slug}/parking-spaces` · `/{id}` | `units.manage` | kod site içinde tekil (büyük harf) |
+| POST | `/sites/{slug}/parking-spaces/{id}/allocations` | `units.manage` | `{unit_id, start_date, end_date?, note}` — tarih çakışırsa 409 `space_taken` |
+| GET | `/sites/{slug}/parking-allocations?space_id=&unit_id=` | okuma | sayfalı tahsis geçmişi |
+| POST | `/sites/{slug}/parking-allocations/{id}/end` | `units.manage` | `{end_date}`; bitmişse 409 `allocation_ended` |
+| GET | `/sites/{slug}/resident/parking-spaces` | sakin | "Park yerim": bugünkü tahsisler |
+
+Zamanlanmış işler: `run-security-daily` (günde bir: uzun bekleyen kargo hatırlatması ve yönetime
+rapor; `auto_anonymize` açık sitelerde saklama süresi dolan ziyaretçi/plaka verisini anonimleştirir
+— **varsayılan kapalı**, K8) · `run-patrol-checks` (5 dakikada bir: başlamayan / süresi aşan tur).
+
 
 ### 2.13 Modüller
 | Yöntem | Yol | İzin | Durum | Not |
@@ -303,7 +375,11 @@ Modül kapalıysa ilgili uçlar 404; `units/lookup` için iki modülden biri aç
 | GET | `/sites/{slug}/resident/home` | sakin | R | `units[]` (bugünkü bölümleri ve rolü), `accounts[]` (bakiyeli), `total_balance`, `recent_entries[5]`, `announcements[3]` ve `open_requests[]` (modül kapalıysa null), `payment_info{bank_name, iban, account_holder}` (sitenin IBAN'ı yoksa null) |
 | GET | `/sites/{slug}/resident/statement?account_id=` | sakin | R | kendi cari ekstresi; `account_id` boşsa oturan hesabı. Başkasının hesabı 404 |
 | GET | `/sites/{slug}/resident/announcements` | sakin | R | kendisine teslim edilen, süresi geçmemiş duyurular (+ `read_at`). Modül kapalıysa 404 |
-| GET · POST | `/sites/{slug}/resident/requests` | sakin | R | kendi talepleri / yeni talep — her zaman kendi adına, yalnız kendi bölümü ya da ortak alan (422 `unit_not_yours`). Modül kapalıysa 404 |
+| GET · POST | `/sites/{slug}/resident/requests` | sakin | R | kendi talepleri / yeni talep — her zaman kendi adına, yalnız kendi bölümü ya da ortak alan (422 `unit_not_yours`); öncelik kategoriden. Modül kapalıysa 404 |
+| POST | `/sites/{slug}/resident/requests/{id}/confirm` | sakin (kendi talebi) | R | `{solved, score?, comment?}` — yalnız çözüldü talep (409 `not_resolved`); çözüldü → 1–5 puan zorunlu (422 `fields.score`), talep kapanır, puan ≤ eşik yöneticiye bildirim; devam ediyor → açıklama zorunlu (422 `fields.comment`), talep yeniden açılır |
+| POST | `/sites/{slug}/resident/requests/{id}/cancel` | sakin (kendi talebi) | R | `{reason?}` — yalnız iş başlamadan (açık/atandı); yoksa 409 `not_cancellable` |
+| POST | `/sites/{slug}/resident/quotes/{id}/decision` | sakin (teklifin bölümünde) | R | `{decision: accept\|reject}` — teklif aşamasında onay/ret; ek tutar aşamasında onay → gerçekleşen, ret → teklif tutarı cariye yazılır; karar beklenmiyorsa 409 `invalid_status` |
+| GET · POST | `/sites/{slug}/resident/permits` | sakin | R | `{rules, items}` kendi bölümlerinin başvuruları / yeni başvuru `{unit_id?, type, date_from, date_to?, contractor?, description}` — tarih bugünden önce olamaz (422) |
 | GET | `/sites/{slug}/resident/expenses?year=` | sakin | **Y** | sitenin **gerçekleşen** gider dökümü (geri alınan ve düzeltmeler hariç) + `total_amount`; satırda `document_id`. Şeffaflık vaadinin karşılığı |
 | GET | `/sites/{slug}/resident/packages` | sakin | Y | dairelerine gelen, teslim bekleyen kargolar **teslim koduyla** (modül: `packages`) |
 | GET | `/sites/{slug}/resident/files/{id}` | sakin | Y | **fatura görüntüsü** — yalnız gerçekleşen bir giderin belgesi; başka dosya 404 |
@@ -520,6 +596,47 @@ gizlide ayrıca `documents.confidential`) uygulama içi bildirim (`operations`, 
 · `document.expired`, `link_entity: documents`); aynı uyarı bir kez. Belgeyi başka kayda bağlamak
 için şemada `subject_type/subject_id` var; poliçe, hasar dosyası, teknik varlık ve muayene raporu bunu kullanır (§2.20b `subject-documents`).
 "Okudum" onayı (ILT-01, istek 71) sonraki adım.
+
+### 2.24 Yapı, kişiler ve kayıt (servis istekleri 19–26, Yazılım Dokümanı YAP-01..10)
+| Yöntem | Yol | İzin | Not |
+|---|---|---|---|
+| GET · POST · PATCH | `/sites/{slug}/common-areas` · `/{id}` | okuma `units.read`, yazma `units.manage` | dizi (az sayıda); `{name, kind: pool\|hall\|gym\|garden\|playground\|parking\|technical\|roof\|other, block_id?, is_reservable, is_active, note}` + `block_name`. Ad sitede tekil (422 `fields.name`); silinmez, pasifleşir |
+| POST · PATCH | `/sites/{slug}/unit-types` · `/{id}` | `units.manage` | `{name, weight ("1.25"), sort_order}`; ad tekil (422) |
+| PATCH | `/sites/{slug}/units/{id}/attributes` | `units.manage` | `{effective_from, gross_area?, net_area?, land_share_numerator?, land_share_denominator?, unit_type_id?}` — yalnız gönderilen alanlar. Kapanmış döneme (en erken içinde bulunulan ay başı; ay kapalıysa sonraki açık ay) 422 `period_locked` (`fields.effective_from`); değişen alan yoksa 422 `no_change`; pay+payda birlikte. Bugün/önce → hemen uygulanır; ileri tarih `applied=false`, tarihinde gece işi `run-structure-jobs` uygular (tahakkuk önizlemesi de tarihi gelenleri uygular). Geçmiş tahakkuk değişmez → `Written[UnitDetail]` |
+| GET | `/sites/{slug}/units/{id}/attribute-history` | `units.read` | dizi, yeniden eskiye: `{id, effective_from, changes: {alan: {from, to}} (tipte ad), changed_by, created_at, applied}`. Geçmiş satırı silinmez, uygulanmış satır değişmez (tetikleyici) |
+| POST | `/sites/{slug}/units/bulk-update` | `units.manage` | `{unit_ids[], changes: {unit_type_id?, usage?, is_active?}}` → `{updated, failed: [{unit_id, message}]}`; m²/arsa payı toplu değişmez; satır satır, başarısızlar diğerlerini geri almaz; tip değişikliği geçmişe yazılır |
+| GET | `/sites/{slug}/structure/summary` | `units.read` | `{unit_count, active_unit_count, block_count, land_share_sum, land_share_denominator (etkin bölümlerde en sık), land_share_mismatch, units_without_land_share, units_without_owner[{id, display_name}], units_shares_incomplete[{id, display_name, total}], common_area_count}` — veritabanında toplanır |
+| GET | `/sites/{slug}/units/{id}/overview` | `units.read` | `{balance (finance.read yoksa null), share_total, warnings: no_owner\|shares_incomplete\|no_land_share, packages_waiting, vehicles, household}` |
+| POST | `/sites/{slug}/people/{id}/contact-views` | `people.contact` | açık `{phone, email}` döner; denetim kaydına `action=contact_view` (kim, hangi kişi, ne zaman; değerin kendisi yazılmaz) |
+| GET | `/sites/{slug}/requests?unit_id=` · `/visitors?unit_id=` | ilgili modül izni | bölüm süzgeci; ziyaretçide `date` yoksa son 30 gün |
+| GET · POST | `/sites/{slug}/units/{id}/household` | `people.manage` | hane üyeleri (bitenler dahil) / davet `{full_name, phone, permissions{visitors, packages, reservations, requests}}` — bölüm başına en fazla 6 etkin (409 `household_limit`), aynı telefon 409 `already_member`. Yanıttaki `invite_link` (`/davet/{token}`) yalnız bu yanıtta (belirtecin özeti saklanır) |
+| PATCH · POST | `/sites/{slug}/household/{id}` · `/{id}/end` | `people.manage` | yetkiler / bitirme (silmez; 409 `already_ended`). Bitince oturan ilişkisi kapanır, başka ilişkisi yoksa giriş erişimi kapanır |
+| GET · POST · POST | `/sites/{slug}/resident/household` · `/{id}/end` | sakin (malik/kiracı olduğu bölüm) | başka bölüme 404 |
+| GET | `/sites/{slug}/people/duplicates` | `people.manage` | dizi `[{key (maskeli), kind: phone\|email, people[]}]` — otomatik birleştirme yok |
+| POST | `/sites/{slug}/people/merge` | `people.manage` | `{keep_id, merge_id}` → `{kept, merged}`; geri alınamaz: kişiye bağlı tüm kayıtlar (şemadan bulunur) kalan kişiye taşınır, birleşen kişi `merged_into_id` ile işaretlenir, listelerde görünmez. Aynı kişi 422; iki ayrı giriş hesabı 409 `two_logins`; aynı bölümde aynı tür cari 409 `accounts_conflict` |
+| POST | `/sites/{slug}/units/{id}/ownership-transfer` | `units.manage` (+ yeni kişi için `people.manage`) | `{reason: sale\|inheritance, transfer_date, debt_policy: "stays_with_seller", new_owners: [{person_id \| person, share_percent}]}` — atomik: eski malikler `transfer_date − 1` gün kapanır, yeniler `transfer_date`'te başlar; hisse toplamı tam %100 (422 `fields.new_owners`); devir öncesi borç eski malikte (K10; başka politika 422 `not_supported`); `period_locked`; yeni kişinin telefonu/e-postası kayıtlıysa 409 `person_exists` (`fields.existing_person_id`). → `{status: done\|approval_pending, unit, approval_request_id}`; `ownership_transfer` onay kuralı varsa **202** |
+| GET · PUT | `/sites/{slug}/settings/vehicles` | okuma `units.read`, yazma `units.manage` | `{plate_limit_per_unit 1–10 (varsayılan 2), approval_required}` |
+| GET | `/sites/{slug}/vehicles?unit_id=&status=&q=` | `units.read` | **sayfalı**; `{id, unit_id, unit_name, plate (34ABC123), plate_display (34 ABC 123), brand_model, color, kind: permanent\|guest, valid_until, status: active\|pending\|inactive, owner_person_id, owner_name, created_at}` |
+| POST · PATCH | `/sites/{slug}/vehicles` · `/{id}` | `units.manage` | kalıcı plaka sınırı 422 `plate_limit`; misafirde `valid_until` zorunlu; başka bölümde etkin 409 `plate_active_elsewhere` (`force: true` ile eklenir); aynı bölümde 409 `already_registered`; PATCH `{brand_model, color, valid_until, status}` (onay / pasif) |
+| GET · POST · POST | `/sites/{slug}/resident/vehicles` · `/{id}/remove` | sakin | `{limit, approval_required, items}`; sakin `force` kullanamaz; onay ayarı açıksa `pending` |
+| GET | `/sites/{slug}/units/lookup?q=` | güvenlik | etkin araç plakasıyla da eşleşir (yanıt yine bölüm + oturan adı) |
+| GET · PUT | `/sites/{slug}/settings/registration` | `people.manage` | `{invite_enabled, qr_enabled, code_enabled, owner_can_approve_tenant, owner_document_required, invite_valid_days 1–30, kvkk_published}` (iki "owner_*" alanı yalnız saklanır) |
+| GET · POST | `/sites/{slug}/invitations?status=` | `people.manage` | **sayfalı** (hane daveti hariç); POST `{full_name, phone, email?, unit_id, relation: owner\|tenant}` → `link` yalnız bu yanıtta. Kurulumdaki site 409 `site_not_live`; yöntem kapalı 409 `method_disabled`; açık davet 409 `already_invited`. SMS yok (K5) |
+| POST | `/sites/{slug}/invitations/{id}/resend` · `/cancel` | `people.manage` | yeni belirteç (eskisi geçersiz) / iptal; tamamlanmış 409 `already_completed` |
+| GET | `/public/invitations/{token}` | **oturumsuz** | IP sınırı; `{site_name, full_name, unit_name, relation, phone_hint (son 4), status, expires_at, email_required}`; geçersiz/dolmuş/iptal 404 |
+| POST | `/public/invitations/{token}/accept` | **oturumsuz** | `{phone, kvkk_ack, email?}` → 201 `{unit_name, login_email, temporary_password \| null}`; telefon tam eşleşmeli (422 `fields.phone`), giriş e-postayla olduğundan davette e-posta yoksa istenir (422 `fields.email`), ikinci kabul 409 `already_completed`. Kişi telefonla eşleşir ya da açılır, bölüme ilişkisi eklenir (hane üyesi: oturan, cari yok), sakin hesabı açılır/bağlanır |
+| GET · POST | `/public/registration/{code}` | **oturumsuz** | yanıta `blocks[{id, name, units[{id, name}]}]` (kişi adı yok), `document_required`, `relations`; POST gövdesine `unit_id?`. QR ve site kodu kapalıysa 404 `method_disabled`; kurulumdaki site 409 `site_not_live` |
+| GET · POST · PUT | `/sites/{slug}/custom-fields?entity=&archived=` · `/{id}` · `/{id}/archive` | tanım `modules.manage`; okuma ayrıca `units.read`/`people.read` (yalnız `view_roles` içindeki etkin alanlar) | `{entity: unit\|person, label, key (değişmez), type: text\|number\|date\|bool\|select, options, required, kvkk_category, view_roles, edit_roles, resident_can_view, resident_can_edit, sort_order, is_archived}`; nesne başına 30 etkin (409 `field_limit`); tip değişmez (422); özel nitelikli çağrışım 422 `sensitive_label` → `acknowledge_sensitive` + `sensitive_reason` ile geçer (denetimde gerekçe) |
+| GET · PUT | `/sites/{slug}/units/{id}/custom-values` · `/people/{id}/custom-values` | `units.read` / `people.read` + alan rolleri | `{values: {anahtar: değer}}` — görünmeyen alan dönmez; PUT yalnız gönderilen anahtarlar, boş siler, `edit_roles` dışı 403; tipe göre 422 `fields.{key}`; değişiklik denetimde |
+| GET | `/sites/{slug}/imports` | `units.manage` ya da `finance.payment.record` (türüne göre) | **sayfalı** aktarım geçmişi `{id, type: units\|vehicles\|opening_balances, file_name, status: imported\|rolled_back, row_count, created_count, total_amount, created_by, created_at, rollback_until, rollback_blocked_by, can_rollback}` |
+| POST | `/sites/{slug}/imports/vehicles` · `/opening-balances` | `units.manage` · `finance.payment.record` | multipart `file` (.xlsx / .csv, 5 MB) → önizleme `{import_id, type, total_rows, importable_count, total_amount, issues[], rows[], expires_at}` (6 saat); hiçbir kayıt yazılmaz. Şablonlar `…/vehicles/template.xlsx`, `…/opening-balances/template.xlsx` |
+| POST | `/sites/{slug}/imports/{id}/confirm` | türüne göre | araç: hatalı satır atlanır. Açılış bakiyesi: tüm satırlar temiz (409 `rows_invalid`), `reconciliation_total` zorunlu ve kuruşuna eşit (409 `reconciliation_mismatch`); her satır devir bakiye kuralıyla (hesap başına bir) → `{created, skipped[], total_amount}`. Aynı önizleme ikinci kez 404 |
+| POST | `/sites/{slug}/imports/{id}/rollback` | türüne göre | 7 gün; araç → pasif, bölüm aktarımı → oluşturulan kayıtlar silinir, açılış bakiyesi → ters kayıt. Sonradan hareket/ilişki/bağlı kayıt varsa 409 `rollback_blocked`; süre 409 `rollback_expired` |
+| GET | `/sites/{slug}/setup` | `modules.manage` | `{status: setup\|live, went_live_at, finance_mode: "platform", ready, opening_reconciled_at, checklist[{key, label, ok, detail, link, required}]}` — her çağrıda gerçek veriden; zorunlu: yapı, malik, **hisseler tam %100**, banka IBAN, otomatik tahakkuk, açılış mutabakatı, yönetici, KVKK |
+| POST | `/sites/{slug}/setup/go-live` · `/opening-reconciled` | `modules.manage` | canlıya al (eksik 409 `checklist_incomplete`, tekrar 409 `already_live`; geri alınmaz, denetimde) / mutabakat işareti `{note}` |
+
+Platform panelinden açılan site `setup` durumunda başlar (sakin daveti ve herkese açık kayıt
+kapalı); mevcut siteler ve demo `live`. Gece işi: `run-structure-jobs` (günde bir).
 
 ---
 
