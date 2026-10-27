@@ -107,6 +107,12 @@ from site_yonetim.models.people import (
     Vehicle,
 )
 from site_yonetim.models.platform import Organization, Plan, PropertyKind, Site
+from site_yonetim.models.reservations import (
+    Reservation,
+    ReservationRules,
+    ReservationSettings,
+    ReservationWaitlist,
+)
 from site_yonetim.models.security import Incident, LostItem, Package, Visitor
 from site_yonetim.models.service_desk import (
     Outage,
@@ -241,6 +247,10 @@ __all__ = [
     "RequestFeedback",
     "RequestInternalNote",
     "RequestSettings",
+    "Reservation",
+    "ReservationRules",
+    "ReservationSettings",
+    "ReservationWaitlist",
     "SecuritySettings",
     "ServiceQuote",
     "ServiceQuoteLine",

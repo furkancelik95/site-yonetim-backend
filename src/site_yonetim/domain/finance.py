@@ -100,3 +100,4 @@ class LedgerSource(StrEnum):
     REFUND = "refund"  # alacaklı bakiyenin sakine geri ödenmesi — açık borç sayılmaz
     SERVICE = "service"  # ücretli hizmet (HIZ-04): sakinin onayladığı teklif
     DEPOSIT = "deposit"  # tadilat depozitosu (HIZ-05); iadesi ters kayıt
+    RESERVATION = "reservation"  # ücretli rezervasyon (REZ-02); iptalde ters kayıt

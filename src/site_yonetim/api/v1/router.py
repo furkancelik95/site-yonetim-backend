@@ -41,6 +41,7 @@ from site_yonetim.api.v1 import (
     registrations,
     reports,
     requests,
+    reservations,
     resident,
     security,
     service_desk,
@@ -93,6 +94,9 @@ api_router.include_router(account_ops.router)
 api_router.include_router(requests.router)
 api_router.include_router(departments.router)
 api_router.include_router(service_desk.router)
+# Rezervasyon (servis istekleri 59–61)
+api_router.include_router(reservations.router)
+api_router.include_router(reservations.resident_router)
 api_router.include_router(announcements.router)
 api_router.include_router(cash.router)
 api_router.include_router(recurring_expenses.router)

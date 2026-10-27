@@ -160,6 +160,9 @@ AUDITED_TABLES = frozenset(
         "service_quotes",
         "permit_settings",
         "permits",
+        # rezervasyon: alan kuralları ve K11 ayarı (rezervasyonların kendisi karar alanlarını taşır)
+        "reservation_rules",
+        "reservation_settings",
         # güvenlik, devriye, otopark (ayar ve kurulum; ziyaretçi kararları ayrıca `record` ile,
         # kişisel veri olmadan — saklama süresi denetimden kısa)
         "gates",

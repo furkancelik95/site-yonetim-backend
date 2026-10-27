@@ -82,6 +82,12 @@ Toplam **84 bağımsız bölüm**. Oranlar bilinçli farklı: panoda sağlıklı
   belge; demo sakinin bölümüne özel "Tadilat izin belgesi". İçerik küçük geçerli PDF (`demo_pdf`),
   `FILE_STORAGE_ROOT` altına yazılır.
 
+- **Rezervasyon** (Aksu, servis istekleri 59–61): Spor salonu (kapasite 3, QR, no-show kuralı),
+  Toplantı salonu (sabit ücret, yönetici onayı), Mangal alanı (misafir başı ücret, görevli
+  onayı), Açık havuz (sezon dışı, kapalı). Geçen haftadan gelen/gelmeyen kayıtlar, bugünkü
+  liste, sakinin yarınki rezervasyonu, onay bekleyen salon rezervasyonu ve sakinin o saat için
+  bekleme listesi kaydı.
+
 ## 2. Demo hesapları
 
 Hepsinin parolası **`Demo1234!`** (giriş ekranında yazılı; yalnız geliştirme). Adlar kurgusaldır.

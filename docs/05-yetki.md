@@ -29,6 +29,7 @@ kümesi tanımlanmalı.
 | `people.read` / `people.manage` | Kişi görüntüleme / yönetimi |
 | `people.contact` | İletişim bilgisi (telefon, e-posta): **maskeli** görür, "göster" ile açar — açma denetim kaydına `contact_view` yazar (YAP-03 S1–S2). Yalnız Yönetici; YK ve diğer roller iletişim alanını hiç almaz (null) |
 | `requests.read` / `requests.create` / `requests.assign` | Talep görüntüleme / oluşturma / atama ve durum değiştirme (iç not, ana olay, teklif, tadilat kararı dahil) |
+| Rezervasyon (servis istekleri 59–61; yeni izin yok) | Günlük liste, saat durumu, giriş (kod / "geldi"): `requests.assign` ya da `security.visitors`; sakin adına rezervasyon, onay, ret, iptal, kullanım raporu: `requests.assign`; alan kuralları ve K11 ayarı: `modules.manage`; sakin uçları kendi bölümü — hane üyesi yalnız "Rezervasyon" yetkisiyle |
 | `requests.settings` | Talep ayarları: kategori, SLA ve çalışma takvimi, hazır yanıt, hizmet tarifesi, tadilat kuralları (servis istekleri 47–52) |
 | `announcements.read` / `announcements.publish` | Duyuru görüntüleme / yayınlama |
 | `expenses.read` / `expenses.manage` | Gider görüntüleme / kaydetme, ödeme, geri alma |

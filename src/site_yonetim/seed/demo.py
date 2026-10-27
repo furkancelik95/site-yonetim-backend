@@ -39,6 +39,7 @@ from site_yonetim.domain.operations import (
 )
 from site_yonetim.domain.parking import check_space
 from site_yonetim.domain.patrol import check_plan, check_point
+from site_yonetim.domain.reservations import BookingChannel, BookingInput
 from site_yonetim.domain.security import VisitorKind
 from site_yonetim.domain.service_desk import PermitType
 from site_yonetim.domain.staffing import week_start
@@ -66,6 +67,7 @@ from site_yonetim.models import (
     Person,
     Plan,
     Request,
+    Reservation,
     ServiceTariff,
     Site,
     SiteMembership,
@@ -128,6 +130,8 @@ from site_yonetim.services import (
 )
 from site_yonetim.services import approvals as approvals_svc
 from site_yonetim.services import leaves as leaves_svc
+from site_yonetim.services import requests as requests_svc
+from site_yonetim.services import reservations as reservations_svc
 from site_yonetim.services import shifts as shifts_svc
 from site_yonetim.services import staff as staff_svc
 from site_yonetim.services import timesheets as timesheets_svc
@@ -253,6 +257,7 @@ async def _seed_demo(
     if aksu is not None:
         await _seed_resident(factory, aksu, password_hash, store, today)
         await _seed_staff(factory, aksu, user_ids, today)
+        await _seed_reservations(factory, aksu, user_ids[MANAGER_EMAIL], today)
 
     logger.info("Demo verisi yüklendi: %d site, %d hesap.", len(SITES), len(ACCOUNTS) + 1)
     return True
@@ -937,11 +942,153 @@ def _person(first: str, last: str) -> Person:
     return Person(first_name=first_name, last_name=last_name)
 
 
+# --- Rezervasyon (servis istekleri 59–61) ---------------------------------------------
+
+MANAGER_EMAIL = "yonetici@demo.local"
+_RULE_BASE: dict[str, object] = {
+    "enabled": True, "late_cancel_refund": False, "fee_amount": None, "channel": "both",
+    "approval": "auto", "waitlist": True, "waitlist_minutes": 30,
+    "noshow": {"enabled": False, "months": 3, "count": 2, "block_days": 14},
+}  # fmt: skip
+RESERVATION_RULES: dict[str, dict[str, object]] = {
+    "Spor salonu": {
+        "open_from": "07:00", "open_to": "23:00", "slot_minutes": 60, "capacity": 3,
+        "max_people": 4, "max_guests": 1, "weekly_limit": 3, "cancel_hours": 2,
+        "fee_type": "free", "verify": "qr",
+        "noshow": {"enabled": True, "months": 3, "count": 2, "block_days": 7},
+    },
+    "Toplantı salonu": {
+        "open_from": "09:00", "open_to": "21:00", "slot_minutes": 120, "capacity": 1,
+        "max_people": 30, "max_guests": 20, "weekly_limit": 1, "cancel_hours": 48,
+        "fee_type": "fixed", "fee_amount": "250.00", "approval": "manual", "verify": "code",
+        "waitlist_minutes": 60,
+    },
+    "Mangal alanı": {
+        "open_from": "11:00", "open_to": "23:00", "slot_minutes": 240, "capacity": 2,
+        "max_people": 12, "max_guests": 8, "weekly_limit": 1, "cancel_hours": 24,
+        "fee_type": "per_guest", "fee_amount": "25.00", "verify": "staff",
+    },
+    "Açık havuz": {
+        "enabled": False, "open_from": "10:00", "open_to": "20:00", "slot_minutes": 120,
+        "capacity": 20, "max_people": 6, "max_guests": 2, "weekly_limit": 0,
+        "cancel_hours": 2, "fee_type": "free", "verify": "none", "waitlist": False,
+    },
+}  # fmt: skip
+
+
+async def _seed_reservations(
+    factory: async_sessionmaker[AsyncSession],
+    site_id: uuid.UUID,
+    manager_id: uuid.UUID,
+    today: date,
+) -> None:
+    """Rezervasyon alanları ve kuralları; geçmiş (gelen, gelmeyen), bugünkü ve ileri tarihli
+    rezervasyonlar (onaylı, onay bekleyen, ücretli); bir bekleme listesi kaydı. Hepsi servis
+    akışından geçer (kod, yer, ücret ve bildirimler gerçek)."""
+    with site_scope(site_id):
+        async with factory() as session, session.begin():
+            site = await session.get(Site, site_id)
+            if site is None or ModuleKey.RESERVATIONS not in await available_modules(session, site):
+                return
+            areas = {a.name: a for a in await reservations_svc.areas(session)}
+            for name, extra in RESERVATION_RULES.items():
+                if name in areas:
+                    await reservations_svc.save_rules(session, areas[name], _RULE_BASE | extra)
+            resident_user = await session.scalar(select(User).where(User.email == RESIDENT.email))
+            resident_person = await session.scalar(
+                select(SiteMembership.person_id).where(
+                    SiteMembership.user_id == (resident_user.id if resident_user else None)
+                )
+            )
+            parties = list(
+                await session.execute(
+                    select(UnitParty.unit_id, UnitParty.person_id)
+                    .where(UnitParty.role.in_([PartyRole.OWNER.value, PartyRole.TENANT.value]))
+                    .order_by(UnitParty.unit_id, UnitParty.role.desc())
+                )
+            )
+            others: dict[uuid.UUID, uuid.UUID] = {}
+            resident_unit: uuid.UUID | None = None
+            for unit_id, person_id in parties:
+                if person_id == resident_person:
+                    resident_unit = unit_id
+                others.setdefault(unit_id, person_id)
+            if resident_unit is None or resident_user is None or resident_person is None:
+                return  # pragma: no cover - demo sakini hep bir bölümde
+            others.pop(resident_unit, None)
+            units = sorted(others)[:5]
+            names = await requests_svc.person_names(session, set(others.values()))
+            staff = approvals_svc.Person(manager_id, "Kerem Yıldırım")
+            me = reservations_svc.Booker(
+                resident_unit,
+                resident_person,
+                resident_user.full_name,
+                BookingChannel.RESIDENT,
+                approvals_svc.Person(resident_user.id, resident_user.full_name),
+            )
+
+            def phone(unit_id: uuid.UUID) -> reservations_svc.Booker:
+                return reservations_svc.Booker(
+                    unit_id, None, names.get(others[unit_id], "Sakin"), BookingChannel.STAFF, staff
+                )
+
+            async def book(
+                area: str,
+                who: reservations_svc.Booker,
+                day: date,
+                start: time,
+                guests: int = 0,
+                *,
+                at: datetime,
+                waitlist: bool = False,
+            ) -> Reservation | None:
+                result = await reservations_svc.create(
+                    session,
+                    site,
+                    areas[area].id,
+                    BookingInput(day, start, 2, guests),
+                    who,
+                    want_waitlist=waitlist,
+                    now=at,
+                    today=at.date(),
+                )
+                return result.reservation
+
+            past_day = today - timedelta(days=6)
+            past_now = datetime.combine(past_day, time(6), BUSINESS_TZ)
+            now = datetime.combine(today, time(6), BUSINESS_TZ)
+            # Geçmiş: spor salonu (biri geldi, ikisi gelmedi) ve ücretli mangal.
+            came = await book("Spor salonu", me, past_day, time(18), at=past_now)
+            await book("Spor salonu", phone(units[0]), past_day, time(18), at=past_now)
+            await book("Spor salonu", phone(units[1]), past_day, time(19), at=past_now)
+            await book("Mangal alanı", phone(units[2]), past_day, time(15), 4, at=past_now)
+            if came is not None:
+                await reservations_svc.check_in(
+                    session,
+                    came,
+                    actor="Demo güvenlik",
+                    now=datetime.combine(past_day, time(18, 5), BUSINESS_TZ),
+                )
+            await reservations_svc.run_jobs(session, now=now)
+            # Bugün ve ileri tarih: günlük liste, onay bekleyen, ücretli, bekleme listesi.
+            await book("Spor salonu", phone(units[0]), today, time(18), at=now)
+            await book("Spor salonu", phone(units[3]), today, time(18), at=now)
+            await book("Spor salonu", me, today + timedelta(days=1), time(19), at=now)
+            await book(
+                "Mangal alanı", phone(units[4]), today + timedelta(days=2), time(15), 6, at=now
+            )
+            hall_day = today + timedelta(days=3)
+            await book("Toplantı salonu", phone(units[1]), hall_day, time(13), 10, at=now)
+            await book("Toplantı salonu", me, hall_day, time(13), at=now, waitlist=True)
+
+
 # --- Yapı, kişiler ve kayıt (servis istekleri 19–26) ------------------------------------
 
 COMMON_AREAS = (
     ("Açık havuz", CommonAreaKind.POOL, True),
     ("Toplantı salonu", CommonAreaKind.HALL, True),
+    ("Spor salonu", CommonAreaKind.GYM, True),
+    ("Mangal alanı", CommonAreaKind.GARDEN, True),
     ("Kapalı otopark", CommonAreaKind.PARKING, False),
     ("Çocuk parkı", CommonAreaKind.PLAYGROUND, False),
 )

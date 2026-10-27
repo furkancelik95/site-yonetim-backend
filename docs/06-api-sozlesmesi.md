@@ -593,6 +593,36 @@ için şemada `subject_type/subject_id` var (bugün uçta yok; modüller servis 
 Platform panelinden açılan site `setup` durumunda başlar (sakin daveti ve herkese açık kayıt
 kapalı); mevcut siteler ve demo `live`. Gece işi: `run-structure-jobs` (günde bir).
 
+### 2.24a Rezervasyon (servis istekleri 59–61, Yazılım Dokümanı §14 REZ-01..03, K11)
+Modül `reservations` (kapalıysa 404). Alanlar Yapı → Ortak alanlar'da `is_reservable && is_active`
+işaretli `common_areas` kayıtlarıdır. Saatler `"SS:DD"` metni, tarih `YYYY-AA-GG`, para metin.
+
+| Yöntem | Yol | İzin | Durum | Not |
+|---|---|---|---|---|
+| GET | `/sites/{slug}/reservable-areas` | `requests.assign` · `security.visitors` · `modules.manage` | R | dizi `{id, name, kind, block_name, rules}`; kuralı kaydedilmemiş alan varsayılanla döner |
+| PUT | `/sites/{slug}/reservable-areas/{id}/rules` | `modules.manage` | R | kuralın tamamı `{enabled, open_from, open_to, slot_minutes (30/60/90/120/180/240), capacity 1–200, max_people, max_guests, weekly_limit (0 = sınırsız), cancel_hours, late_cancel_refund, fee_type: free\|fixed\|hourly\|per_guest, fee_amount, channel: resident\|staff\|both, approval: auto\|manual, verify: none\|qr\|code\|staff, waitlist, waitlist_minutes 5–1440, noshow: {enabled, months, count, block_days}}`; no-show + doğrulama yok 422 `fields.noshow`; işaretsiz alan 404 |
+| GET · PUT | `/sites/{slug}/reservation-settings` | okuma `requests.assign` · `modules.manage`, yazma `modules.manage` | R | K11 `{debt_block_enabled (vars. false), debt_min_amount, debt_min_days}` — GEÇİCİ yer; finans parametreleri (SR 33) gelince oraya taşınır |
+| GET | `/sites/{slug}/reservable-areas/{id}/availability?date=` | `requests.assign` · `security.visitors` | R | dizi `{start, end, capacity, taken (canlı + süresi geçmemiş teklif), past, mine, waiting}` |
+| GET | `/sites/{slug}/reservations?date=&area_id=&status=` | `requests.assign` · `security.visitors` | R | sayfalı `{id, area_id, area_name, date, start, end, unit_id, unit_name, person_name, people, guests, status: pending\|approved\|rejected\|cancelled\|checked_in\|no_show\|completed, channel: resident\|staff, created_by, created_at, fee, charge_id, fee_refunded, approval_request_id, approval_status, reject_reason, cancel_reason, cancelled_late, checked_in_at, checked_in_by, decided_by}` — giriş kodu personel çıktısında yok |
+| POST | `/sites/{slug}/reservations` | `requests.assign` | R | sakin adına `{unit_id, person_name?, area_id, date, start, people, guests}` → 201/202 `{status: approved\|pending\|approval_pending, reservation, waitlist, position, approval_request_id}`; `Idempotency-Key` kabul eder; kanal `staff`, açan personel kaydedilir, bölüm sakinlerine bildirim |
+| POST | `/sites/{slug}/reservations/{id}/approve` · `/reject` · `/cancel` | `requests.assign` | R | onay kuralına bağlı ve açık talep varsa 409 `approval_pending`; ret `{reason}` (422 `fields.reason`); iptal `{reason?}` — son iptal süresinden önce ücret ters kayıt; sakine bildirim; boşalan yere bekleme listesi teklifi |
+| POST | `/sites/{slug}/reservations/{id}/check-in` | `requests.assign` · `security.visitors` | R | listeden "geldi": yalnız bugün ve `approved` (409 `not_today` · `invalid_status` · `already`) |
+| POST | `/sites/{slug}/reservations/check-in-code` | `requests.assign` · `security.visitors` | R | `{code}` (6 hane; `SY-REZ:123456` de olur) → bugünkü onaylı rezervasyona giriş; 422 `fields.code`, 404, 409 `already` |
+| GET | `/sites/{slug}/waitlist?date=` | `requests.assign` · `security.visitors` | R | sayfalı açık kayıtlar `{id, area_id, area_name, date, start, end, unit_id, unit_name, person_name, people, guests, status: waiting\|offered, offered_until, created_at}` |
+| GET | `/sites/{slug}/reservations/report?to=` | `requests.assign` | R | son 30 gün (`from` = `to` − 29) `{from, to, rows: [{area_id, area_name, total, cancelled, checked_in, no_show, no_show_rate (doğrulama yoksa null), occupancy (metin, %), revenue}]}` |
+| GET | `/sites/{slug}/resident/reservable-areas` | sakin | R | açık ve kanalı `staff` olmayan alanlar |
+| GET | `/sites/{slug}/resident/reservable-areas/{id}/availability?date=&unit_id=` | sakin | R | `{slots, blocked_until (no-show kısıtı), debt_block (K11 gerekçesi)}` |
+| GET | `/sites/{slug}/resident/reservations` | sakin | R | `{reservations: [... + code, verify, cancel_hours] (son 30), waitlist: [açık kayıtlar]}` |
+| POST | `/sites/{slug}/resident/reservations` | sakin | R | `{area_id, date, start, people, guests, waitlist, unit_id?}` → 201/202; hane üyesi "Rezervasyon" yetkisi yoksa 403; hata kodları: 422 `fields.area_id/date/start/people/guests`, 409 `area_closed` · `channel` · `debt_restricted` (K11) · `noshow_blocked` · `limit` · `duplicate` · `slot_full` (boş saatlerle) · `already_waiting` · `no_account` |
+| POST | `/sites/{slug}/resident/reservations/{id}/cancel` | sakin | R | kendi bölümü; ücret kuralı yukarıdaki gibi |
+| POST | `/sites/{slug}/resident/waitlist/{id}/accept` · `/leave` | sakin | R | teklifi kabul (akış yeniden işler; süresi dolmuşsa 409 `expired`) / listeden çık |
+
+Çakışma: yazan işlem alan satırını kilitler (`FOR UPDATE`); veritabanında canlı rezervasyon için
+(alan, yer, başlangıç) ve (alan, bölüm, başlangıç) kısmi benzersiz indeksleri, `btree_gist` varsa
+ayrıca `EXCLUDE` kısıtı. Eşzamanlı iki istekten biri 409 `slot_full`. Zamanlanmış iş:
+`run-reservation-jobs` (5 dakikada bir) — biten onaylı rezervasyon doğrulama yoksa `completed`,
+varsa `no_show` (kısıt eşiğinde sakine bildirim); süresi dolan teklif `expired`, sıradakine teklif.
+
 ---
 
 ## 3. Sıralama önerisi

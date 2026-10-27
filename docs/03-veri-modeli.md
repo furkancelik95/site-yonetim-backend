@@ -674,6 +674,25 @@ UPDATE/DELETE tetikleyiciyle reddedilir.
   `completed`), `reject_reason`, `checklist` JSONB, `deposit`, `deposit_entry_id` (kaynak
   `deposit`), `refund_entry_id` (ters kayıt), `approval_request_id`.
 
+### Rezervasyon (REZ-01..03, göç 0033) [K]
+- `reservation_rules` — ortak alan başına (`area_id` → `common_areas`, site içinde tekil) kural:
+  açılış/kapanış (`time`), `slot_minutes`, `capacity`, kişi/misafir sınırı, `weekly_limit`,
+  `cancel_hours`, `late_cancel_refund`, `fee_type` + `fee_amount`, `channel`, `approval`,
+  `verify`, `waitlist(_minutes)`, `noshow_*` (CHECK: no-show yalnız doğrulama varsa).
+- `reservation_settings` — tek satır, K11: `debt_block_enabled` (vars. false), `debt_min_amount`,
+  `debt_min_days`. GEÇİCİ: finans parametreleri (`finance_parameter_versions`) gelince taşınır.
+- `reservations` — `area_id`, `unit_id`, `person_id?` (sakin açtıysa), `account_id?` (ücret
+  hesabı: oturan, yoksa ilk açık hesap), `person_name`, `date`, `start_time`/`end_time`,
+  `starts_at`/`ends_at` (timestamptz, İstanbul), `seat` (1..kapasite), `people`, `guests`,
+  `status`, `check_in_code` (6 hane), `channel` (`resident` · `staff`), `created_by_*`, `fee`,
+  `charge_entry_id` (kaynak `reservation`), `refund_entry_id` (ters kayıt), `approval_request_id`,
+  karar/iptal/giriş alanları. Silinmez. Kısmi benzersiz: canlı (`pending`, `approved`,
+  `checked_in`) (site, alan, yer, başlangıç), (site, alan, bölüm, başlangıç), (site, gün, kod).
+  `btree_gist` varsa `ex_reservations_overlap` (aynı alan + yer, zaman aralığı kesişmez).
+- `reservation_waitlist` — `area_id`, `unit_id`, `person_id?`, saat, `people`, `guests`, `status`
+  (`waiting` · `offered` · `accepted` · `expired` · `left`), `offered_at/until`,
+  `reservation_id` (kabulde). Bölüm aynı saatte tek açık kayıt.
+
 ### `announcements` [K]
 | Sütun | Tip | Not |
 |---|---|---|

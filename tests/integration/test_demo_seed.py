@@ -323,10 +323,16 @@ async def test_demo_tahsilat_ve_sakin(
                 paid = await session.scalar(select(func.sum(Payment.amount)))
                 allocated = await session.scalar(select(func.sum(PaymentAllocation.amount)))
                 summary = await session.scalar(select(func.sum(AccountBalance.balance)))
+                # Ücretli rezervasyonlar (servis isteği 60) cariye ayrıca yazılır.
+                reserved = await session.scalar(
+                    select(
+                        func.coalesce(func.sum(LedgerEntry.debit - LedgerEntry.credit), 0)
+                    ).where(LedgerEntry.source == "reservation")
+                )
         assert charged is not None
         assert paid is not None
         assert paid == allocated  # demo tahsilatı borç tutarında: avans yok
-        assert summary == charged - paid
+        assert summary == charged - paid + reserved
         rates[spec.slug] = paid / charged
     assert rates["aksu-konaklari"] > rates["yildiz-sitesi"] > rates["mimoza-apartmani"]
 
@@ -393,6 +399,24 @@ async def test_demo_duyuru_ve_talep(
     manager = await login_headers(api, "yonetici@demo.local", DEMO_PASSWORD)
     requests_page = (await api.get("/api/v1/sites/aksu-konaklari/requests", headers=manager)).json()
     assert requests_page["total"] == 6
+    # Rezervasyon (servis istekleri 59–61): alanlar, geçmiş/bugün/ileri, bekleme listesi.
+    base = "/api/v1/sites/aksu-konaklari"
+    areas = (await api.get(f"{base}/reservable-areas", headers=manager)).json()
+    assert {a["name"] for a in areas} >= {"Spor salonu", "Toplantı salonu", "Mangal alanı"}
+    booked = (
+        await api.get(f"{base}/reservations", params={"page_size": 200}, headers=manager)
+    ).json()
+    assert {r["status"] for r in booked["items"]} >= {
+        "checked_in",
+        "no_show",
+        "approved",
+        "pending",
+    }
+    waiting = (await api.get(f"{base}/waitlist", headers=manager)).json()
+    assert waiting["total"] == 1
+    mine = (await api.get(f"{base}/resident/reservations", headers=resident)).json()
+    assert len(mine["reservations"]) == 2
+    assert len(mine["waitlist"]) == 1
 
 
 async def test_demo_kasa_ve_gider(
