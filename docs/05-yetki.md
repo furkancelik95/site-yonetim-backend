@@ -29,6 +29,7 @@ kümesi tanımlanmalı.
 | `people.read` / `people.manage` | Kişi görüntüleme / yönetimi |
 | `people.contact` | İletişim bilgisi (telefon, e-posta): **maskeli** görür, "göster" ile açar — açma denetim kaydına `contact_view` yazar (YAP-03 S1–S2). Yalnız Yönetici; YK ve diğer roller iletişim alanını hiç almaz (null) |
 | `requests.read` / `requests.create` / `requests.assign` | Talep görüntüleme / oluşturma / atama ve durum değiştirme (iç not, ana olay, teklif, tadilat kararı dahil) |
+| Rezervasyon (servis istekleri 59–61; yeni izin yok) | Günlük liste, saat durumu, giriş (kod / "geldi"): `requests.assign` ya da `security.visitors`; sakin adına rezervasyon, onay, ret, iptal, kullanım raporu: `requests.assign`; alan kuralları ve K11 ayarı: `modules.manage`; sakin uçları kendi bölümü — hane üyesi yalnız "Rezervasyon" yetkisiyle |
 | `requests.settings` | Talep ayarları: kategori, SLA ve çalışma takvimi, hazır yanıt, hizmet tarifesi, tadilat kuralları (servis istekleri 47–52) |
 | `announcements.read` / `announcements.publish` | Duyuru görüntüleme / yayınlama |
 | `expenses.read` / `expenses.manage` | Gider görüntüleme / kaydetme, ödeme, geri alma |
@@ -41,25 +42,46 @@ kümesi tanımlanmalı.
 | `security.incidents` | Güvenlik olay kaydı ve kayıp eşya (okuma + yazma) |
 | `meetings.read` / `meetings.manage` | Toplantı ve genel kurul görüntüleme / planlama, karar, iptal |
 | `polls.manage` | Anket açma ve kapatma (okuma: `announcements.read`) |
-| `contracts.manage` | Hizmet sözleşmesi ekleme, düzenleme, arşivleme (okuma: `expenses.read`) |
+| `contracts.manage` | Hizmet sözleşmesi ekleme, düzenleme, arşivleme; performans kuralları (KPI, ceza, artış), karne değerleri ve kesinleştirme, artış kararı; onay kuralı yoksa ceza kesintisi kararı — karneyi kesinleştiren hariç (okuma: `expenses.read`). Endeks değerleri yalnız platform yöneticisi |
 | `inventory.read` / `inventory.manage` | Demirbaş ve stok görüntüleme / yönetimi (stok giriş-çıkışı ve sayım dahil); **teknik varlık**, yasal muayene ve periyodik bakım (K28 — ayrı liste, aynı izin) |
 | `staff.manage` | Site personeli kaydı; vardiya planı, izin, puantaj, aktarım ve giriş-çıkış ayarı (okuma: `people.read` — personel listesi ve vardiya planı; izin listesi ve puantaj yalnız `staff.manage`, raporlu izin sağlık verisi olabilir). Puantaj aktarımını `finance.read` de okur. Kartı bağlı personel (K29) kendi vardiyasını, izin talebini ve giriş-çıkışını `/me/*` ile kullanır — izin gerekmez |
 | `approvals.rules.read` | Onay kurallarını görür (Yazılım Dokümanı ONY-01) |
 | `documents.read` | Belge arşivi: gizli dışındaki belgeleri görür ve indirir (RAP-03) |
 | `documents.manage` | Belge yükler, yeni sürüm ekler |
 | `documents.confidential` | Gizli belgeleri görür ve açar; her açılış kayda geçer, açılış kaydını görür |
+| `privacy.manage` | KVKK: ilgili kişi başvurularını yanıtlar, kişisel veri paketini indirir, aydınlatma metni sürümü yayınlar, saklama politikası ve VERBİS envanteri (RAP-04, servis isteği 80) — yalnız Yönetici |
 | `approvals.rules.manage` | Onay kurallarını yönetir; sitedeki tüm onay taleplerini görür (gözetim). Onay **kararı** izin istemez: talebe onaycı olarak atanmış (ya da onaycının etkin vekili) olmak yeter |
 
 Son yedi izin servis istekleri 09–18 için eklendi (karar: Furkan, 05.10.2026).
 Belge izinleri (`documents.*`) belge arşivi için eklendi (servis isteği 78, 25.10.2026): yükleme
 yalnız Yönetici; gizli belge Yönetici ve Denetçi; okuma Yönetici, YK üyesi, Denetçi, Muhasebe.
 Sakin belgeyi izinle değil kendi ucuyla görür (sakinlere açık + bölümüne özel).
+`privacy.manage` KVKK için eklendi (servis isteği 80, 27.10.2026; SR 80'deki "ayrı
+`privacy.manage`" önerisi). Rapor kataloğu yeni izin istemez: her rapor kendi verisinin iznine
+bağlıdır (`domain/report_catalog.py`). Denetim paketi: hazırlama `finance.charge.post`, rapor
+ekleme `audit.read`, liste ikisinden biri.
+
+**Aydınlatma onayı kapısı (PM kararı P6, 27.10.2026):** kullanıcının erişebildiği bir sitede
+yayınlanmış **son** aydınlatma metni sürümü onaylanmamışsa, parola kapısından sonra ikinci kapı
+çalışır: yalnız `GET /me`, `/auth/*`, `GET/POST /me/consents` ve herkese açık
+`/public/privacy-notice/{slug}` yanıt verir; diğer her uç **403 `consent_required`**
+(`api/deps.consent_given`, `tests/architecture/test_routes.py`). Yeni sürüm yayınlanınca herkes
+yeniden onaylar (yayınlayan yönetici yayınla birlikte onaylamış sayılır). Sitede yayınlanmış
+metin yoksa onay istenmez.
+
+Satın alma (servis istekleri 62–67, 27.10.2026) yeni izin eklemez: okuma `expenses.read`; kart,
+ayar, sipariş, fatura ve "ödendi" `expenses.manage`; talep açma/teklif/link/seçim `expenses.read`
++ (`requests.assign` ya da `expenses.manage`); kabul `expenses.read` + (`requests.assign`,
+`inventory.manage` ya da `expenses.manage`) — kabuldeki stok girişi **sistem adına** yazılır,
+kabul edenin stok yetkisi aranmaz. Onay kararı: sitede onay kuralı varsa onay mekanizmasının
+atadığı onaycı (izin gerekmez), yoksa `expenses.manage`; talep eden kendi talebini, faturayı
+giren farkını onaylayamaz. Tedarikçi teklif linki oturumsuz (`/public/quote-links/{token}`).
 
 ## 3. Site rolleri (şablon)
 
 | Rol | İzinler |
 |---|---|
-| **Yönetici** | `finance.read`, `finance.charge.post`, `finance.payment.record`, `finance.budget.manage`, `finance.cash.read`, `finance.cash.manage`, `finance.reports.read`, `units.read`, `units.manage`, `people.read`, `people.manage`, `requests.read`, `requests.create`, `requests.assign`, `announcements.read`, `announcements.publish`, `expenses.read`, `expenses.manage`, `security.visitors`, `security.packages`, `modules.manage`, `members.manage`, `audit.read`, `security.incidents`, `meetings.read`, `meetings.manage`, `polls.manage`, `contracts.manage`, `inventory.read`, `inventory.manage`, `staff.manage`, `approvals.rules.read`, `approvals.rules.manage`, `documents.read`, `documents.manage`, `documents.confidential`, `people.contact`, `requests.settings` |
+| **Yönetici** | `finance.read`, `finance.charge.post`, `finance.payment.record`, `finance.budget.manage`, `finance.cash.read`, `finance.cash.manage`, `finance.reports.read`, `units.read`, `units.manage`, `people.read`, `people.manage`, `requests.read`, `requests.create`, `requests.assign`, `announcements.read`, `announcements.publish`, `expenses.read`, `expenses.manage`, `security.visitors`, `security.packages`, `modules.manage`, `members.manage`, `audit.read`, `security.incidents`, `meetings.read`, `meetings.manage`, `polls.manage`, `contracts.manage`, `inventory.read`, `inventory.manage`, `staff.manage`, `approvals.rules.read`, `approvals.rules.manage`, `documents.read`, `documents.manage`, `documents.confidential`, `people.contact`, `requests.settings`, `privacy.manage` |
 | **Yönetim Kurulu Üyesi** — her şeyi görür, hiçbirini değiştirmez | `finance.read`, `units.read`, `people.read`, `requests.read`, `announcements.read`, `expenses.read`, `finance.cash.read`, `finance.reports.read`, `meetings.read`, `inventory.read`, `approvals.rules.read`, `documents.read` |
 | **Denetçi** (KMK m.41) — salt okunur finans, **kişisel veri görmez** | `finance.read`, `expenses.read`, `audit.read`, `finance.cash.read`, `finance.reports.read`, `meetings.read`, `documents.read`, `documents.confidential` |
 | **Muhasebe** | `finance.read`, `finance.charge.post`, `finance.payment.record`, `finance.budget.manage`, `expenses.read`, `expenses.manage`, `finance.cash.read`, `finance.cash.manage`, `finance.reports.read`, `units.read`, `people.read`, `contracts.manage`, `inventory.read`, `documents.read` |

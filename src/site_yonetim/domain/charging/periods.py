@@ -5,12 +5,12 @@ from datetime import date, timedelta
 from decimal import Decimal
 
 from site_yonetim.domain.finance import Frequency
-from site_yonetim.domain.money import round_money
+from site_yonetim.domain.money import distribute
 from site_yonetim.domain.text import format_date_tr, format_period_tr
 
-DUE_AFTER_DAYS = 14
+DEFAULT_DUE_DAY = 10  # K25: vade dönemin belirli günü — varsayılan ayın 10'u (FIN-16, §8.7)
+DRAFT_LEAD_DAYS = 5  # FIN-05: taslak tahakkuk dönem başı − 5 gün
 QUARTER_MONTHS = frozenset({1, 4, 7, 10})
-_PERIOD_DIVISOR = {Frequency.MONTHLY: Decimal(12), Frequency.QUARTERLY: Decimal(4)}
 
 
 @dataclass(frozen=True, slots=True, order=True)
@@ -50,14 +50,18 @@ class YearMonth:
         return format_period_tr(self.year, self.month)
 
 
-def period_amount(annual_amount: Decimal, frequency: Frequency) -> Decimal:
-    """Kalemin bir kesimdeki tutarı (docs/04 §3).
+def period_amount(annual_amount: Decimal, frequency: Frequency, month: int = 1) -> Decimal:
+    """Kalemin `month` ayındaki kesim tutarı (docs/04 §3; Yazılım Dokümanı §8.18 — D-5).
 
-    Aylık kalem her ay ayrı yuvarlanır: `round(yıllık / 12)`. Bu, yılda birkaç kuruş fark
-    bırakır; `distribute` ile 12 aya bölme önerisi açık karar (docs/12 K3) — şimdiki davranış.
+    Yıllık tutar dönemlere `distribute` ile bölünür; kuruş farkı en büyük kalan yöntemiyle ilk
+    dönemlere gider, **yıllık toplam her zaman korunur**: 1.000 TL/yıl → Ocak–Nisan 83,34,
+    Mayıs–Aralık 83,33 (toplam 1.000,00). Üç aylıkta dilim çeyreğin sırasıdır.
     """
-    divisor = _PERIOD_DIVISOR.get(frequency)
-    return round_money(annual_amount / divisor if divisor else annual_amount)
+    if frequency is Frequency.MONTHLY:
+        return distribute(annual_amount, [Decimal(1)] * 12)[month - 1]
+    if frequency is Frequency.QUARTERLY:
+        return distribute(annual_amount, [Decimal(1)] * 4)[(month - 1) // 3]
+    return annual_amount
 
 
 def is_item_due(
@@ -90,10 +94,20 @@ def next_period(last_valid: YearMonth | None, today: date) -> YearMonth:
     return last_valid.next() if last_valid is not None else YearMonth.of(today)
 
 
-def default_dates(period: YearMonth) -> tuple[date, date]:
-    """`charge_date` = ayın 1'i, `due_date` = + 14 gün."""
+def due_date_for(charge_date: date, due_day: int = DEFAULT_DUE_DAY) -> date:
+    """K25: vade = tahakkuk ayının `due_day`'i; tahakkuk tarihinden önceye düşerse sonraki ayın
+    aynı günü (ör. kesim 15'i, vade günü 10 → sonraki ayın 10'u)."""
+    due = date(charge_date.year, charge_date.month, due_day)
+    if due < charge_date:
+        nxt = YearMonth.of(charge_date).next()
+        due = date(nxt.year, nxt.month, due_day)
+    return due
+
+
+def default_dates(period: YearMonth, due_day: int = DEFAULT_DUE_DAY) -> tuple[date, date]:
+    """`charge_date` = ayın 1'i, `due_date` = ayın `due_day`'i (K25, varsayılan 10)."""
     charge_date = period.first_day
-    return charge_date, charge_date + timedelta(days=DUE_AFTER_DAYS)
+    return charge_date, due_date_for(charge_date, due_day)
 
 
 def charge_description(period: YearMonth, item_names: list[str]) -> str:

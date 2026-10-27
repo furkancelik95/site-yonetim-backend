@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from site_yonetim.api.deps import AuthenticatedUserDep, FactoryDep, NowDep, TodayDep
 from site_yonetim.domain.access import AccessMode, RoleGrant, RoleScope, SiteAccess, UserAccess
 from site_yonetim.domain.mfa import MfaStatus
+from site_yonetim.services import privacy as privacy_svc
 from site_yonetim.services.access import load_user_access
 from site_yonetim.services.mfa import required_for
 
@@ -100,6 +101,11 @@ class MeResponse(BaseModel):
     must_change_password: bool = Field(
         description="true: geçici parola — önce `POST /auth/change-password`"
     )
+    consent_required: bool = Field(
+        default=False,
+        description="true: erişilen bir sitenin güncel aydınlatma metni onaylanmadı — önce "
+        "`GET/POST /me/consents` (P6). Bu sürede diğer uçlar 403 `consent_required`",
+    )
     sites: list[SiteAccessOut]
     email: str | None = None
     phone: str | None = None
@@ -115,7 +121,13 @@ class MeResponse(BaseModel):
     )
 
     @classmethod
-    def of(cls, access: UserAccess, *, must_change_password: bool = False) -> MeResponse:
+    def of(
+        cls,
+        access: UserAccess,
+        *,
+        must_change_password: bool = False,
+        consent_required: bool = False,
+    ) -> MeResponse:
         return cls(
             user_id=access.user_id,
             full_name=access.full_name,
@@ -123,6 +135,7 @@ class MeResponse(BaseModel):
             is_platform_admin=access.is_platform_admin,
             can_see_portfolio=access.can_see_portfolio,
             must_change_password=must_change_password,
+            consent_required=consent_required,
             sites=[SiteAccessOut.of(site) for site in access.sites],
         )
 
@@ -131,13 +144,18 @@ class MeResponse(BaseModel):
 async def me(
     current: AuthenticatedUserDep, factory: FactoryDep, today: TodayDep, now: NowDep
 ) -> MeResponse:
-    """Geçici paroladayken ve 2FA kurulumu beklerken de çalışır (frontend yönlendirmeyi
-    buradan yapar). İki adımlı kod bekleyen oturumda 401 `mfa_required`."""
+    """Geçici paroladayken, 2FA kurulumu ve aydınlatma onayı beklerken de çalışır (frontend
+    yönlendirmeyi buradan yapar). İki adımlı kod bekleyen oturumda 401 `mfa_required`."""
     user = current.user
     access = await load_user_access(factory, user, today=today, now=now)
+    pending = bool(access.sites) and bool(
+        await privacy_svc.pending_notices(factory, user.id, [s.site_id for s in access.sites])
+    )
     required = required_for(access)
     state = MfaStatus(required, user.mfa_enabled_at is not None, user.mfa_grace_until)
-    out = MeResponse.of(access, must_change_password=user.must_change_password)
+    out = MeResponse.of(
+        access, must_change_password=user.must_change_password, consent_required=pending
+    )
     return out.model_copy(
         update={
             "email": user.email,

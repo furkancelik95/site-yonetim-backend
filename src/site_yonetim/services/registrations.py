@@ -38,6 +38,7 @@ from site_yonetim.models import (
     Unit,
     User,
 )
+from site_yonetim.services import privacy as privacy_svc
 from site_yonetim.services import structure
 
 CODE_BYTES = 8
@@ -280,6 +281,8 @@ async def _login(session: AsyncSession, r: Registration, person: Person) -> str:
     if person.user_id is None:
         person.user_id = user.id
     await session.flush()
+    # Başvurudaki bilgilendirme onayı ve açık rıza hesaba bağlanır (P6).
+    await privacy_svc.link_registration(session, user.id, r)
     return login
 
 

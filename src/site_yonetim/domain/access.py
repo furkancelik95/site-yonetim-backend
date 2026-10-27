@@ -62,6 +62,8 @@ class Permission(StrEnum):
     DOCUMENTS_READ = "documents.read"  # gizli dışındaki belgeler (sakin kendi ucunu kullanır)
     DOCUMENTS_MANAGE = "documents.manage"  # yükleme ve yeni sürüm
     DOCUMENTS_CONFIDENTIAL = "documents.confidential"  # gizli belgeler; her açılış kayda geçer
+    # KVKK (RAP-04; servis isteği 80): başvuru yanıtı, aydınlatma metni, saklama, veri envanteri
+    PRIVACY_MANAGE = "privacy.manage"
     # Bildirim gönderimi (PLT-05, ILT-05): SMS hesabı, kota, sessiz saat, teslim kayıtları
     NOTIFICATIONS_MANAGE = "notifications.manage"
     # Planlı rapor gönderimi (RAP-05)
@@ -115,7 +117,7 @@ ROLE_PERMISSIONS: dict[SiteRole, frozenset[Permission]] = {
             P.POLLS_MANAGE, P.CONTRACTS_MANAGE, P.INVENTORY_READ, P.INVENTORY_MANAGE,
             P.STAFF_MANAGE, P.APPROVAL_RULES_READ, P.APPROVAL_RULES_MANAGE, P.PEOPLE_CONTACT,
             P.DOCUMENTS_READ, P.DOCUMENTS_MANAGE, P.DOCUMENTS_CONFIDENTIAL,
-            P.NOTIFICATIONS_MANAGE, P.REPORTS_SCHEDULE,
+            P.NOTIFICATIONS_MANAGE, P.REPORTS_SCHEDULE, P.PRIVACY_MANAGE,
             P.TRANSPARENCY_MANAGE, P.TRANSPARENCY_PUBLISH,
         }
     ),

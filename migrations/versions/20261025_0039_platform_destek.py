@@ -5,7 +5,7 @@ olarak görüntüleme, bilgi bankası. Plana destek seviyesi, yapı ayarına "sa
 Denetim: aktör tipi "support_session" ve eylem "view" (açılan ekran) eklendi.
 
 Revision ID: 0039
-Revises: 0043
+Revises: 0035
 Create Date: 2026-10-27 10:00:00.000000
 
 Kiracı tablosu ekliyorsan: enable_tenant_rls(op, "tablo") — docs/02-mimari.md §3.
@@ -20,7 +20,7 @@ from sqlalchemy.dialects import postgresql
 from site_yonetim.db.rls import disable_tenant_rls, enable_tenant_rls
 
 revision: str = "0039"
-down_revision: str | None = "0043"
+down_revision: str | None = "0035"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

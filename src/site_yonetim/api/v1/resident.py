@@ -276,6 +276,8 @@ async def statement(
                     source_id=line.entry.source_id,
                     description=line.entry.description,
                     running_balance=line.running_balance,
+                    allocated=line.allocated,
+                    advance_applied=line.advance_applied,
                 )
                 for line in lines
             ],

@@ -53,6 +53,7 @@ from site_yonetim.models.audit import (
     record,
     set_actor,
 )
+from site_yonetim.services import privacy as privacy_svc
 from site_yonetim.services import support as support_svc
 from site_yonetim.services.access import load_user_access
 from site_yonetim.services.auth import authenticate
@@ -243,13 +244,50 @@ async def password_changed(
     return current
 
 
-CurrentUserDep = Annotated[CurrentUser, Depends(password_changed)]
+# Parolası değişmiş ama aydınlatma onayı bekleyebilen oturum: yalnız onay uçları (P6).
+PasswordChangedUserDep = Annotated[CurrentUser, Depends(password_changed)]
+
+
+async def resolved_access(
+    current: PasswordChangedUserDep, factory: FactoryDep, today: TodayDep, now: NowDep
+) -> UserAccess:
+    """İstek başına bir kez çözülür (FastAPI bağımlılık önbelleği): onay kapısı ve site
+    bağlamı aynı sonucu kullanır."""
+    return await load_user_access(factory, current.user, today=today, now=now)
+
+
+class ConsentRequiredError(ApiError):
+    def __init__(self) -> None:
+        super().__init__(
+            HTTPStatus.FORBIDDEN,
+            "consent_required",
+            "Devam etmeden önce güncel aydınlatma metnini okuyup onaylayın.",
+        )
+
+
+async def consent_given(
+    current: PasswordChangedUserDep,
+    access: Annotated[UserAccess, Depends(resolved_access)],
+    factory: FactoryDep,
+) -> CurrentUser:
+    """Aydınlatma onayı kapısı (PM kararı P6, PLT-01 adım 14): kullanıcının erişebildiği bir
+    sitede onaylamadığı son sürüm varsa yalnız `/me`, `/auth/*`, `/me/consents` ve herkese açık
+    metin çalışır; diğer uçlar 403 `consent_required`. Parola kapısından sonra gelir."""
+    if access.sites and await privacy_svc.pending_notices(
+        factory, current.user.id, [s.site_id for s in access.sites]
+    ):
+        raise ConsentRequiredError
+    return current
+
+
+# Varsayılan kapı: geçici parola değişmiş ve güncel aydınlatma metni onaylanmış oturum.
+CurrentUserDep = Annotated[CurrentUser, Depends(consent_given)]
 
 
 async def user_access(
-    current: CurrentUserDep, factory: FactoryDep, today: TodayDep, now: NowDep
+    _: CurrentUserDep, access: Annotated[UserAccess, Depends(resolved_access)]
 ) -> UserAccess:
-    return await load_user_access(factory, current.user, today=today, now=now)
+    return access
 
 
 UserAccessDep = Annotated[UserAccess, Depends(user_access)]
