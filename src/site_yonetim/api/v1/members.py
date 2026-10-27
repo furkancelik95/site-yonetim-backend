@@ -3,8 +3,9 @@
 
 Yazma uçlarının hepsi `members.manage`. Rol listesi onay kuralı ekranı için `approvals.rules.read`
 ile de okunur. Atayan kendi sahip olmadığı izni içeren rolü atayamaz, kaldıramaz, tanımlayamaz
-(403 `exceeds_own_permissions`). Geçici parola yalnız ekleme yanıtında döner
-(`Cache-Control: no-store`); loga ve denetim kaydına yazılmaz. Üyelik, rol ve atama değişiklikleri
+(403 `exceeds_own_permissions`). Yeni kullanıcıya **72 saatlik davet bağlantısı**
+gider (P5, PLT-09); geçici parola yok. Test sağlayıcısında (K5) bağlantı geliştirme/demo yanıtında
+`preview_url` ile görünür (üretimde asla). Üyelik, rol ve atama değişiklikleri
 denetim kaydında (`site_memberships`, `site_roles`, `site_role_assignments`).
 
 Geriye uyum: üyede `role_key` / `role_name` ana rolü (en üst düzeydeki etkin rol) taşır; bütün
@@ -16,18 +17,23 @@ import uuid
 from http import HTTPStatus
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Request, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
 from site_yonetim.api.deps import (
+    ChannelsDep,
     CurrentUserDep,
     NowDep,
+    SettingsDep,
     SiteContext,
     SiteContextDep,
+    client_ip,
     require_permission,
+    user_agent,
 )
 from site_yonetim.api.schemas import Page, PageParams, Written
+from site_yonetim.core.config import Settings
 from site_yonetim.core.errors import ApiError, ForbiddenError, NotFoundError
 from site_yonetim.domain.access import Permission, RoleScope
 from site_yonetim.domain.members import FORM_ERROR, FormFieldError
@@ -42,6 +48,9 @@ from site_yonetim.domain.roles import (
 from site_yonetim.models import Block, SiteRoleAssignment, User
 from site_yonetim.services import members as svc
 from site_yonetim.services import roles as roles_svc
+from site_yonetim.services import user_invitations
+from site_yonetim.services.auth_events import Client
+from site_yonetim.services.channels import Channels
 
 router = APIRouter(prefix="/sites/{slug}", tags=["kullanıcılar"])
 catalog_router = APIRouter(tags=["kullanıcılar"])
@@ -256,7 +265,7 @@ class MemberRoleOut(BaseModel):
 class MemberOut(BaseModel):
     id: uuid.UUID
     full_name: str
-    email: str
+    email: str | None
     role_key: str | None = Field(description="ana rol (geriye uyum); rolü yoksa boş")
     role_name: str | None
     roles: list[MemberRoleOut] = Field(description="bitmemiş bütün roller, ana rol önce")
@@ -266,6 +275,10 @@ class MemberOut(BaseModel):
     )
     last_login_at: dt.datetime | None
     invited_at: dt.datetime
+    invitation_pending: bool = Field(
+        default=False, description="parolasını henüz belirlemedi (davet bekliyor)"
+    )
+    mfa_enabled: bool = Field(default=False, description="iki adımlı doğrulama kurulu")
 
     @classmethod
     def of(cls, m: svc.Member) -> MemberOut:
@@ -281,6 +294,8 @@ class MemberOut(BaseModel):
             source=m.source,  # type: ignore[arg-type]
             last_login_at=m.user.last_login_at,
             invited_at=m.invited_at,
+            invitation_pending=m.user.password_hash is None and m.user.phone is None,
+            mfa_enabled=m.user.mfa_enabled_at is not None,
         )
 
 
@@ -304,10 +319,36 @@ class MemberIn(AssignmentFields):
     role_key: str = Field(max_length=40)
 
 
+class MemberInvitationOut(BaseModel):
+    expires_at: dt.datetime
+    sent_to: list[str] = Field(description="maskeli e-posta / telefon")
+    preview_url: str | None = Field(
+        default=None,
+        description="yalnız geliştirme/demo (test sağlayıcısı): davet bağlantısı. Üretimde boş",
+    )
+    test_provider: bool = True
+
+
 class AddedOut(BaseModel):
     member: MemberOut
-    temporary_password: str | None = Field(
-        description="yalnız yeni kullanıcıda, yalnız bu yanıtta; kişiye elden iletilir (K5)"
+    invitation: MemberInvitationOut | None = Field(
+        description="yalnız yeni kullanıcıda: 72 saat geçerli davet gönderildi"
+    )
+
+
+def _invitation(settings: Settings, sent: user_invitations.SentInvitation) -> MemberInvitationOut:
+    return MemberInvitationOut(
+        expires_at=sent.invitation.expires_at,
+        sent_to=sent.sent_to,
+        preview_url=sent.url if settings.test_inbox_active else None,
+    )
+
+
+def _inviter(request: Request, settings: Settings, channels: Channels) -> svc.Inviter:
+    return svc.Inviter(
+        web_url=settings.web_url,
+        channels=channels,
+        client=Client(ip=client_ip(request), user_agent=user_agent(request)),
     )
 
 
@@ -323,34 +364,81 @@ def _assignment(role_key: str | None, body: AssignmentFields) -> roles_svc.Assig
 
 @router.post("/members", status_code=status.HTTP_201_CREATED, summary="Kullanıcı ekle")
 async def add_member(
-    body: MemberIn, ctx: MembersManage, current: CurrentUserDep, now: NowDep, response: Response
+    body: MemberIn,
+    ctx: MembersManage,
+    current: CurrentUserDep,
+    now: NowDep,
+    response: Response,
+    request: Request,
+    settings: SettingsDep,
+    channels: ChannelsDep,
 ) -> Written[AddedOut]:
     try:
         added = await svc.add_member(
             ctx.session, ctx.site, full_name=body.full_name, email=body.email,
             assignment=_assignment(body.role_key, body), actor=_actor(ctx, current), now=now,
+            inviter=_inviter(request, settings, channels),
         )  # fmt: skip
     except FormFieldError as exc:
         raise form_error(exc) from exc
     except (svc.MemberRuleError, RoleRuleError) as exc:
         raise rule_error(exc) from exc
     await ctx.session.commit()
-    response.headers["Cache-Control"] = "no-store"  # geçici parola önbelleğe düşmesin
+    response.headers["Cache-Control"] = "no-store"  # önizleme bağlantısı önbelleğe düşmesin
     member = added.member
     role_name = member.primary.name if member.primary else ""
-    if added.temporary_password is None:
+    if added.invitation is None:
         message = (
             f"{member.user.full_name} kayıtlı bir kullanıcı; bu sitede {role_name} rolü "
-            "verildi. Mevcut parolasıyla giriş yapar."
+            "verildi. Mevcut hesabıyla giriş yapar."
         )
     else:
         message = (
-            f"{member.user.full_name} {role_name} olarak eklendi. Geçici parolayı kişiye elden "
-            "iletin; ilk girişte değiştirecek."
+            f"{member.user.full_name} {role_name} olarak eklendi. 72 saat geçerli davet "
+            f"bağlantısı {', '.join(added.invitation.sent_to)} adresine gönderildi; kişi "
+            "parolasını bağlantıdan belirler."
         )
     return Written(
-        data=AddedOut(member=MemberOut.of(member), temporary_password=added.temporary_password),
+        data=AddedOut(
+            member=MemberOut.of(member),
+            invitation=_invitation(settings, added.invitation) if added.invitation else None,
+        ),
         message=message,
+    )
+
+
+@router.post(
+    "/members/{member_id}/resend-invitation", summary="Daveti yeniden gönder (eskisi geçersiz)"
+)
+async def resend_invitation(
+    member_id: uuid.UUID,
+    ctx: MembersManage,
+    current: CurrentUserDep,
+    now: NowDep,
+    response: Response,
+    request: Request,
+    settings: SettingsDep,
+    channels: ChannelsDep,
+) -> Written[MemberInvitationOut]:
+    try:
+        sent = await svc.resend_invitation(
+            ctx.session,
+            ctx.site,
+            member_id,
+            actor=_actor(ctx, current),
+            now=now,
+            inviter=_inviter(request, settings, channels),
+        )
+    except LookupError:
+        raise NotFoundError("Kullanıcı bulunamadı.") from None
+    except svc.MemberRuleError as exc:
+        raise rule_error(exc) from exc
+    await ctx.session.commit()
+    response.headers["Cache-Control"] = "no-store"
+    return Written(
+        data=_invitation(settings, sent),
+        message=f"Yeni davet bağlantısı {', '.join(sent.sent_to)} adresine gönderildi; "
+        "önceki bağlantı geçersiz.",
     )
 
 

@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from site_yonetim.api.v1 import (
     account_ops,
+    account_security,
     accounting,
     ad_hoc_charges,
     announcements,
@@ -39,6 +40,7 @@ from site_yonetim.api.v1 import (
     me,
     meetings,
     members,
+    messaging,
     meters,
     notifications,
     parking,
@@ -55,6 +57,7 @@ from site_yonetim.api.v1 import (
     requests,
     resident,
     routine_tasks,
+    scheduled_reports,
     security,
     service_desk,
     sessions,
@@ -82,6 +85,10 @@ api_router.include_router(auth.router)
 api_router.include_router(me.router)
 api_router.include_router(members.catalog_router)
 api_router.include_router(sessions.router)
+api_router.include_router(account_security.router)
+api_router.include_router(messaging.router)
+api_router.include_router(messaging.platform_router)
+api_router.include_router(scheduled_reports.router)
 api_router.include_router(notifications.me_router)
 api_router.include_router(sites.router)
 api_router.include_router(platform.router)

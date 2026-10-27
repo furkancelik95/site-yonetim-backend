@@ -161,8 +161,13 @@ class PreferenceRow(BaseModel):
 class PreferencesOut(BaseModel):
     in_app: bool = Field(default=True, description="uygulama içi bildirim her zaman açık")
     delivery_enabled: bool = Field(
-        default=False,
-        description="false: push/SMS/e-posta gönderimi henüz yok (K5); tercih saklanır",
+        default=True,
+        description="true: push/SMS/e-posta gönderim katmanı tercihleri uygular",
+    )
+    test_provider: bool = Field(
+        default=True,
+        description="true: sağlayıcı seçilene dek (K5) test sağlayıcısı — gönderim kayda "
+        "geçer, dışarı gitmez",
     )
     categories: list[PreferenceRow]
 

@@ -155,6 +155,7 @@ class AccountSpec:
     organization_role: str | None = None
     site_slug: str | None = None
     site_role: str | None = None
+    phone: str | None = None  # P5: saha ve sakin telefon + SMS koduyla da girer
 
 
 # docs/10 §2. Sakin hesabı ayrıca kurulur: Aksu'da en borçlu oturan hesabın kişisine bağlanır.
@@ -166,11 +167,19 @@ ACCOUNTS: tuple[AccountSpec, ...] = (
         "mimoza@demo.local", "Hakan Tunç", site_slug="mimoza-apartmani", site_role="Yönetici"
     ),
     AccountSpec(
-        "guvenlik@demo.local", "Recep Er", site_slug="aksu-konaklari", site_role="Güvenlik"
+        "guvenlik@demo.local",
+        "Recep Er",
+        site_slug="aksu-konaklari",
+        site_role="Güvenlik",
+        phone="+905550000002",
     ),
     AccountSpec("denetci@demo.local", "Nuray Şen", site_slug="aksu-konaklari", site_role="Denetçi"),
     AccountSpec(
-        "teknik@demo.local", "Ergün Kılıç", site_slug="aksu-konaklari", site_role="Teknik Personel"
+        "teknik@demo.local",
+        "Ergün Kılıç",
+        site_slug="aksu-konaklari",
+        site_role="Teknik Personel",
+        phone="+905550000003",
     ),
 )
 
@@ -250,7 +259,9 @@ LAST_MONTH_FACTOR = Decimal("0.90")
 OLDER_MONTHS_BONUS = Decimal("0.04")
 CASH_SHARE = 0.25  # ~%25 nakit, gerisi havale
 PAYMENT_DAYS = (2, 25)  # ayın 2'si – 25'i
-RESIDENT = AccountSpec("sakin@demo.local", "", site_slug="aksu-konaklari", site_role="Sakin")
+RESIDENT = AccountSpec(
+    "sakin@demo.local", "", site_slug="aksu-konaklari", site_role="Sakin", phone="+905550000001"
+)
 
 
 # --- Duyuru ve talep (docs/10 §1.4) ----------------------------------------------

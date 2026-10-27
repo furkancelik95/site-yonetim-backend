@@ -12,7 +12,9 @@ from pydantic import BaseModel, Field
 
 from site_yonetim.api.deps import AuthenticatedUserDep, FactoryDep, NowDep, TodayDep
 from site_yonetim.domain.access import RoleGrant, RoleScope, SiteAccess, UserAccess
+from site_yonetim.domain.mfa import MfaStatus
 from site_yonetim.services.access import load_user_access
+from site_yonetim.services.mfa import required_for
 
 router = APIRouter(tags=["kimlik"])
 
@@ -91,6 +93,18 @@ class MeResponse(BaseModel):
         description="true: geçici parola — önce `POST /auth/change-password`"
     )
     sites: list[SiteAccessOut]
+    email: str | None = None
+    phone: str | None = None
+    mfa_enabled: bool = False
+    mfa_required: bool = Field(default=False, description="yönetici rolü: 2FA zorunlu")
+    mfa_setup_deadline: dt.datetime | None = Field(
+        default=None, description="zorunlu ve kurulmamış: geçiş süresinin sonu (uyarı bandı)"
+    )
+    mfa_setup_required: bool = Field(
+        default=False,
+        description="true: süre doldu — 2FA kurulum ekranına yönlendir (diğer uçlar 403 "
+        "`mfa_setup_required`)",
+    )
 
     @classmethod
     def of(cls, access: UserAccess, *, must_change_password: bool = False) -> MeResponse:
@@ -109,6 +123,20 @@ class MeResponse(BaseModel):
 async def me(
     current: AuthenticatedUserDep, factory: FactoryDep, today: TodayDep, now: NowDep
 ) -> MeResponse:
-    """Geçici paroladayken de çalışır (frontend yönlendirmeyi buradan yapar)."""
-    access = await load_user_access(factory, current.user, today=today, now=now)
-    return MeResponse.of(access, must_change_password=current.user.must_change_password)
+    """Geçici paroladayken ve 2FA kurulumu beklerken de çalışır (frontend yönlendirmeyi
+    buradan yapar). İki adımlı kod bekleyen oturumda 401 `mfa_required`."""
+    user = current.user
+    access = await load_user_access(factory, user, today=today, now=now)
+    required = required_for(access)
+    state = MfaStatus(required, user.mfa_enabled_at is not None, user.mfa_grace_until)
+    out = MeResponse.of(access, must_change_password=user.must_change_password)
+    return out.model_copy(
+        update={
+            "email": user.email,
+            "phone": user.phone,
+            "mfa_enabled": state.enabled,
+            "mfa_required": required,
+            "mfa_setup_deadline": user.mfa_grace_until if state.setup_pending() else None,
+            "mfa_setup_required": state.setup_blocking(now),
+        }
+    )

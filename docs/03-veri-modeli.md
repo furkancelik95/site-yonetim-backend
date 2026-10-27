@@ -858,3 +858,20 @@ Referans uygulamada yok, PRD'de MVP işaretli. Tasarlanırken bunlara yer bırak
 ## Referans
 
 `brhnnkaraa6/siteyonetimi` → `src/SiteYonetimi.Domain/` (her varlık bir dosya)
+
+
+## Kimlik ve bildirim gönderimi (göç 0043, P5 / K5)
+
+- `users` [G]: `phone` (E.164, tekil), `email` ve `password_hash` boş olabilir (en az biri:
+  e-posta ya da telefon), `phone_changed_at`, `mfa_secret_sealed` (şifreli), `mfa_enabled_at`,
+  `mfa_last_step`, `mfa_grace_until`.
+- `auth_sessions` [G]: `mfa_pending`, `verified_at`.
+- `otp_challenges` [G]: amaç, kanal, hedef, kod özeti (HMAC), son geçerlilik, deneme, kilit,
+  sağlayıcı referansı ve SMS adedi.
+- `mfa_recovery_codes` [G]: yedek kod özeti, kullanım zamanı.
+- `user_invitations` [G]: jeton özeti, 72 saat, kabul/iptal; site adı yalnız gösterim.
+- `notification_deliveries` [K]: bildirim × kanal teslim kaydı (durum, sağlayıcı, maliyet birimi,
+  kota aşımı, sessiz saat ertelemesi, SMS yedeği bağı).
+- `site_messaging_settings` [K]: sessiz saatler, SMS hesabı (platform/kendi), başlık, şifreli
+  anahtar + son 4, aylık kota (boş → paket varsayılanı).
+- `scheduled_reports` / `scheduled_report_runs` [K]: planlı rapor tanımı ve çalışma geçmişi.

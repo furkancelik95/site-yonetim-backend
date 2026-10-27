@@ -230,6 +230,28 @@ birleşimi, `scoped_permissions` sınırı taşır.
 - Platform yöneticisi: `src/SiteYonetimi.Web/Controllers/PlatformController.cs` (`RequirePlatformAdminAttribute`)
 
 
+### 8.3 SMS koduyla giriş, iki adımlı doğrulama, step-up (P5 — 27.10.2026)
+
+- **Telefonla giriş** (sakin, saha): `POST /auth/otp/request` → `POST /auth/otp/verify`. Kayıtlı
+  olsun olmasın aynı yanıt; kodun yalnız HMAC özeti saklanır (`otp_challenges`); sınırlar
+  Yazılım Dokümanı §4.7 (60 sn, günde 10, 5 hatada 15 dk kilit) + IP başına istek sınırı.
+- **İki adımlı doğrulama** (TOTP, RFC 6238): yönetici rollerinde zorunlu (`domain/mfa.py`
+  `MFA_SITE_ROLES`, şirket rolü, platform yöneticisi). 2FA kurulu kullanıcının girişi **bekleyen
+  oturum** açar; kod girilene dek her uç 401 `mfa_required` (`api/deps.mfa_passed`). Sır
+  `core/secretbox` ile şifreli (`DATA_ENCRYPTION_KEY`, yoksa JWT sırrından türetilir); yedek
+  kodların yalnız özeti; aynı TOTP adımı iki kez geçmez.
+- **Geçiş süresi:** kurmamış yönetici ilk girişinden itibaren `MFA_GRACE_DAYS` gün uyarıyla
+  girer (`mfa_setup_deadline`); süre dolunca `password_changed` kapısı 403 `mfa_setup_required`
+  döner — açık kalanlar: `/me`, `/me/security`, `/auth/mfa/setup|enable`, parola değişikliği.
+- **Step-up:** `Depends(require_step_up())` — oturumun son güçlü doğrulaması (`verified_at`) 5
+  dakikadan eskiyse 403 `step_up_required`; `financial=True, sensitive=False` yalnız telefon son
+  24 saatte değiştiyse ister. Yeniden doğrulama `POST /auth/step-up`.
+- **Davet:** yeni kullanıcıya geçici parola yerine 72 saatlik tek kullanımlık bağlantı
+  (`user_invitations`, jetonun yalnız özeti); kabul edince parola belirlenir.
+- Kimlik olaylarının hepsi `auth_events`'e yazılır (hedef telefon/e-posta yazılmaz).
+- İzinler: `notifications.manage` (yönetici — SMS hesabı, kota, sessiz saat, teslim kayıtları),
+  `reports.schedule` (yönetici, muhasebe — planlı raporlar).
+
 ### Şeffaflık raporu izinleri (P12, 27.10.2026 — K32)
 
 | İzin | Roller | Ne |

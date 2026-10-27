@@ -298,7 +298,9 @@ async def linkable_users(session: AsyncSession) -> list[Linkable]:
         if role is not None:
             names.setdefault(a.user_id, []).append((role.level, role.name))
     return [
-        Linkable(u.id, u.full_name, u.email, min(names.get(u.id, [(0, "")]))[1], sid)
+        Linkable(
+            u.id, u.full_name, u.email or u.phone or "", min(names.get(u.id, [(0, "")]))[1], sid
+        )
         for u, sid in found
     ]
 

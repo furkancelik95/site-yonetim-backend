@@ -48,21 +48,20 @@ async def added(w: World, email: str, name: str, role_key: str, **extra: Any) ->
     return body
 
 
-async def login_new(w: World, email: str, temporary: str) -> dict[str, str]:
-    headers = await login_headers(w.api, email, temporary)
-    changed = await w.api.post(
-        "/api/v1/auth/change-password",
-        json={"current_password": temporary, "new_password": NEW_PASSWORD},
-        headers=headers,
+async def login_new(w: World, body: dict[str, Any]) -> dict[str, str]:
+    """Yeni kullanıcı davet bağlantısından parolasını belirler (P5: geçici parola yok)."""
+    token = body["invitation"]["preview_url"].rsplit("/", 1)[1]
+    accepted = await w.api.post(
+        f"/api/v1/auth/invitations/{token}/accept", json={"password": NEW_PASSWORD}
     )
-    assert changed.status_code == 204, changed.text
-    return await login_headers(w.api, email, NEW_PASSWORD)
+    assert accepted.status_code == 200, accepted.text
+    return {"Authorization": f"Bearer {accepted.json()['access_token']}"}
 
 
 async def staff(w: World, email: str, name: str, role_key: str) -> tuple[str, dict[str, str]]:
     """(üye kimliği, oturum başlıkları)."""
     body = await added(w, email, name, role_key)
-    return body["member"]["id"], await login_new(w, email, body["temporary_password"])
+    return body["member"]["id"], await login_new(w, body)
 
 
 async def custom_role(
@@ -434,7 +433,7 @@ async def test_blok_kapsamli_guvenlik_yalniz_kendi_blogunda(world: World) -> Non
     body = await added(
         world, "kapi@test.local", "Kapı Görevlisi", "security", scope_kind="block", block_id=block_a
     )
-    guard = await login_new(world, "kapi@test.local", body["temporary_password"])
+    guard = await login_new(world, body)
     assert body["member"]["roles"][0]["block_name"] == "A"
     site_ = await my_site(world, guard)
     assert site_ is not None
