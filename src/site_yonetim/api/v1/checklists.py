@@ -45,7 +45,7 @@ class ChecklistTemplateIn(BaseModel):
     is_active: bool | None = None
 
 
-class ChecklistItemOut(BaseModel):
+class ChecklistTemplateItemOut(BaseModel):
     text: str
     type: ChecklistItemType
     photo_required: bool
@@ -56,7 +56,7 @@ class ChecklistItemOut(BaseModel):
 class ChecklistTemplateOut(BaseModel):
     id: uuid.UUID
     name: str
-    items: list[ChecklistItemOut]
+    items: list[ChecklistTemplateItemOut]
     is_active: bool
 
     @classmethod
@@ -64,7 +64,7 @@ class ChecklistTemplateOut(BaseModel):
         return cls(
             id=t.id,
             name=t.name,
-            items=[ChecklistItemOut.model_validate(i) for i in t.items],
+            items=[ChecklistTemplateItemOut.model_validate(i) for i in t.items],
             is_active=t.is_active,
         )
 
