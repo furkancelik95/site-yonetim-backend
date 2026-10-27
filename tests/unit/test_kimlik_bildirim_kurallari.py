@@ -134,13 +134,11 @@ def test_yedek_kodlar() -> None:
 
 
 def test_zorunluluk_ve_gecis_suresi() -> None:
-    assert requires_mfa(
-        is_platform_admin=False, site_roles=["Muhasebe"], has_organization_role=False
-    )
+    assert requires_mfa(is_platform_admin=False, role_levels=[3], has_organization_role=False)
     assert not requires_mfa(
-        is_platform_admin=False, site_roles=["Sakin", "Güvenlik"], has_organization_role=False
+        is_platform_admin=False, role_levels=[9, 4], has_organization_role=False
     )
-    assert requires_mfa(is_platform_admin=True, site_roles=[], has_organization_role=False)
+    assert requires_mfa(is_platform_admin=True, role_levels=[], has_organization_role=False)
     pending = MfaStatus(required=True, enabled=False, grace_until=NOW)
     assert pending.setup_pending()
     assert pending.setup_blocking(NOW)

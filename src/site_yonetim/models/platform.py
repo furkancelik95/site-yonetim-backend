@@ -1,9 +1,10 @@
 """Platform ve kiracı tabloları — docs/03-veri-modeli.md §1. Hepsi GLOBAL (site_id yok)."""
 
 import uuid
+from datetime import datetime
 from enum import StrEnum
 
-from sqlalchemy import CheckConstraint, ForeignKey, String, Text
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column, validates
 
@@ -47,6 +48,7 @@ class Site(Base):
         CheckConstraint(enum_check("property_kind", PropertyKind), name="property_kind"),
         CheckConstraint("fiscal_year_start_month BETWEEN 1 AND 12", name="fiscal_month"),
         CheckConstraint("slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'", name="slug_format"),
+        CheckConstraint("lifecycle_status IN ('setup', 'live')", name="lifecycle_status"),
     )
 
     name: Mapped[str] = mapped_column(Text)
@@ -65,6 +67,10 @@ class Site(Base):
     fiscal_year_start_month: Mapped[int] = mapped_column(default=1)
     iban: Mapped[str | None] = mapped_column(Text)
     bank_name: Mapped[str | None] = mapped_column(Text)
+    # Tesis yaşam döngüsü (YAP-01): platformun açtığı site "setup"; kontrol listesi tamamlanınca
+    # "live". Kurulumdaki sitede sakin daveti ve herkese açık kayıt kapalıdır.
+    lifecycle_status: Mapped[str] = mapped_column(Text, default="live", server_default="live")
+    went_live_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     @validates("name")
     def _set_name_key(self, _key: str, value: str) -> str:

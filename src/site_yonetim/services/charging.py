@@ -10,7 +10,7 @@ Motor girdisi sabit sayıda sorguyla kurulur (bölüm sayısından bağımsız �
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
@@ -46,7 +46,6 @@ from site_yonetim.domain.finance import (
     Frequency,
     LedgerSource,
     PayerRule,
-    PeriodStatus,
     ScopeKind,
 )
 from site_yonetim.domain.money import ZERO
@@ -70,8 +69,9 @@ from site_yonetim.models import (
     UnitType,
     UnitWeight,
 )
-from site_yonetim.services import ledger, summary
+from site_yonetim.services import ledger, period_lock, summary
 from site_yonetim.services.budget import current_plan
+from site_yonetim.services.structure import apply_due_attribute_changes
 
 BUSINESS_TZ = ZoneInfo("Europe/Istanbul")
 
@@ -298,6 +298,9 @@ async def prepare(
             "due_before_charge", "Vade tarihi tahakkuk tarihinden önce olamaz.", field="due_date"
         )
     items, not_due = await _items(session, plan, period)
+    # Tarihi gelmiş yürürlük tarihli öznitelikler (m², arsa payı, tip — YAP-02 S3) gece işini
+    # beklemeden uygulanır: tahakkuk, dönemin yürürlükteki değerini kullanır.
+    await apply_due_attribute_changes(session, today, datetime.now(UTC))
     data = ChargeInput(
         charge_date=charge_date,
         due_date=due_date,
@@ -312,19 +315,10 @@ async def prepare(
 # --- Kaydetme -----------------------------------------------------------------------
 
 
-async def _period_row(session: AsyncSession, period: YearMonth) -> Period:
-    row: Period | None = await session.scalar(
-        select(Period).where(Period.year == period.year, Period.month == period.month)
-    )
-    if row is None:  # dönem yoksa oluşturulur (docs/04 §7.1)
-        row = Period(year=period.year, month=period.month)
-        session.add(row)
-        await session.flush()
-    if row.status == PeriodStatus.CLOSED.value:
-        raise FinanceRuleError(
-            "period_closed", f"{period.name} dönemi kapalı; kayıt yazılamaz.", conflict=True
-        )
-    return row
+async def _period_row(session: AsyncSession, period: YearMonth, charge_date: date) -> Period:
+    """Dönem satırı (yoksa açılır, docs/04 §7.1); tahakkuk tarihi kilitli döneme düşemez."""
+    await period_lock.ensure_writable(session, charge_date)
+    return await period_lock.get_or_create(session, period)
 
 
 async def valid_run_of(session: AsyncSession, period_id: uuid.UUID) -> ChargeRun | None:
@@ -356,7 +350,7 @@ async def post(
     session: AsyncSession, prepared: PreparedRun, *, posted_by: str, now: datetime
 ) -> PostedRun:
     """Önizlemeyi kalıcı kayda çevirir (docs/04 §7.1). Transaction'ı çağıran yönetir."""
-    period_row = await _period_row(session, prepared.period)
+    period_row = await _period_row(session, prepared.period, prepared.charge_date)
     existing = await valid_run_of(session, period_row.id)
     if existing is not None:
         raise already_posted(prepared.period, existing)
@@ -417,6 +411,10 @@ async def post(
             )
         )
     await ledger.refresh_balances(session, [c.ledger_account_id for c in preview.charges])
+    # Sonraki tahakkuku bekleyen dönem dışı ücretler "ek kalemler" olarak aynı transaction'da.
+    from site_yonetim.services import ad_hoc_charges
+
+    await ad_hoc_charges.post_waiting(session, run, prepared.period)
     await summary.add(
         session,
         year=prepared.period.year,
@@ -470,6 +468,9 @@ async def reverse(
             conflict=True,
         )
     period = await run_period(session, locked)
+    # Kilitli döneme ait koşu ters kaydedilemez (özet ve koşu durumu o dönemi değiştirir).
+    await period_lock.ensure_writable(session, locked.charge_date, original=True)
+    await period_lock.ensure_writable(session, today)
     entries = list(
         await session.scalars(
             select(LedgerEntry)
@@ -515,7 +516,10 @@ async def reverse(
     )
     locked.status = ChargeRunStatus.REVERSED.value
     await session.flush()
-    await ledger.refresh_balances(session, [e.account_id for e in entries])
+    from site_yonetim.services import ad_hoc_charges
+
+    extra = await ad_hoc_charges.reverse_for_run(session, locked, today)
+    await ledger.refresh_balances(session, [e.account_id for e in entries] + extra)
     reversed_total = sum((e.debit - e.credit for e in entries), ZERO)
     await summary.add(session, year=period.year, month=period.month, charged=-reversed_total)
     return reversal

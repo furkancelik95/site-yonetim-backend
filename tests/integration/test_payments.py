@@ -154,12 +154,13 @@ async def test_payment_rules(charged: World) -> None:
 async def test_closed_account_and_closed_period(charged: World) -> None:
     with site_scope(charged.site_id):
         async with charged.factory() as session, session.begin():
-            await session.execute(update(Period).values(status="closed"))
+            await session.execute(update(Period).values(status="locked"))
     closed_period = await pay(charged, "10.00")
     assert closed_period.status_code == 409
-    assert (
-        closed_period.json()["error"]["message"]
-        == "06/2026 dönemi kapalı; bu tarihe tahsilat yazılamaz."
+    assert closed_period.json()["error"]["code"] == "period_locked"
+    assert closed_period.json()["error"]["message"] == (
+        "Tarih kilitli döneme düşüyor (Haziran 2026); kayıt yazılamaz — en erken Temmuz 2026 "
+        "(01.07.2026)."
     )
     with site_scope(charged.site_id):
         async with charged.factory() as session, session.begin():

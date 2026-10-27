@@ -4,11 +4,14 @@
 - Kendi bölümleri, kendi cari hesapları ve ekstresi, kendisine teslim edilen duyurular, kendi
   talepleri; sitenin gerçekleşen giderleri ve fatura görüntüsü (şeffaflık).
 - Başka kişinin hesabı/talebi "yok"tur (404). Duyuru ve talep modülü kapalıysa ilgili uç 404.
+- Talepler (HIZ-01, K18): kapanış onayı ve puan, iş başlamadan iptal, ücretli hizmet teklifine
+  karar; tadilat/taşınma başvurusu (HIZ-05). İç not (K26) bu uçların hiçbirinde dönmez.
 """
 
 import datetime as dt
 import uuid
-from typing import Annotated
+from http import HTTPStatus
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Query, status
 from fastapi.responses import Response
@@ -17,6 +20,7 @@ from sqlalchemy import and_, func, or_, select
 
 from site_yonetim.api.deps import (
     CurrentUserDep,
+    NowDep,
     SiteContext,
     SiteContextDep,
     TodayDep,
@@ -24,16 +28,24 @@ from site_yonetim.api.deps import (
 from site_yonetim.api.schemas import Money, Page, PageParams, Written
 from site_yonetim.api.v1 import announcements as announcements_api
 from site_yonetim.api.v1 import requests as requests_api
+from site_yonetim.api.v1 import service_desk as desk_api
 from site_yonetim.api.v1.charges import LineOut
 from site_yonetim.api.v1.expenses import StoreDep, send_document
 from site_yonetim.api.v1.payments import AccountOut, EntryOut, LastChargeOut, StatementOut
-from site_yonetim.core.errors import ForbiddenError, NotFoundError
+from site_yonetim.core.errors import ApiError, ForbiddenError, NotFoundError
 from site_yonetim.domain.finance import LedgerSource
 from site_yonetim.domain.modules import ModuleKey
 from site_yonetim.domain.money import ZERO
-from site_yonetim.domain.operations import STATUS_LABELS, RequestStatus
+from site_yonetim.domain.operations import (
+    ACTIVE_STATUSES,
+    STATUS_LABELS,
+    OperationRuleError,
+    RequestStatus,
+)
 from site_yonetim.domain.security import PackageStatus
+from site_yonetim.domain.service_desk import PermitType, RuleError
 from site_yonetim.domain.structure import AccountKind, PartyRole
+from site_yonetim.domain.text import format_money_tr
 from site_yonetim.models import (
     Block,
     Expense,
@@ -47,14 +59,18 @@ from site_yonetim.models import (
 from site_yonetim.models.audit import AuditAction, record
 from site_yonetim.services import accounts as accounts_svc
 from site_yonetim.services import announcements as announcements_svc
+from site_yonetim.services import paid_services as paid_svc
+from site_yonetim.services import permits as permits_svc
 from site_yonetim.services import requests as requests_svc
 from site_yonetim.services import security as security_svc
+from site_yonetim.services import service_desk as desk_svc
 from site_yonetim.services.expenses import realized, stored_file
 
 router = APIRouter(prefix="/sites/{slug}/resident", tags=["sakin"])
 Paging = Annotated[PageParams, Depends()]
 RECENT = 5
-OPEN = [RequestStatus.OPEN.value, RequestStatus.IN_PROGRESS.value, RequestStatus.WAITING.value]
+PERMITS_MAX = 100
+OPEN = [s.value for s in ACTIVE_STATUSES]
 
 
 async def resident(ctx: SiteContextDep) -> SiteContext:
@@ -78,7 +94,7 @@ def _module(ctx: SiteContext, key: ModuleKey) -> None:
         raise NotFoundError
 
 
-async def _my_accounts(ctx: SiteContext) -> list[accounts_svc.AccountRow]:
+async def my_accounts(ctx: SiteContext) -> list[accounts_svc.AccountRow]:
     rows = await ctx.session.execute(
         accounts_svc.accounts_query()
         .where(LedgerAccount.person_id == _person(ctx))
@@ -168,7 +184,7 @@ async def _units(ctx: SiteContext, today: dt.date) -> list[MyUnit]:
 
 @router.get("/home", summary="Sakin ana sayfası")
 async def home(ctx: Resident, today: TodayDep) -> HomeOut:
-    accounts = await _my_accounts(ctx)
+    accounts = await my_accounts(ctx)
     account_ids = [a.account.id for a in accounts]
     entries = list(
         await ctx.session.scalars(
@@ -238,7 +254,7 @@ async def statement(
         uuid.UUID | None, Query(description="birden çok hesabı varsa; boşsa oturan hesabı")
     ] = None,
 ) -> StatementOut:
-    accounts = await _my_accounts(ctx)
+    accounts = await my_accounts(ctx)
     if account_id is not None:
         chosen = next((a for a in accounts if a.account.id == account_id), None)
     else:  # varsayılan: oturan hesabı (aidat), yoksa ilk hesap
@@ -305,7 +321,7 @@ async def my_announcements(
 
 
 @router.get("/requests", summary="Kendi talepleri")
-async def my_requests(ctx: Resident, paging: Paging) -> Page[requests_api.RequestOut]:
+async def my_requests(ctx: Resident, paging: Paging, now: NowDep) -> Page[requests_api.RequestOut]:
     _module(ctx, ModuleKey.REQUESTS)
     query = requests_svc.list_query(
         status=None, category=None, priority=None, reporter=_person(ctx)
@@ -313,7 +329,7 @@ async def my_requests(ctx: Resident, paging: Paging) -> Page[requests_api.Reques
     total = await ctx.session.scalar(select(func.count()).select_from(query.subquery())) or 0
     rows = list(await ctx.session.scalars(query.offset(paging.offset).limit(paging.page_size)))
     return Page(
-        items=await requests_api.out(ctx, rows),
+        items=await requests_api.out(ctx, rows, now),
         page=paging.page,
         page_size=paging.page_size,
         total=total,
@@ -322,13 +338,192 @@ async def my_requests(ctx: Resident, paging: Paging) -> Page[requests_api.Reques
 
 @router.post("/requests", status_code=status.HTTP_201_CREATED, summary="Yeni talep")
 async def new_request(
-    ctx: Resident, body: requests_api.RequestCreate, current: CurrentUserDep, today: TodayDep
+    ctx: Resident,
+    body: requests_api.RequestCreate,
+    current: CurrentUserDep,
+    today: TodayDep,
+    now: NowDep,
 ) -> Written[requests_api.RequestDetail]:
-    """Talep her zaman sakinin kendi adına; bölüm verilirse kendi bölümü olmalı (422)."""
+    """Talep her zaman sakinin kendi adına; bölüm verilirse kendi bölümü olmalı (422). Öncelik
+    kategoriden gelir."""
     _module(ctx, ModuleKey.REQUESTS)
     return await requests_api.create_for(
-        ctx, body.model_copy(update={"reported_by_person_id": None}), current, today, own=True
+        ctx, body.model_copy(update={"reported_by_person_id": None}), current, today, now, own=True
     )
+
+
+async def _my_request(ctx: SiteContext, request_id: uuid.UUID) -> Request:
+    _module(ctx, ModuleKey.REQUESTS)
+    request = await requests_svc.get(ctx.session, request_id, for_update=True)
+    if request is None or request.reported_by_person_id != _person(ctx):
+        raise NotFoundError("Talep bulunamadı.")
+    return request
+
+
+class RequestConfirmIn(BaseModel):
+    solved: bool = Field(description="true: sorun çözüldü (puan zorunlu); false: devam ediyor")
+    score: int | None = Field(default=None, description="1–5")
+    comment: str | None = Field(default=None, max_length=300)
+
+
+@router.post("/requests/{request_id}/confirm", summary="Kapanış onayı ve memnuniyet puanı")
+async def confirm_request(
+    request_id: uuid.UUID,
+    body: RequestConfirmIn,
+    ctx: Resident,
+    current: CurrentUserDep,
+    now: NowDep,
+) -> Written[requests_api.RequestDetail]:
+    """Yalnız "çözüldü" talep (409 `not_resolved`). Çözüldü → talep kapanır; devam ediyor →
+    yeniden açılır. Puan ≤ eşik yöneticiye bildirilir."""
+    request = await _my_request(ctx, request_id)
+    try:
+        await desk_svc.confirm(
+            ctx.session, ctx.site, request, solved=body.solved, score=body.score,
+            comment=body.comment, person_id=_person(ctx), actor=current.user.full_name, now=now,
+        )  # fmt: skip
+    except RuleError as exc:
+        raise requests_api.form_error(exc) from exc
+    except OperationRuleError as exc:
+        raise requests_api.rule_error(exc) from exc
+    await ctx.session.commit()
+    message = (
+        "Teşekkürler; talep kapatıldı."
+        if body.solved
+        else "Talebiniz yeniden açıldı ve yönetime iletildi."
+    )
+    return Written(data=await requests_api.detail(ctx, request, now), message=message)
+
+
+class RequestCancelIn(BaseModel):
+    reason: str | None = Field(default=None, max_length=300)
+
+
+@router.post("/requests/{request_id}/cancel", summary="Talebi iptal et (iş başlamadan)")
+async def cancel_request(
+    request_id: uuid.UUID,
+    body: RequestCancelIn,
+    ctx: Resident,
+    current: CurrentUserDep,
+    now: NowDep,
+) -> Written[requests_api.RequestDetail]:
+    request = await _my_request(ctx, request_id)
+    try:
+        await requests_svc.cancel_by_resident(
+            ctx.session, request, body.reason, actor=current.user.full_name, now=now
+        )
+    except OperationRuleError as exc:
+        raise requests_api.rule_error(exc) from exc
+    await ctx.session.commit()
+    return Written(
+        data=await requests_api.detail(ctx, request, now),
+        message=f"#{request.number} numaralı talebiniz iptal edildi.",
+    )
+
+
+class QuoteDecisionIn(BaseModel):
+    decision: Literal["accept", "reject"]
+
+
+@router.post("/quotes/{quote_id}/decision", summary="Ücretli hizmet teklifine karar")
+async def quote_decision(
+    quote_id: uuid.UUID,
+    body: QuoteDecisionIn,
+    ctx: Resident,
+    current: CurrentUserDep,
+    now: NowDep,
+    today: TodayDep,
+) -> Written[requests_api.ServiceQuoteOut]:
+    """Karar, teklifin bölümünde bugün malik/kiracı/oturan olan sakindedir. Teklif aşamasında
+    onay/ret; gerçekleşen teklifi aşmışsa ek tutar onayı/reddi (ret → teklif tutarı)."""
+    _module(ctx, ModuleKey.REQUESTS)
+    quote = await paid_svc.get_quote(ctx.session, quote_id)
+    units = await requests_svc.person_unit_ids(ctx.session, _person(ctx), today)
+    request = await requests_svc.get(ctx.session, quote.request_id) if quote else None
+    if quote is None or request is None or quote.unit_id not in units:
+        raise NotFoundError("Teklif bulunamadı.")
+    try:
+        await paid_svc.decide(
+            ctx.session, quote, request, accept=body.decision == "accept",
+            actor=current.user.full_name, now=now, today=today,
+        )  # fmt: skip
+    except OperationRuleError as exc:
+        raise requests_api.rule_error(exc) from exc
+    lines = (await paid_svc.lines_of(ctx.session, [quote.id]))[quote.id]
+    data = requests_api.ServiceQuoteOut.of(quote, lines)
+    await ctx.session.commit()
+    if quote.billed_total is not None:
+        message = f"Kararınız kaydedildi; {format_money_tr(quote.billed_total)} borcunuza yansıdı."
+    elif body.decision == "accept":
+        message = "Teklifi onayladınız; iş planlanacak."
+    else:
+        message = "Teklifi reddettiniz; iş ücretli yapılmayacak."
+    return Written(data=data, message=message)
+
+
+# --- Tadilat ve taşınma --------------------------------------------------------------------
+
+
+class MyPermitsOut(BaseModel):
+    rules: desk_api.PermitRulesOut
+    items: list[desk_api.PermitOut]
+
+
+@router.get("/permits", summary="Tadilat ve taşınma başvurularım + kurallar")
+async def my_permits(ctx: Resident, today: TodayDep) -> MyPermitsOut:
+    _module(ctx, ModuleKey.REQUESTS)
+    units = await requests_svc.person_unit_ids(ctx.session, _person(ctx), today)
+    rows = list(
+        await ctx.session.scalars(
+            permits_svc.list_query(status=None, unit_ids=units).limit(PERMITS_MAX)
+        )
+    )
+    return MyPermitsOut(
+        rules=desk_api.PermitRulesOut.of(await permits_svc.rules(ctx.session)),
+        items=await desk_api.permits_out(ctx, rows),
+    )
+
+
+class PermitApplyIn(BaseModel):
+    unit_id: uuid.UUID | None = Field(default=None, description="boş: ilk bölümü")
+    type: PermitType
+    date_from: dt.date
+    date_to: dt.date | None = Field(default=None, description="yalnız tadilatta")
+    contractor: str | None = Field(default=None, max_length=80)
+    description: str = Field(max_length=500)
+
+
+@router.post("/permits", status_code=status.HTTP_201_CREATED, summary="Tadilat/taşınma başvurusu")
+async def apply_permit(
+    body: PermitApplyIn, ctx: Resident, current: CurrentUserDep, today: TodayDep
+) -> Written[desk_api.PermitOut]:
+    _module(ctx, ModuleKey.REQUESTS)
+    units = await _units(ctx, today)
+    own = {u.unit_id for u in units if u.role is not PartyRole.PROXY}
+    unit_id = body.unit_id or next(iter(u.unit_id for u in units if u.unit_id in own), None)
+    if unit_id is None or unit_id not in own:
+        message = "Yalnız kendi bölümünüz için başvurabilirsiniz."
+        raise ApiError(HTTPStatus.UNPROCESSABLE_ENTITY, "unit_not_yours", message,
+                       {"unit_id": message})  # fmt: skip
+    try:
+        permit = await permits_svc.apply(
+            ctx.session,
+            permits_svc.PermitData(
+                unit_id, body.type, body.date_from, body.date_to, body.contractor,
+                body.description,
+            ),
+            person_id=_person(ctx), actor=current.user.full_name, today=today,
+        )  # fmt: skip
+    except RuleError as exc:
+        raise requests_api.form_error(exc) from exc
+    [data] = await desk_api.permits_out(ctx, [permit])
+    await ctx.session.commit()
+    message = (
+        "Tadilat başvurunuz yönetime iletildi; onaylanınca çalışma saatleri size bildirilir."
+        if body.type is PermitType.RENOVATION
+        else "Taşınma bildiriminiz alındı; asansör ve yükleme alanı için rezervasyon önerilir."
+    )
+    return Written(data=data, message=message)
 
 
 # --- Kargolarım -------------------------------------------------------------------------

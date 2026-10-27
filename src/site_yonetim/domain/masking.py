@@ -56,11 +56,22 @@ SENSITIVE_COLUMNS: dict[str, Callable[[str], str]] = {
     "leave_note": mask_all,
     "qr_code": mask_all,  # giriş-çıkış doğrulama kodu
     "sms_api_key_sealed": mask_all,  # §4.7: sağlayıcı anahtarı (şifreli bile olsa) yazılmaz
+    "to_phone": mask_phone,  # OPS-01: anahtarı teslim alanın telefonu
+    "authorized": mask_all,  # OPS-01: emanet anahtar yetkili kişileri (ad + telefon listesi)
 }
 
 
 def mask_value(column: str, value: object) -> object:
     masker = SENSITIVE_COLUMNS.get(column)
+    if masker is mask_all and isinstance(value, (list, dict)) and value:
+        return mask_all("")  # JSON değer (ör. kişi listesi) bütünüyle gizlenir
     if masker is None or not isinstance(value, str) or not value:
         return value
     return masker(value)
+
+
+def mask_phone_display(value: str) -> str:
+    """Ekranda maskeli telefon: "+905321112233" → "+90 532 *** ** 33" (YAP-03 S2)."""
+    if value.startswith("+90") and len(value) == 13:
+        return f"+90 {value[3:6]} *** ** {value[-2:]}"
+    return mask_phone(value)

@@ -11,13 +11,12 @@
 
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, time
+from datetime import UTC, datetime, time
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from site_yonetim.db.tenancy import all_sites_scope, site_scope
-from site_yonetim.domain.access import ROLE_PERMISSIONS
 from site_yonetim.domain.notifications import NotificationCategory, NotificationChannel
 from site_yonetim.domain.scheduled_reports import (
     FREQUENCY_LABELS,
@@ -34,7 +33,7 @@ from site_yonetim.domain.scheduled_reports import (
 from site_yonetim.models import ScheduledReport, ScheduledReportRun, Site
 from site_yonetim.models.audit import Actor, set_actor
 from site_yonetim.services import delivery
-from site_yonetim.services import members as members_svc
+from site_yonetim.services import roles as roles_svc
 
 JOB_ACTOR = "Planlı rapor işi"
 
@@ -53,16 +52,15 @@ class Recipient:
 
 
 async def eligible_recipients(
-    session: AsyncSession, site: Site, report_key: str
+    session: AsyncSession, site: Site, report_key: str, now: datetime | None = None
 ) -> dict[uuid.UUID, Recipient]:
-    """Raporun verisine yetkili, etkin site kullanıcıları (e-postası olanlar gönderim alır)."""
+    """Raporun verisine (tesis genelinde) yetkili, etkin site kullanıcıları — e-postası olanlar
+    gönderim alır. Blokla sınırlı rol tesis raporu için yetki saymaz."""
     kind = REPORT_KINDS[report_key]
     return {
-        m.user.id: Recipient(m.user.id, m.user.full_name, m.user.email)
-        for m in await members_svc.list_members(session, site)
-        if m.is_active
-        and m.user.is_active
-        and kind.permission in {p.value for p in ROLE_PERMISSIONS[m.role]}
+        h.user.id: Recipient(h.user.id, h.user.full_name, h.user.email)
+        for h in await roles_svc.holders(session, site, now or datetime.now(UTC))
+        if kind.permission in {p.value for p in h.permissions}
     }
 
 

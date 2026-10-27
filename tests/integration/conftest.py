@@ -34,6 +34,7 @@ from site_yonetim.main import create_app
 from site_yonetim.models import Block, Site, Unit
 from tests.conftest import SettingsFactory
 from tests.integration.finance_world import world
+from tests.integration.gatehouse_world import gw
 from tests.integration.helpers import (
     DEFAULT_PASSWORD,
     add_site_membership,
@@ -41,7 +42,14 @@ from tests.integration.helpers import (
     login_headers,
 )
 
-__all__ = ["DEFAULT_PASSWORD", "add_site_membership", "create_user", "login_headers", "world"]
+__all__ = [
+    "DEFAULT_PASSWORD",
+    "add_site_membership",
+    "create_user",
+    "gw",
+    "login_headers",
+    "world",
+]
 
 ROOT = Path(__file__).resolve().parents[2]
 

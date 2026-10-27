@@ -29,14 +29,16 @@ from site_yonetim.api.v1.members import form_error
 from site_yonetim.core.errors import ApiError, NotFoundError
 from site_yonetim.db.tenancy import site_scope
 from site_yonetim.domain.access import Permission
+from site_yonetim.domain.invitations import SiteLifecycle
 from site_yonetim.domain.masking import mask_phone
 from site_yonetim.domain.members import FormFieldError, Relation, check_applicant
 from site_yonetim.domain.notifications import NotificationCategory, NotificationChannel
 from site_yonetim.domain.structure import StructureRuleError
-from site_yonetim.models import Registration
+from site_yonetim.models import Registration, Unit
 from site_yonetim.models.audit import AuditAction, record
 from site_yonetim.services import delivery, rate_limit
 from site_yonetim.services import registrations as svc
+from site_yonetim.services.vehicles import read_settings
 
 router = APIRouter(prefix="/sites/{slug}", tags=["kayıt başvuruları"])
 public_router = APIRouter(prefix="/public/registration", tags=["herkese açık"])
@@ -123,9 +125,15 @@ class RegistrationOut(BaseModel):
     decided_by: str | None
     reject_reason: str | None
     unit_name: str | None
+    requested_unit_id: uuid.UUID | None = Field(
+        default=None, description="başvuranın listeden seçtiği bölüm (onayda önerilir)"
+    )
+    requested_unit_name: str | None = None
 
     @classmethod
-    def of(cls, r: Registration, unit_name: str | None) -> RegistrationOut:
+    def of(
+        cls, r: Registration, unit_name: str | None, requested_name: str | None = None
+    ) -> RegistrationOut:
         return cls(
             id=r.id,
             reference=svc.reference(r.number),
@@ -142,6 +150,8 @@ class RegistrationOut(BaseModel):
             decided_by=r.decided_by_name,
             reject_reason=r.reject_reason,
             unit_name=unit_name,
+            requested_unit_id=r.requested_unit_id,
+            requested_unit_name=requested_name,
         )
 
 
@@ -156,9 +166,19 @@ async def list_registrations(
     query = svc.list_query(status_)
     total = await ctx.session.scalar(select(func.count()).select_from(query.subquery())) or 0
     rows = list(await ctx.session.scalars(query.offset(paging.offset).limit(paging.page_size)))
-    names = await svc.unit_names(ctx.session, {r.unit_id for r in rows if r.unit_id})
+    ids = {r.unit_id for r in rows if r.unit_id} | {
+        r.requested_unit_id for r in rows if r.requested_unit_id
+    }
+    names = await svc.unit_names(ctx.session, ids)
     return Page(
-        items=[RegistrationOut.of(r, names.get(r.unit_id) if r.unit_id else None) for r in rows],
+        items=[
+            RegistrationOut.of(
+                r,
+                names.get(r.unit_id) if r.unit_id else None,
+                names.get(r.requested_unit_id) if r.requested_unit_id else None,
+            )
+            for r in rows
+        ],
         page=paging.page,
         page_size=paging.page_size,
         total=total,
@@ -308,20 +328,76 @@ async def _limit(
         )
 
 
+class PublicUnitOut(BaseModel):
+    id: uuid.UUID
+    name: str
+
+
+class PublicBlockOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    units: list[PublicUnitOut]
+
+
 class PublicSiteOut(BaseModel):
     site_name: str
     site_slug: str
+    blocks: list[PublicBlockOut] = Field(
+        description="yalnız blok ve bölüm adları — kişi bilgisi yok (KVKK)"
+    )
+    document_required: bool = Field(
+        description="malik başvurusunda belge (ortak kararı bekliyor; yükleme henüz yok)"
+    )
+    relations: list[Relation]
 
 
-@public_router.get("/{code}", summary="Kayıt formu: yalnız site adı")
+async def _open_site(factory: FactoryDep, code: str) -> svc.PublicSite:
+    """Kod geçerli, site canlı ve QR/site kodu yöntemlerinden biri açık olmalı (istek 23)."""
+    site = await svc.site_by_code(factory, code)
+    if site is None:
+        raise _not_found()
+    if site.lifecycle_status != SiteLifecycle.LIVE.value:
+        raise ApiError(
+            HTTPStatus.CONFLICT,
+            "site_not_live",
+            "Bu site henüz kayıt kabul etmiyor. Site yönetiminizle iletişime geçin.",
+        )
+    with site_scope(site.site_id):
+        async with factory() as session:
+            config = await read_settings(session)
+    if not (config.qr_enabled or config.code_enabled):
+        raise ApiError(
+            HTTPStatus.NOT_FOUND,
+            "method_disabled",
+            "Bu site bu yöntemle başvuru kabul etmiyor. Site yönetiminizle iletişime geçin.",
+        )
+    return site
+
+
+@public_router.get("/{code}", summary="Kayıt formu: site adı, blok/bölüm adları")
 async def public_site(
     code: str, request: Request, factory: FactoryDep, now: NowDep
 ) -> PublicSiteOut:
     await _limit(factory, request, now, "get", PUBLIC_GET_LIMIT)
-    site = await svc.site_by_code(factory, code)
-    if site is None:
-        raise _not_found()
-    return PublicSiteOut(site_name=site.name, site_slug=site.slug)
+    site = await _open_site(factory, code)
+    with site_scope(site.site_id):
+        async with factory() as session:
+            blocks = await svc.public_blocks(session)
+            config = await read_settings(session)
+    return PublicSiteOut(
+        site_name=site.name,
+        site_slug=site.slug,
+        blocks=[
+            PublicBlockOut(
+                id=b.id,
+                name=b.name,
+                units=[PublicUnitOut(id=i, name=n) for i, n in b.units],
+            )
+            for b in blocks
+        ],
+        document_required=config.owner_document_required,
+        relations=[Relation.OWNER, Relation.TENANT],
+    )
 
 
 class ApplicationIn(BaseModel):
@@ -333,6 +409,9 @@ class ApplicationIn(BaseModel):
     relation: str | None = Field(default=None, max_length=20)
     explicit_consent: bool = False
     kvkk_ack: bool = False
+    unit_id: uuid.UUID | None = Field(
+        default=None, description="listeden seçilen bölüm (isteğe bağlı; unit_text yine gönderilir)"
+    )
 
 
 class ReferenceOut(BaseModel):
@@ -344,9 +423,7 @@ async def public_apply(
     code: str, body: ApplicationIn, request: Request, factory: FactoryDep, now: NowDep
 ) -> Written[ReferenceOut]:
     await _limit(factory, request, now, "post", PUBLIC_POST_LIMIT)
-    site = await svc.site_by_code(factory, code)
-    if site is None:
-        raise _not_found()
+    site = await _open_site(factory, code)
     try:
         applicant = check_applicant(
             first_name=body.first_name,
@@ -362,9 +439,27 @@ async def public_apply(
     ip = request.client.host if request.client else None
     with site_scope(site.site_id):
         async with factory() as session, session.begin():
+            unit_id = None
+            if body.unit_id is not None:
+                found = await session.scalar(
+                    select(Unit.id).where(Unit.id == body.unit_id, Unit.is_active)
+                )
+                if found is None:
+                    raise ApiError(
+                        HTTPStatus.UNPROCESSABLE_ENTITY,
+                        "validation_error",
+                        "Formda düzeltilmesi gereken alanlar var.",
+                        {"unit_id": "Seçilen bölüm bulunamadı."},
+                    )
+                unit_id = found
             try:
                 registration = await svc.submit(
-                    session, applicant, explicit_consent=body.explicit_consent, now=now, ip=ip
+                    session,
+                    applicant,
+                    explicit_consent=body.explicit_consent,
+                    now=now,
+                    ip=ip,
+                    unit_id=unit_id,
                 )
             except svc.RegistrationRuleError as exc:
                 raise _rule(exc) from exc

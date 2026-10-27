@@ -31,8 +31,10 @@ _RECOVERY_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"  # karışan harfler yok 
 STEP_UP_WINDOW = timedelta(minutes=5)
 PHONE_CHANGE_STEP_UP = timedelta(hours=24)
 
-# Yönetici rolleri (Ürün Dokümanı §6.5): şablon adları domain/access.SiteRole değerleriyle aynı.
-MFA_SITE_ROLES = frozenset({"Yönetici", "Yönetim Kurulu Üyesi", "Denetçi", "Muhasebe"})
+# Yönetici rolleri (Ürün Dokümanı §6.5: yönetici, muhasebe, YK, İK, şirket rolleri): rol düzeyi
+# (K20, P18 — 1 en üst) bu değer ve üstündeyse 2FA zorunlu. Şablonlarda yönetici 1, YK 2,
+# denetçi/muhasebe/İK 3; saha rolleri 4, sakin 9. Siteye özel rol kendi düzeyiyle değerlendirilir.
+MFA_MAX_LEVEL = 3
 
 
 def new_secret() -> str:
@@ -118,12 +120,12 @@ def looks_like_recovery_code(code: str) -> bool:
 
 
 def requires_mfa(
-    *, is_platform_admin: bool, site_roles: Iterable[str], has_organization_role: bool
+    *, is_platform_admin: bool, role_levels: Iterable[int], has_organization_role: bool
 ) -> bool:
     """Bu kullanıcı yönetici rolünde mi (iki adımlı doğrulama zorunlu)?"""
     if is_platform_admin or has_organization_role:
         return True
-    return any(role in MFA_SITE_ROLES for role in site_roles)
+    return any(level <= MFA_MAX_LEVEL for level in role_levels)
 
 
 @dataclass(frozen=True, slots=True)

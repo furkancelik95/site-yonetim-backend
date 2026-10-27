@@ -291,12 +291,10 @@ async def _quota_warning(
     session: AsyncSession, site: Site, usage: QuotaUsage, percent: int, month: str
 ) -> None:
     from site_yonetim.domain.access import Permission
-    from site_yonetim.services import members as members_svc
     from site_yonetim.services import notifications as notifications_svc
+    from site_yonetim.services import roles as roles_svc
 
-    managers = await members_svc.users_with_permission(
-        session, site, Permission.NOTIFICATIONS_MANAGE
-    )
+    managers = await roles_svc.permission_holders(session, site, Permission.NOTIFICATIONS_MANAGE)
     title = (
         "SMS kotası doldu; gönderim sürüyor, aşım faturaya yansır"
         if percent >= 100

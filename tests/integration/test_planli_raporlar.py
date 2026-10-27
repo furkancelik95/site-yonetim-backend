@@ -9,7 +9,7 @@ from typing import Any
 from sqlalchemy import select, update
 
 from site_yonetim.db.tenancy import site_scope
-from site_yonetim.models import NotificationDelivery, ScheduledReportRun, SiteMembership
+from site_yonetim.models import NotificationDelivery, ScheduledReportRun, SiteRoleAssignment
 from site_yonetim.services import scheduled_reports as svc
 from tests.integration.finance_world import World
 from tests.integration.helpers import add_site_membership, create_user, login_headers
@@ -122,10 +122,11 @@ async def test_alicinin_yetkisi_kalkarsa_gonderilmez(world: World) -> None:
     created = (await world.post("/scheduled-reports", body([str(acc.id)]))).json()["data"]
     with site_scope(world.site_id):
         async with world.factory() as session, session.begin():
+            # P18: rol ataması tabloda — muhasebe rolü teknik personele çevrilir
             await session.execute(
-                update(SiteMembership)
-                .where(SiteMembership.user_id == acc.id)
-                .values(role="Teknik Personel")
+                update(SiteRoleAssignment)
+                .where(SiteRoleAssignment.user_id == acc.id)
+                .values(role_key="technical")
             )
     run = await world.post(f"/scheduled-reports/{created['id']}/run")
     assert run.json()["data"]["status"] == "skipped"

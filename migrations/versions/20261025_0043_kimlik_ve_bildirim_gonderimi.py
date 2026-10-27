@@ -17,7 +17,7 @@ Veri silinmez. Downgrade: e-postası/parolası boş satırlar eski NOT NULL kıs
 kullanılamaz yer tutucu alır (parola: geçersiz hash; e-posta: `<id>@telefon.invalid`).
 
 Revision ID: 0043
-Revises: 0029
+Revises: 0027
 Create Date: 2026-10-27 01:58:41.727920
 """
 
@@ -30,7 +30,7 @@ from sqlalchemy.dialects import postgresql
 from site_yonetim.db.rls import disable_tenant_rls, enable_tenant_rls
 
 revision: str = "0043"
-down_revision: str | None = "0029"
+down_revision: str | None = "0027"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

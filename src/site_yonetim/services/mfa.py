@@ -49,7 +49,7 @@ def required_for(access: UserAccess) -> bool:
     """Kullanıcı yönetici rolünde mi (2FA zorunlu)?"""
     return requires_mfa(
         is_platform_admin=access.is_platform_admin,
-        site_roles=[s.role.value for s in access.sites],
+        role_levels=[g.level for s in access.sites for g in s.roles],
         has_organization_role=any(s.organization_role is not None for s in access.sites),
     )
 

@@ -45,10 +45,10 @@ from site_yonetim.domain.otp import OtpChannel, OtpPurpose, RequestBlock, Verify
 from site_yonetim.domain.validation import normalize_email_address, normalize_phone
 from site_yonetim.models import AuthEventKind, User
 from site_yonetim.services import auth as auth_service
-from site_yonetim.services import invitations as invitations_svc
 from site_yonetim.services import login_throttle, rate_limit
 from site_yonetim.services import mfa as mfa_svc
 from site_yonetim.services import otp as otp_svc
+from site_yonetim.services import user_invitations as invitations_svc
 from site_yonetim.services.access import load_user_access
 
 router = APIRouter(prefix="/auth", tags=["kimlik"])

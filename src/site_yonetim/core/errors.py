@@ -194,6 +194,15 @@ async def _unhandled_error_handler(_: Request, exc: Exception) -> JSONResponse:
     return JSONResponse(status_code=500, content=error_body(*_INTERNAL_ERROR))
 
 
+def api_error_response(exc: ApiError) -> JSONResponse:
+    """ApiError'ın standart yanıtı — katman dışı hata türlerini çeviren işleyiciler için."""
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=error_body(exc.code, exc.message, exc.fields),
+        headers=exc.headers,
+    )
+
+
 def install_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(ApiError, _api_error_handler)
     app.add_exception_handler(StarletteHTTPException, _http_error_handler)

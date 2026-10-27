@@ -16,7 +16,15 @@ from sqlalchemy.exc import DBAPIError
 
 from site_yonetim.api.deps import get_now
 from site_yonetim.db.tenancy import site_scope
-from site_yonetim.models import AuditLog, Notification, Plan, Site, SiteMembership, StaffMember
+from site_yonetim.models import (
+    AuditLog,
+    Notification,
+    Plan,
+    Site,
+    SiteMembership,
+    SiteRoleAssignment,
+    StaffMember,
+)
 from site_yonetim.services import staff as staff_svc
 from tests.integration.finance_world import World
 from tests.integration.helpers import add_site_membership, create_user, login_headers
@@ -437,7 +445,7 @@ async def test_izin_yetki_kendi_izni_ve_izolasyon(hr: World) -> None:
     with site_scope(w.site_id):
         async with w.factory() as session:
             manager_id = await session.scalar(
-                select(SiteMembership.user_id).where(SiteMembership.role == "Yönetici")
+                select(SiteRoleAssignment.user_id).where(SiteRoleAssignment.role_key == "manager")
             )
     mine = await add_staff(w, full_name="Kerem Yıldırım", user_id=str(manager_id))
     own = (

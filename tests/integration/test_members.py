@@ -11,6 +11,7 @@ import httpx2
 import pytest
 
 from site_yonetim.db.tenancy import site_scope
+from site_yonetim.domain.access import Permission
 from site_yonetim.models import Organization, OrganizationMembership, Site
 from site_yonetim.services import members as svc
 from tests.integration.finance_world import World
@@ -53,17 +54,15 @@ async def members(w: World) -> list[dict[str, Any]]:
     return items
 
 
-async def test_roller_sabit_liste(world: World) -> None:
+async def test_rol_sablonlari_listesi(world: World) -> None:
     roles = (await world.get("/roles")).json()
-    assert [r["key"] for r in roles] == [
-        "manager",
-        "board",
-        "auditor",
-        "accounting",
-        "security",
-        "technical",
-    ]
+    assert {r["key"] for r in roles} == {
+        "manager", "board", "auditor", "accounting", "hr", "security", "technical", "attendant",
+    }  # fmt: skip
     assert roles[0]["name"] == "Yönetici"
+    assert roles[0]["level"] == 1
+    assert roles[0]["holder_count"] == 1
+    assert {r["kind"] for r in roles} == {"system"}
 
 
 async def test_yeni_kullanici_davetle(world: World) -> None:
@@ -150,7 +149,9 @@ async def test_rol_degistir_kapat_ac(world: World) -> None:
     reopened = await patch(world, member_id, {"is_active": True})
     assert reopened.json()["message"] == "Selin Arı erişimi yeniden açıldı."
     roles = await world.get("/audit", params={"entity": "site_memberships", "action": "update"})
-    assert roles.json()["total"] == 3
+    assert roles.json()["total"] == 2  # kapat + aç; rol değişikliği atamadadır
+    assignments = await world.get("/audit", params={"entity": "site_role_assignments"})
+    assert assignments.json()["total"] == 4  # Kerem (kurgu), muhasebe ata, YK ata, muhasebe kapat
 
 
 async def test_kendi_kaydi_ve_son_yonetici(world: World) -> None:
@@ -166,7 +167,8 @@ async def test_kendi_kaydi_ve_son_yonetici(world: World) -> None:
             with pytest.raises(svc.MemberRuleError) as exc:
                 await svc.update_member(
                     session, site, uuid.UUID(kerem["id"]), role_key=None, is_active=False,
-                    actor_id=uuid.uuid4(), now=datetime.now(UTC),
+                    actor=svc.Actor(uuid.uuid4(), "Başka", frozenset(Permission)),
+                    now=datetime.now(UTC),
                 )  # fmt: skip
             assert exc.value.code == "last_manager"
     # ikinci yönetici varken ilki düşürülebilir

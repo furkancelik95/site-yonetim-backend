@@ -37,6 +37,10 @@ PUBLIC_ROUTES = {
     "/api/v1/auth/password/reset",
     "/api/v1/auth/invitations/{token}",
     "/api/v1/auth/invitations/{token}/accept",
+    # Davetle kayıt (servis isteği 23): IP başına istek sınırı, belirtecin yalnız özeti saklanır,
+    # telefon davetteki numarayla tam eşleşmeli; yanıt yalnız site/bölüm adı ve son 4 hane.
+    "/api/v1/public/invitations/{token}",
+    "/api/v1/public/invitations/{token}/accept",
 }
 # Geçici parolalı oturumun erişebildiği uçlar (docs/05 §8.1). Gerisi `password_changed` ister.
 PASSWORD_PENDING_ROUTES = {
