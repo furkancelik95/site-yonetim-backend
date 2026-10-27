@@ -33,7 +33,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from site_yonetim.db.base import Base, TenantMixin, enum_check, tenant_fk, tenant_table_args
 from site_yonetim.domain.debt_tracking import (
     ActionKind,
-    Channel,
+    CollectionChannel,
     LetterMethod,
     LetterStatus,
     PlanStatus,
@@ -113,7 +113,9 @@ class CollectionAction(TenantMixin, Base):
     __table_args__ = tenant_table_args(
         tenant_fk("account_id", "ledger_accounts"),
         CheckConstraint(enum_check("kind", ActionKind), name="kind"),
-        CheckConstraint(f"channel IS NULL OR {enum_check('channel', Channel)}", name="channel"),
+        CheckConstraint(
+            f"channel IS NULL OR {enum_check('channel', CollectionChannel)}", name="channel"
+        ),
         CheckConstraint(
             "stage IS NULL OR stage IN ('app', 'sms', 'call', 'demand_letter')", name="stage"
         ),

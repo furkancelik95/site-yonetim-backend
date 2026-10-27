@@ -4,7 +4,8 @@ Tüm modüllerin onayları tek servisten geçer (`services/approvals.py`); burad
 kural eşleştirme, tutar aralığı çakışması, gerekli onay sayısı (M-of-N), adım sonucu, süre.
 
 Kurala bağlı kararlar (Furkan, 19.10.2026 — docs/12 K20):
-- Rol sırası tanımsız: eskalasyon hedefi kuralda açıkça seçilir; seçilmezse yalnız hatırlatma.
+- Eskalasyon hedefi kuralda açıkça seçilir; seçilmezse yalnız hatırlatma. Rol sırası (K20, rol
+  düzeyi) yalnız **öneri** verir (`domain/roles.suggest_escalation`).
 - Tutar aralığı **(alt, üst]**: alt sınır hariç, üst sınır dahil — dokümanın "≤ 10.000 → site
   yöneticisi; 10.000–100.000 → …; > 100.000 → …" örneğiyle aynı.
 - Hiçbir kural eşleşmezse varsayılan: tek adım, site yöneticisi, 1/1 (ONY-01).
@@ -43,6 +44,7 @@ class ActionType(StrEnum):
     REGISTRATION = "registration"  # kayıt başvurusu
     STOCK_COUNT_DIFFERENCE = "stock_count_difference"  # stok sayım farkı
     APPROVAL_RULE_CHANGE = "approval_rule_change"  # onay kuralı değişikliği
+    OWNERSHIP_TRANSFER = "ownership_transfer"  # malik değişimi: satış / veraset (YAP-04)
     LEAVE_REQUEST = "leave_request"  # izin talebi (IK-03)
     PERIOD_UNLOCK = "period_unlock"  # dönem kilidi açma (FIN-13)
     CASH_DIFFERENCE = "cash_difference"  # kasa sayım farkı (FIN-11)
@@ -51,6 +53,7 @@ class ActionType(StrEnum):
     DEMAND_LETTER = "demand_letter"  # ihtarname (FIN-12)
     BUDGET = "budget"  # yıllık bütçe ve işletme projesi kesinleştirme (FIN-17, D-16)
     CHARGE_ADJUSTMENT = "charge_adjustment"  # kesinleşmiş tahakkukta satır düzeltmesi (FIN-05)
+    TRANSPARENCY_REPORT = "transparency_report"  # şeffaflık raporu yayını (RAP-02)
 
 
 ACTION_LABELS: dict[ActionType, str] = {
@@ -73,6 +76,7 @@ ACTION_LABELS: dict[ActionType, str] = {
     ActionType.REGISTRATION: "Kayıt başvurusu",
     ActionType.STOCK_COUNT_DIFFERENCE: "Stok sayım farkı",
     ActionType.APPROVAL_RULE_CHANGE: "Onay kuralı değişikliği",
+    ActionType.OWNERSHIP_TRANSFER: "Malik değişimi (satış / veraset)",
     ActionType.LEAVE_REQUEST: "İzin talebi",
     ActionType.PERIOD_UNLOCK: "Dönem kilidi açma",
     ActionType.CASH_DIFFERENCE: "Kasa farkı",
@@ -81,6 +85,7 @@ ACTION_LABELS: dict[ActionType, str] = {
     ActionType.DEMAND_LETTER: "İhtarname",
     ActionType.BUDGET: "Bütçe",
     ActionType.CHARGE_ADJUSTMENT: "Tahakkuk düzeltme",
+    ActionType.TRANSPARENCY_REPORT: "Şeffaflık raporu",
 }
 
 
@@ -151,7 +156,7 @@ class Quorum:
 
 @dataclass(frozen=True, slots=True)
 class Step:
-    roles: tuple[SiteRole, ...]
+    roles: tuple[str, ...]  # rol adları (hazır şablon ya da siteye özel rol)
     quorum: Quorum
 
 
@@ -218,7 +223,7 @@ def coverage_gaps(conditions: list[Condition]) -> list[tuple[Decimal | None, Dec
     return gaps
 
 
-DEFAULT_STEPS = (Step((SiteRole.MANAGER,), Quorum(QuorumKind.ANY)),)
+DEFAULT_STEPS = (Step((SiteRole.MANAGER.value,), Quorum(QuorumKind.ANY)),)
 
 
 # --- Adım sonucu --------------------------------------------------------------------------

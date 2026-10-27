@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from site_yonetim.db.tenancy import all_sites_scope
 from site_yonetim.domain.money import EPSILON, ZERO
-from site_yonetim.domain.operations import RequestStatus
+from site_yonetim.domain.operations import ACTIVE_STATUSES
 from site_yonetim.domain.reports import percent
 from site_yonetim.models import (
     AccountBalance,
@@ -32,7 +32,7 @@ from site_yonetim.models import (
     Unit,
 )
 
-OPEN = [RequestStatus.OPEN.value, RequestStatus.IN_PROGRESS.value, RequestStatus.WAITING.value]
+OPEN = [s.value for s in ACTIVE_STATUSES]
 
 
 async def unit_counts(

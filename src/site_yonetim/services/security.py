@@ -11,9 +11,10 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime
 
-from sqlalchemy import Select, and_, func, or_, select
+from sqlalchemy import Select, and_, func, or_, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from site_yonetim.domain.gatehouse import normalize_plate
 from site_yonetim.domain.operations import OperationRuleError
 from site_yonetim.domain.security import (
     PICKUP_CODE_MAX,
@@ -26,8 +27,18 @@ from site_yonetim.domain.security import (
     check_exit,
 )
 from site_yonetim.domain.structure import PartyRole
-from site_yonetim.domain.text import tr_lower, tr_upper
-from site_yonetim.models import Block, Package, Person, Unit, UnitParty, Visitor
+from site_yonetim.domain.text import tr_lower
+from site_yonetim.domain.vehicles import VehicleStatus
+from site_yonetim.models import (
+    Block,
+    Package,
+    Person,
+    SecuritySettings,
+    Unit,
+    UnitParty,
+    Vehicle,
+    Visitor,
+)
 
 LOOKUP_LIMIT = 20
 OCCUPANT_ROLES = (PartyRole.TENANT.value, PartyRole.RESIDENT.value)
@@ -47,6 +58,9 @@ def new_pickup_code() -> str:
 async def _require_unit(session: AsyncSession, unit_id: uuid.UUID) -> None:
     if await session.scalar(select(Unit.id).where(Unit.id == unit_id)) is None:
         raise OperationRuleError("unit_not_found", "Seçilen bölüm bulunamadı.", field="unit_id")
+
+
+require_unit = _require_unit  # diğer kapı servisleri için
 
 
 async def _require_person(session: AsyncSession, person_id: uuid.UUID | None, field: str) -> None:
@@ -129,10 +143,29 @@ async def deliver_package(
     return package
 
 
+def units_in(block_ids: frozenset[uuid.UUID]) -> Select[uuid.UUID]:
+    """Blok kapsamlı güvenlik ataması (PLT-09): yalnız bu blokların bölümleri."""
+    return select(Unit.id).where(Unit.block_id.in_(block_ids))
+
+
+async def unit_in_blocks(
+    session: AsyncSession, unit_id: uuid.UUID, block_ids: frozenset[uuid.UUID] | None
+) -> bool:
+    if block_ids is None:
+        return True
+    block = await session.scalar(select(Unit.block_id).where(Unit.id == unit_id))
+    return block is None or block in block_ids  # bölüm yoksa iş kuralı ayrıca 422 verir
+
+
 def packages_query(
-    *, status: PackageStatus | None, unit_ids: set[uuid.UUID] | None = None
+    *,
+    status: PackageStatus | None,
+    unit_ids: set[uuid.UUID] | None = None,
+    block_ids: frozenset[uuid.UUID] | None = None,
 ) -> Select[Package]:
     query = select(Package)
+    if block_ids is not None:
+        query = query.where(Package.unit_id.in_(units_in(block_ids)))
     if status is not None:
         query = query.where(Package.status == status.value)
     if unit_ids is not None:
@@ -180,13 +213,16 @@ async def record_visitor(
         raise OperationRuleError(
             "invalid_name", "Ziyaretçinin adını yazın (en az 2 karakter).", field="full_name"
         )
-    plate = tr_upper("".join((data.plate_number or "").split()))[:15] or None
+    # Site ayarında kapalı alan kaydedilmez (GUV-08: toplanacak alanları site seçer).
+    fields = await session.scalar(select(SecuritySettings.visitor_fields)) or {}
+    plate = normalize_plate(data.plate_number) or None if fields.get("plate", True) else None
+    phone = _clean(data.phone, 20) if fields.get("phone", False) else None
     enter = data.enter_now and data.expected_on in (None, today)
     visitor = Visitor(
         unit_id=data.unit_id,
         host_person_id=data.host_person_id,
         full_name=name,
-        phone=_clean(data.phone, 20),
+        phone=phone,
         plate_number=plate,
         kind=data.kind.value,
         expected_on=data.expected_on,
@@ -224,8 +260,25 @@ async def exit_(session: AsyncSession, visitor: Visitor, now: datetime) -> Visit
     return visitor
 
 
-def visitors_query(day: date, status: VisitorStatus | None) -> Select[Visitor]:
-    query = select(Visitor).where(Visitor.visit_date == day)
+def visitors_query(
+    day: date | None,
+    status: VisitorStatus | None,
+    block_ids: frozenset[uuid.UUID] | None = None,
+    *,
+    unit_id: uuid.UUID | None = None,
+    since: date | None = None,
+) -> Select[Visitor]:
+    """`day` verilirse o gün; yoksa `since` ve sonrası (bölüm kartı: son 30 gün).
+    `block_ids`: blok kapsamlı görevli yalnız kendi bloklarını görür."""
+    query = select(Visitor)
+    if day is not None:
+        query = query.where(Visitor.visit_date == day)
+    elif since is not None:
+        query = query.where(Visitor.visit_date >= since)
+    if unit_id is not None:
+        query = query.where(Visitor.unit_id == unit_id)
+    if block_ids is not None:
+        query = query.where(Visitor.unit_id.in_(units_in(block_ids)))
     if status is not None:
         query = query.where(Visitor.status == status.value)
     return query.order_by(Visitor.created_at.desc(), Visitor.id.desc())
@@ -246,7 +299,9 @@ def _like(text: str) -> str:
     return f"%{escaped}%"
 
 
-async def lookup(session: AsyncSession, q: str, today: date) -> list[LookupRow]:
+async def lookup(
+    session: AsyncSession, q: str, today: date, block_ids: frozenset[uuid.UUID] | None = None
+) -> list[LookupRow]:
     """Bölüm (`A-12`, `A12`, `12`) ya da oturan adıyla arama. Oturan: kiracı/oturan, yoksa malik."""
     term = " ".join(q.split())
     compact = term.replace("-", "").replace(" ", "")
@@ -260,17 +315,29 @@ async def lookup(session: AsyncSession, q: str, today: date) -> list[LookupRow]:
         .join(Person, and_(Person.id == UnitParty.person_id, Person.site_id == UnitParty.site_id))
         .where(active, Person.search_name.like(_like(tr_lower(term))))
     )
+    matches = [
+        Unit.number.ilike(_like(term)),
+        func.concat(Block.name, Unit.number).ilike(_like(compact)),
+        Unit.id.in_(by_person),
+    ]
+    plate = normalize_plate(term)
+    if len(plate) >= 4:  # plaka eşleşmesi (istek 22): yalnız etkin araçlar, sonuç yine bölüm
+        matches.append(
+            Unit.id.in_(
+                select(Vehicle.unit_id).where(
+                    Vehicle.plate.like(_like(plate)),
+                    Vehicle.status == VehicleStatus.ACTIVE.value,
+                )
+            )
+        )
     units = list(
         await session.execute(
             select(Unit.id, Unit.number, Block.name)
             .join(Block, and_(Block.id == Unit.block_id, Block.site_id == Unit.site_id))
             .where(
                 Unit.is_active,
-                or_(
-                    Unit.number.ilike(_like(term)),
-                    func.concat(Block.name, Unit.number).ilike(_like(compact)),
-                    Unit.id.in_(by_person),
-                ),
+                Unit.block_id.in_(block_ids) if block_ids is not None else true(),
+                or_(*matches),
             )
             .order_by(Block.sort_order, Block.name, func.length(Unit.number), Unit.number)
             .limit(LOOKUP_LIMIT)

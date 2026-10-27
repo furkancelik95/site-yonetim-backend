@@ -6,25 +6,29 @@ sonradan yazılamaz.
 
 import datetime as dt
 import uuid
+from typing import Any
 
 from sqlalchemy import (
     ARRAY,
     CheckConstraint,
     Date,
     DateTime,
+    ForeignKeyConstraint,
     Index,
     Text,
     UniqueConstraint,
     Uuid,
+    text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from site_yonetim.db.base import Base, TenantMixin, enum_check, tenant_fk, tenant_table_args
+from site_yonetim.domain.communication import ACK_HOURS_MAX, ACK_HOURS_MIN
 from site_yonetim.domain.operations import (
     Audience,
     Channel,
     Importance,
-    RequestCategory,
     RequestEventKind,
     RequestPriority,
     RequestStatus,
@@ -41,12 +45,16 @@ class Request(TenantMixin, Base):
         tenant_fk("unit_id", "units"),
         tenant_fk("reported_by_person_id", "persons"),
         tenant_fk("department_id", "request_departments"),
+        tenant_fk("outage_id", "outages"),
+        # Site tanımlı kategori (docs/12 D-26): anahtar değişmez, talep anahtarla bağlanır.
+        ForeignKeyConstraint(
+            ["site_id", "category"], ["request_categories.site_id", "request_categories.key"]
+        ),
         UniqueConstraint("site_id", "number"),
         CheckConstraint("number > 0", name="number_positive"),
         CheckConstraint(
             f"char_length(title) BETWEEN {TITLE_MIN} AND {TITLE_MAX}", name="title_length"
         ),
-        CheckConstraint(enum_check("category", RequestCategory), name="category"),
         CheckConstraint(enum_check("priority", RequestPriority), name="priority"),
         CheckConstraint(enum_check("status", RequestStatus), name="status"),
         CheckConstraint(
@@ -55,12 +63,13 @@ class Request(TenantMixin, Base):
         ),
         Index("ix_requests_site_status", "site_id", "status"),
         Index("ix_requests_reporter", "site_id", "reported_by_person_id"),
+        Index("ix_requests_outage", "site_id", "outage_id"),
     )
 
     number: Mapped[int]
     title: Mapped[str] = mapped_column(Text)
     description: Mapped[str | None] = mapped_column(Text)
-    category: Mapped[str] = mapped_column(Text, default=RequestCategory.OTHER.value)
+    category: Mapped[str] = mapped_column(Text)  # request_categories.key
     priority: Mapped[str] = mapped_column(Text, default=RequestPriority.NORMAL.value)
     status: Mapped[str] = mapped_column(Text, default=RequestStatus.OPEN.value)
     reported_by_person_id: Mapped[uuid.UUID | None]
@@ -72,6 +81,17 @@ class Request(TenantMixin, Base):
     resolved_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     resolution: Mapped[str | None] = mapped_column(Text)
     created_by_name: Mapped[str | None] = mapped_column(Text)  # talebi açan kullanıcı
+    closed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))  # kapandı/iptal
+    # Çözüldü talebe sakin yanıt vermezse bu anda kendiliğinden kapanır (§12.3, K18).
+    auto_close_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    # SLA kural anlık görüntüsü (HIZ-03 adım 4): açık talep açıldığı kuralla devam eder.
+    sla_hour_type: Mapped[str | None] = mapped_column(Text)
+    sla_target_hours: Mapped[int | None]
+    sla_calendar: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
+    sla_warn_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))  # %80
+    sla_warned_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    sla_breached_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    outage_id: Mapped[uuid.UUID | None]  # ana olay (servis isteği 49)
 
 
 class RequestEvent(TenantMixin, Base):
@@ -102,6 +122,17 @@ class Announcement(TenantMixin, Base):
         CheckConstraint(enum_check("importance", Importance), name="importance"),
         CheckConstraint(enum_check("audience", Audience), name="audience"),
         Index("ix_announcements_site_published", "site_id", "published_at"),
+        CheckConstraint(
+            f"ack_hours IS NULL OR ack_hours BETWEEN {ACK_HOURS_MIN} AND {ACK_HOURS_MAX}",
+            name="ack_hours",
+        ),
+        CheckConstraint("NOT requires_ack OR ack_hours IS NOT NULL", name="ack_rule"),
+        Index(
+            "ix_announcements_site_scheduled",
+            "site_id",
+            "scheduled_for",
+            postgresql_where=text("published_at IS NULL AND cancelled_at IS NULL"),
+        ),
     )
 
     title: Mapped[str] = mapped_column(Text)
@@ -113,6 +144,20 @@ class Announcement(TenantMixin, Base):
     expires_on: Mapped[dt.date | None] = mapped_column(Date)
     published_by: Mapped[str | None] = mapped_column(Text)
     is_pinned: Mapped[bool] = mapped_column(default=False)
+    # Zamanlama (ILT-01): `published_at` boş + `scheduled_for` dolu = zamanlanmış. Hedef ve kanal
+    # yayın anında çözülür (teslim kayıtları o an yazılır).
+    channels: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
+    scheduled_for: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    requested_publish_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    cancelled_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    # Zorunlu okuma onayı (16.3): son onay = yayın + ack_hours; süre dolunca bir kez SMS yedeği.
+    requires_ack: Mapped[bool] = mapped_column(default=False)
+    ack_hours: Mapped[int | None]
+    ack_deadline: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    sms_fallback: Mapped[bool] = mapped_column(default=False)
+    sms_fallback_ran_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    sms_fallback_count: Mapped[int | None]  # süre dolduğunda onaylamayan kişi sayısı
+    sms_fallback_sent: Mapped[int | None]  # dış kanala gerçekten giden (sağlayıcı yokken 0)
 
 
 class AnnouncementDelivery(TenantMixin, Base):
@@ -133,6 +178,7 @@ class AnnouncementDelivery(TenantMixin, Base):
     channel: Mapped[str] = mapped_column(Text)
     sent_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     read_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    acked_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))  # "Okudum"
     failure_reason: Mapped[str | None] = mapped_column(Text)
 
 

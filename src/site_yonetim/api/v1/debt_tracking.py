@@ -20,7 +20,7 @@ from site_yonetim.api.v1.finance_common import FinanceRead
 from site_yonetim.api.v1.finance_ops_common import actor, approval_error, form_error
 from site_yonetim.core.errors import ApiError, NotFoundError
 from site_yonetim.domain.access import Permission
-from site_yonetim.domain.debt_tracking import ActionKind, Channel
+from site_yonetim.domain.debt_tracking import ActionKind, CollectionChannel
 from site_yonetim.domain.members import FormFieldError
 from site_yonetim.domain.money import ZERO
 from site_yonetim.domain.text import format_date_tr
@@ -198,7 +198,7 @@ class CollectionActionOut(BaseModel):
     id: uuid.UUID
     account_id: uuid.UUID
     kind: ActionKind
-    channel: Channel | None
+    channel: CollectionChannel | None
     note: str | None
     by: str
     at: dt.datetime
@@ -210,7 +210,7 @@ def _action(a: CollectionAction) -> CollectionActionOut:
         id=a.id,
         account_id=a.account_id,
         kind=ActionKind(a.kind),
-        channel=Channel(a.channel) if a.channel else None,
+        channel=CollectionChannel(a.channel) if a.channel else None,
         note=a.note,
         by=a.by_name,
         at=a.created_at,
@@ -240,7 +240,7 @@ async def add_action(
         raise form_error(exc) from exc
     await ctx.session.commit()
     message = svc.action_message(
-        ActionKind(action.kind), Channel(action.channel) if action.channel else None
+        ActionKind(action.kind), CollectionChannel(action.channel) if action.channel else None
     )
     return Written(data=_action(action), message=message)
 

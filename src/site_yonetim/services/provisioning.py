@@ -17,7 +17,7 @@ from site_yonetim.db.tenancy import site_scope
 from site_yonetim.domain.text import slugify
 from site_yonetim.models import PropertyKind, Site, UnitType
 from site_yonetim.models.platform import site_name_key
-from site_yonetim.services import departments
+from site_yonetim.services import departments, request_setup
 from site_yonetim.services.cash import ensure_default_accounts
 from site_yonetim.services.finance_setup import ensure_finance_setup
 from site_yonetim.services.sites import provision_site_modules
@@ -55,8 +55,12 @@ async def provision_site(
     district: str | None = None,
     iban: str | None = None,
     bank_name: str | None = None,
+    lifecycle_status: str = "live",
 ) -> Site:
-    """Siteyi ve varsayılan kurulumunu yazar (commit çağırana aittir)."""
+    """Siteyi ve varsayılan kurulumunu yazar (commit çağırana aittir).
+
+    `lifecycle_status`: platform panelinden açılan site `setup` (YAP-01: kurulumda, sakin daveti
+    ve herkese açık kayıt kapalı); demo ve test kurulumları doğrudan `live`."""
     name = " ".join(name.split())
     if not SITE_NAME_MIN <= len(name) <= SITE_NAME_MAX:
         raise ProvisioningError(
@@ -90,6 +94,7 @@ async def provision_site(
         district=district,
         iban=iban,
         bank_name=bank_name,
+        lifecycle_status=lifecycle_status,
     )
     session.add(site)
     await session.flush()
@@ -102,5 +107,7 @@ async def provision_site(
         )
         await ensure_finance_setup(session)
         await departments.ensure_defaults(session)
+        await request_setup.ensure_defaults(session)
+        await request_setup.ensure_default_templates(session)
         await ensure_default_accounts(session, iban=site.iban)
     return site

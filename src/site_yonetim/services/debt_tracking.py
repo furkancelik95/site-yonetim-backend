@@ -20,13 +20,13 @@ from decimal import Decimal
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from site_yonetim.domain.access import ROLE_PERMISSIONS, Permission
+from site_yonetim.domain.access import Permission
 from site_yonetim.domain.approvals import ActionType
 from site_yonetim.domain.debt_tracking import (
     BUCKET_LABELS,
     ActionKind,
     AgingBucket,
-    Channel,
+    CollectionChannel,
     LetterStatus,
     PlanStatus,
     ReminderStage,
@@ -51,8 +51,8 @@ from site_yonetim.models import (
 from site_yonetim.models.approvals import ApprovalRequest
 from site_yonetim.services import approvals as approvals_svc
 from site_yonetim.services import finance_params, payment_plans
-from site_yonetim.services import members as members_svc
 from site_yonetim.services import notifications as notify_svc
+from site_yonetim.services import roles as roles_svc
 from site_yonetim.services.approvals import ExecutionError, Person
 
 SYSTEM_NAME = "Sistem (kademe işi)"
@@ -204,9 +204,9 @@ async def timeline(session: AsyncSession, account_id: uuid.UUID, today: date) ->
 # --- Elle kayıt ---------------------------------------------------------------------------
 
 
-def action_message(kind: ActionKind, channel: Channel | None) -> str:
+def action_message(kind: ActionKind, channel: CollectionChannel | None) -> str:
     if kind is ActionKind.REMINDER:
-        via = "SMS" if channel is Channel.SMS else "uygulama bildirimi"
+        via = "SMS" if channel is CollectionChannel.SMS else "uygulama bildirimi"
         return f"Hatırlatma ({via}) kaydedildi. {NOT_SENT}"
     return "Arama notu kaydedildi." if kind is ActionKind.CALL else "Not kaydedildi."
 
@@ -238,7 +238,7 @@ async def add_action(
 async def bulk_reminders(
     session: AsyncSession, account_ids: list[uuid.UUID], *, channel: str | None, actor: Person
 ) -> int:
-    via = Channel.SMS if channel == Channel.SMS.value else Channel.APP
+    via = CollectionChannel.SMS if channel == CollectionChannel.SMS.value else CollectionChannel.APP
     found = list(
         await session.scalars(select(LedgerAccount.id).where(LedgerAccount.id.in_(account_ids)))
     )
@@ -375,9 +375,17 @@ approvals_svc.register_closer(ActionType.DEMAND_LETTER, _close_letter)
 # --- Kademe işi ---------------------------------------------------------------------------
 
 _STAGE_ACTION = {
-    ReminderStage.APP: (ActionKind.REMINDER, Channel.APP, "Kademe 1 — uygulama bildirimi"),
-    ReminderStage.SMS: (ActionKind.REMINDER, Channel.SMS, "Kademe 2 — SMS hatırlatması"),
-    ReminderStage.CALL: (ActionKind.CALL, Channel.PHONE, "Kademe 3 — yönetici araması (görev)"),
+    ReminderStage.APP: (
+        ActionKind.REMINDER,
+        CollectionChannel.APP,
+        "Kademe 1 — uygulama bildirimi",
+    ),
+    ReminderStage.SMS: (ActionKind.REMINDER, CollectionChannel.SMS, "Kademe 2 — SMS hatırlatması"),
+    ReminderStage.CALL: (
+        ActionKind.CALL,
+        CollectionChannel.PHONE,
+        "Kademe 3 — yönetici araması (görev)",
+    ),
     ReminderStage.DEMAND_LETTER: (ActionKind.NOTE, None, "İhtarname hazırlığı kademesi"),
 }
 
@@ -433,11 +441,7 @@ async def run_stages(session: AsyncSession, site: Site, today: date) -> int:
                 tasks.append(stage.value)
     await session.flush()
     if tasks:
-        users = {
-            m.user.id
-            for m in await members_svc.list_members(session, site)
-            if m.is_active and Permission.FINANCE_PAYMENT_RECORD in ROLE_PERMISSIONS[m.role]
-        }
+        users = await roles_svc.permission_holders(session, site, Permission.FINANCE_PAYMENT_RECORD)
         await notify_svc.notify(
             session,
             users,

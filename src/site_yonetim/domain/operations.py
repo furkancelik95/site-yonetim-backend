@@ -1,7 +1,18 @@
 """Talep ve duyuru kuralları — saf (docs/03 §9, docs/06 §2.10–2.11).
 
-Talep durum geçişleri dokümanda tanımlı değil (docs/12 K18): şimdilik her durumdan her duruma
-geçilebilir, yalnız aynı duruma geçiş ve çözüm metni olmadan `resolved`/`closed` reddedilir.
+Talep durum akışı (Yazılım Dokümanı HIZ-02 "Durumlar"; PM kararı K18, 25.10.2026 — "dokümandaki
+akış"): Açık → Atandı → İşlemde → Beklemede → Çözüldü → Kapandı · İptal. Geçişler `TRANSITIONS`
+tablosundadır; tablo dışı geçiş 409 `invalid_transition`.
+
+- Atandı: talep bir kişiye/firmaya atanınca (atama ucu `open` talebi `assigned` yapar).
+- Çözüldü → Kapandı: sakin onayı (HIZ-01 adım 7) ya da X gün yanıtsızlıkta zamanlanmış iş.
+  Talebi bir sakin açtıysa personel doğrudan kapatamaz (409 `awaiting_confirmation`); onayı
+  beklenecek kimse yoksa (personelin açtığı talep) personel kapatabilir.
+- Çözüldü → İşlemde: personel çözümü yetersiz bulur. Sakin "devam ediyor" derse talep yeniden
+  açılır (atanmışsa `assigned`, değilse `open`).
+- Kapandı ve İptal son durumdur: yeniden açılmaz (dokümanda yeniden açma yok) — yeni talep açılır.
+- İptal: gerekçeyle. Sakin kendi talebini **iş başlamadan** (`open`/`assigned`) iptal edebilir.
+
 Her değişiklik değişmez olay geçmişine yazılır.
 """
 
@@ -30,18 +41,6 @@ class OperationRuleError(Exception):
 # --- Talep --------------------------------------------------------------------------
 
 
-class RequestCategory(StrEnum):
-    OTHER = "other"
-    PLUMBING = "plumbing"
-    ELECTRICAL = "electrical"
-    ELEVATOR = "elevator"
-    HEATING = "heating"
-    CLEANING = "cleaning"
-    SECURITY = "security"
-    GARDEN = "garden"
-    COMMON_AREA = "common_area"
-
-
 class RequestPriority(StrEnum):
     LOW = "low"
     NORMAL = "normal"
@@ -51,6 +50,7 @@ class RequestPriority(StrEnum):
 
 class RequestStatus(StrEnum):
     OPEN = "open"
+    ASSIGNED = "assigned"
     IN_PROGRESS = "in_progress"
     WAITING = "waiting"
     RESOLVED = "resolved"
@@ -65,48 +65,149 @@ class RequestEventKind(StrEnum):
     COMMENT = "comment"
     RESOLVED = "resolved"
     DEPARTMENT_CHANGED = "department_changed"
+    CLOSED = "closed"
+    CANCELLED = "cancelled"
+    REOPENED = "reopened"
+    FEEDBACK = "feedback"
+    OUTAGE_LINKED = "outage_linked"
+    OUTAGE_UNLINKED = "outage_unlinked"
+    QUOTE = "quote"
 
 
 STATUS_LABELS = {
     RequestStatus.OPEN: "Açık",
+    RequestStatus.ASSIGNED: "Atandı",
     RequestStatus.IN_PROGRESS: "İşlemde",
     RequestStatus.WAITING: "Beklemede",
     RequestStatus.RESOLVED: "Çözüldü",
     RequestStatus.CLOSED: "Kapandı",
     RequestStatus.CANCELLED: "İptal edildi",
 }
-RESOLUTION_REQUIRED = frozenset({RequestStatus.RESOLVED, RequestStatus.CLOSED})
+# Henüz bitmemiş talepler (pano, sakin ana sayfası, SLA takibi, birleştirme önerisi).
+ACTIVE_STATUSES = (
+    RequestStatus.OPEN,
+    RequestStatus.ASSIGNED,
+    RequestStatus.IN_PROGRESS,
+    RequestStatus.WAITING,
+)
+FINAL_STATUSES = frozenset({RequestStatus.CLOSED, RequestStatus.CANCELLED})
+# Sakinin kendi talebini iptal edebildiği durumlar (iş başlamadan).
+RESIDENT_CANCELLABLE = frozenset({RequestStatus.OPEN, RequestStatus.ASSIGNED})
+
+TRANSITIONS: dict[RequestStatus, frozenset[RequestStatus]] = {
+    RequestStatus.OPEN: frozenset({RequestStatus.ASSIGNED, RequestStatus.CANCELLED}),
+    RequestStatus.ASSIGNED: frozenset({RequestStatus.IN_PROGRESS, RequestStatus.CANCELLED}),
+    RequestStatus.IN_PROGRESS: frozenset(
+        {RequestStatus.WAITING, RequestStatus.RESOLVED, RequestStatus.CANCELLED}
+    ),
+    RequestStatus.WAITING: frozenset(
+        {RequestStatus.IN_PROGRESS, RequestStatus.RESOLVED, RequestStatus.CANCELLED}
+    ),
+    RequestStatus.RESOLVED: frozenset({RequestStatus.IN_PROGRESS, RequestStatus.CLOSED}),
+    RequestStatus.CLOSED: frozenset(),
+    RequestStatus.CANCELLED: frozenset(),
+}
+REASON_REQUIRED = frozenset({RequestStatus.RESOLVED, RequestStatus.CANCELLED})
+
+
+@dataclass(frozen=True, slots=True)
+class RequestState:
+    """Geçiş kararına giren talep bilgisi."""
+
+    status: RequestStatus
+    has_assignee: bool
+    awaits_resident: bool  # talebi bir sakin açtı → kapanış sakin onayıyla
 
 
 @dataclass(frozen=True, slots=True)
 class StatusChange:
     event: RequestEventKind
     description: str
-    resolved: bool  # `resolved_at` dolu olmalı mı
+    resolved: bool  # `resolved_at` yazılır
+    finished: bool  # `closed_at` yazılır (kapandı / iptal)
+
+
+def next_statuses(state: RequestState) -> list[RequestStatus]:
+    """Personelin seçebileceği durumlar (ekrandaki seçim ve pano sürükle-bırak)."""
+    allowed = []
+    for target in RequestStatus:
+        if target not in TRANSITIONS[state.status]:
+            continue
+        if target is RequestStatus.ASSIGNED and not state.has_assignee:
+            continue
+        if target is RequestStatus.CLOSED and state.awaits_resident:
+            continue
+        allowed.append(target)
+    return allowed
+
+
+def clean_reason(value: str | None) -> str | None:
+    return " ".join(value.split()) if value and value.strip() else None
 
 
 def check_status_change(
-    current: RequestStatus, new: RequestStatus, resolution: str | None
+    state: RequestState, new: RequestStatus, reason: str | None
 ) -> StatusChange:
+    current = state.status
     if new is current:
         raise OperationRuleError(
             "status_unchanged", f"Talep zaten '{STATUS_LABELS[new]}' durumunda.", conflict=True
         )
-    if new in RESOLUTION_REQUIRED and not (resolution and resolution.strip()):
+    if current in FINAL_STATUSES:
         raise OperationRuleError(
-            "resolution_required",
-            "Talebi çözüldü ya da kapandı yapmak için ne yapıldığını yazın.",
-            field="resolution",
+            "request_finished",
+            f"'{STATUS_LABELS[current]}' durumundaki talep yeniden açılamaz; "
+            "gerekirse yeni talep açın.",
+            conflict=True,
         )
+    if new not in TRANSITIONS[current]:
+        allowed = ", ".join(STATUS_LABELS[s] for s in RequestStatus if s in TRANSITIONS[current])
+        raise OperationRuleError(
+            "invalid_transition",
+            f"'{STATUS_LABELS[current]}' talep '{STATUS_LABELS[new]}' yapılamaz. "
+            f"Geçilebilecek durumlar: {allowed}.",
+            conflict=True,
+        )
+    if new is RequestStatus.ASSIGNED and not state.has_assignee:
+        raise OperationRuleError(
+            "assignee_required", "Önce talebi bir kişiye ya da firmaya atayın.", conflict=True
+        )
+    if new is RequestStatus.CLOSED and state.awaits_resident:
+        raise OperationRuleError(
+            "awaiting_confirmation",
+            "Talep sakin onayı bekliyor; sakin onaylayınca ya da yanıt gelmezse kendiliğinden "
+            "kapanır.",
+            conflict=True,
+        )
+    text = clean_reason(reason)
+    if new in REASON_REQUIRED and text is None:
+        message = (
+            "Talebi iptal etmek için gerekçe yazın."
+            if new is RequestStatus.CANCELLED
+            else "Talebi çözüldü yapmak için ne yapıldığını yazın."
+        )
+        raise OperationRuleError("resolution_required", message, field="resolution")
     description = f"Durum: {STATUS_LABELS[current]} → {STATUS_LABELS[new]}"
-    if new in RESOLUTION_REQUIRED and resolution:
-        description += f". Çözüm: {' '.join(resolution.split())}"
-    event = (
-        RequestEventKind.RESOLVED
-        if new is RequestStatus.RESOLVED
-        else (RequestEventKind.STATUS_CHANGED)
+    if new is RequestStatus.RESOLVED:
+        description += f". Çözüm: {text}"
+    elif new is RequestStatus.CANCELLED:
+        description += f". Gerekçe: {text}"
+    event = {
+        RequestStatus.RESOLVED: RequestEventKind.RESOLVED,
+        RequestStatus.CLOSED: RequestEventKind.CLOSED,
+        RequestStatus.CANCELLED: RequestEventKind.CANCELLED,
+    }.get(new, RequestEventKind.STATUS_CHANGED)
+    return StatusChange(
+        event,
+        description,
+        resolved=new is RequestStatus.RESOLVED,
+        finished=new in FINAL_STATUSES,
     )
-    return StatusChange(event, description, new in RESOLUTION_REQUIRED)
+
+
+def reopen_status(has_assignee: bool) -> RequestStatus:
+    """Sakin "sorun devam ediyor" dediğinde talebin döndüğü durum."""
+    return RequestStatus.ASSIGNED if has_assignee else RequestStatus.OPEN
 
 
 # --- Duyuru -------------------------------------------------------------------------

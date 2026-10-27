@@ -118,3 +118,5 @@ class LedgerSource(StrEnum):
     REFUND = "refund"  # alacaklı bakiyenin sakine geri ödenmesi — açık borç sayılmaz
     AD_HOC_CHARGE = "ad_hoc_charge"  # dönem dışı ücret (FIN-06)
     PAYMENT_PLAN = "payment_plan"  # ödeme planı: yapılandırma alacağı + taksit borçları (FIN-12)
+    SERVICE = "service"  # ücretli hizmet (HIZ-04): sakinin onayladığı teklif
+    DEPOSIT = "deposit"  # tadilat depozitosu (HIZ-05); iadesi ters kayıt

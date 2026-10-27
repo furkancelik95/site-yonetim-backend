@@ -36,7 +36,9 @@ from site_yonetim.domain.imports.unit_validator import (
     Severity,
     UnitRow,
 )
+from site_yonetim.domain.masking import mask_email, mask_phone_display
 from site_yonetim.models.audit import AuditAction, bulk_operation, record
+from site_yonetim.services import import_history as history
 from site_yonetim.services import imports as svc
 
 router = APIRouter(prefix="/sites/{slug}/imports/units", tags=["excel aktarımı"])
@@ -106,17 +108,26 @@ class ImportIssueOut(BaseModel):
 class ImportPersonOut(BaseModel):
     first_name: str
     last_name: str
-    phone: str | None = Field(description="Yalnız people.read izniyle; aksi halde null")
-    email: str | None = Field(description="Yalnız people.read izniyle; aksi halde null")
+    phone: str | None = Field(description="Maskeli; yalnız people.contact izniyle, aksi halde null")
+    email: str | None = Field(description="Maskeli; yalnız people.contact izniyle, aksi halde null")
 
     @classmethod
     def of(cls, person: PersonData, *, contact: bool) -> ImportPersonOut:
         return cls(
             first_name=person.first_name,
             last_name=person.last_name,
-            phone=person.phone if contact else None,
-            email=person.email if contact else None,
+            phone=mask_phone_display(person.phone) if contact and person.phone else None,
+            email=mask_email(person.email) if contact and person.email else None,
         )
+
+
+class ImportPersonMergeOut(BaseModel):
+    """K16: ad + telefon aynı kişiler tek kayıt olur; önizlemede gösterilir."""
+
+    full_name: str
+    phone: str | None = Field(description="Maskeli; people.contact yoksa null")
+    row_numbers: list[int]
+    existing: bool = Field(description="Sitede zaten kayıtlı kişi; yeni kişi açılmaz")
 
 
 def _area(value: Decimal | None) -> str | None:
@@ -172,6 +183,9 @@ class ImportPreviewOut(BaseModel):
     warning_count: int
     rows: list[ImportRowOut]
     issues: list[ImportIssueOut]
+    person_merges: list[ImportPersonMergeOut] = Field(
+        description="K16: tek kişide birleşecek kayıtlar (ad + telefon aynı)"
+    )
 
 
 @router.post("", response_model=ImportPreviewOut)
@@ -196,7 +210,7 @@ async def upload_units(
         if new_count
         else None
     )
-    contact = ctx.access.can(Permission.PEOPLE_READ)
+    contact = ctx.access.can(Permission.PEOPLE_CONTACT)
     issues = [*preview.notices, *result.issues]
     return ImportPreviewOut(
         import_id=pending.import_id if pending else None,
@@ -212,6 +226,15 @@ async def upload_units(
             for row in result.rows
         ],
         issues=[ImportIssueOut.of(i) for i in issues],
+        person_merges=[
+            ImportPersonMergeOut(
+                full_name=m.full_name,
+                phone=mask_phone_display(m.phone) if contact else None,
+                row_numbers=m.row_numbers,
+                existing=m.existing,
+            )
+            for m in preview.merges
+        ],
     )
 
 
@@ -259,10 +282,22 @@ async def confirm_units(
                 {
                     "created_units": outcome.created_units,
                     "created_people": outcome.created_people,
+                    "reused_people": outcome.reused_people,
                     "created_accounts": outcome.created_accounts,
                     "skipped": outcome.skipped,
                 },
             )  # fmt: skip
+            if outcome.created_units:
+                await history.record_units_batch(
+                    ctx.session,
+                    batch_id=import_id,
+                    file_name=None,
+                    row_count=len(result.rows),
+                    created=outcome.created_ids,
+                    user_id=current.user.id,
+                    user_name=current.user.full_name,
+                    now=now,
+                )
             await ctx.session.commit()
         except IntegrityError as exc:
             await ctx.session.rollback()

@@ -14,7 +14,7 @@ Motor girdisi sabit sayıda sorguyla kurulur (bölüm sayısından bağımsız �
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
@@ -77,6 +77,7 @@ from site_yonetim.models import (
 )
 from site_yonetim.services import ledger, payments, period_lock, summary
 from site_yonetim.services.budget import current_plan
+from site_yonetim.services.structure import apply_due_attribute_changes
 
 BUSINESS_TZ = ZoneInfo("Europe/Istanbul")
 _REVERSAL = aliased(LedgerEntry)
@@ -330,6 +331,9 @@ async def prepare(
         )
     source = ChargeSource(params["charge_source"])
     proration = Proration(params["proration"])
+    # Tarihi gelmiş yürürlük tarihli öznitelikler (m², arsa payı, tip — YAP-02 S3) gece işini
+    # beklemeden uygulanır: tahakkuk, dönemin yürürlükteki değerini kullanır.
+    await apply_due_attribute_changes(session, today, datetime.now(UTC))
     plan, items, not_due = await _input_items(session, source, period)
     data = ChargeInput(
         charge_date=charge_date,

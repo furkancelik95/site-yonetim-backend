@@ -25,7 +25,7 @@ from decimal import Decimal
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from site_yonetim.domain.access import ROLE_PERMISSIONS, Permission
+from site_yonetim.domain.access import Permission
 from site_yonetim.domain.approvals import ActionType
 from site_yonetim.domain.charging.payments import allocate
 from site_yonetim.domain.debt_tracking import (
@@ -54,8 +54,8 @@ from site_yonetim.models import (
 from site_yonetim.models.approvals import ApprovalRequest
 from site_yonetim.services import approvals as approvals_svc
 from site_yonetim.services import finance_params, ledger, payments, period_lock
-from site_yonetim.services import members as members_svc
 from site_yonetim.services import notifications as notify_svc
+from site_yonetim.services import roles as roles_svc
 from site_yonetim.services.approvals import ExecutionError, Person
 from site_yonetim.services.charging import BUSINESS_TZ
 
@@ -450,11 +450,9 @@ async def mark_broken(session: AsyncSession, site: Site, today: date, now: datet
     for plan in newly:
         plan.broken_at = now
     await session.flush()
-    users = {
-        m.user.id
-        for m in await members_svc.list_members(session, site)
-        if m.is_active and Permission.FINANCE_PAYMENT_RECORD in ROLE_PERMISSIONS[m.role]
-    }
+    users = await roles_svc.permission_holders(
+        session, site, Permission.FINANCE_PAYMENT_RECORD, now
+    )
     for plan in newly:
         await notify_svc.notify(
             session,

@@ -54,7 +54,7 @@ class ActionKind(StrEnum):
     NOTE = "note"
 
 
-class Channel(StrEnum):
+class CollectionChannel(StrEnum):
     APP = "app"
     SMS = "sms"
     PHONE = "phone"
@@ -80,20 +80,20 @@ def due_stages(overdue_days: int, reminder_days: list[int], letter_day: int) -> 
 
 def check_action(
     kind: str | None, channel: str | None, note: str | None
-) -> tuple[ActionKind, Channel | None, str | None]:
+) -> tuple[ActionKind, CollectionChannel | None, str | None]:
     errors: dict[str, str] = {}
     text = " ".join((note or "").split())[:NOTE_MAX] or None
     action = ActionKind(kind) if kind in {k.value for k in ActionKind} else None
     if action is None:
         errors["kind"] = "İşlem türünü seçin."
-    picked: Channel | None = None
+    picked: CollectionChannel | None = None
     if action is ActionKind.REMINDER:
-        if channel not in (Channel.APP.value, Channel.SMS.value):
+        if channel not in (CollectionChannel.APP.value, CollectionChannel.SMS.value):
             errors["channel"] = "Kanal seçin (uygulama ya da SMS)."
         else:
-            picked = Channel(channel)
+            picked = CollectionChannel(channel)
     elif action is ActionKind.CALL:
-        picked = Channel.PHONE
+        picked = CollectionChannel.PHONE
     if action in (ActionKind.CALL, ActionKind.NOTE) and (text is None or len(text) < 3):
         errors["note"] = "Kısa bir not yazın."
     if errors or action is None:

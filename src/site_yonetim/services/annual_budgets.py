@@ -25,7 +25,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from sqlalchemy import extract, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from site_yonetim.domain.access import ROLE_PERMISSIONS, Permission
+from site_yonetim.domain.access import Permission
 from site_yonetim.domain.approvals import ActionType
 from site_yonetim.domain.charging.periods import YearMonth
 from site_yonetim.domain.finance import BudgetStatus, FinanceRuleError, Frequency
@@ -46,8 +46,8 @@ from site_yonetim.models import (
 from site_yonetim.models.approvals import ApprovalRequest
 from site_yonetim.services import approvals as approvals_svc
 from site_yonetim.services import finance_params
-from site_yonetim.services import members as members_svc
 from site_yonetim.services import notifications as notify_svc
+from site_yonetim.services import roles as roles_svc
 from site_yonetim.services.approvals import ExecutionError, Person
 
 DRAFT, PENDING, ACTIVE, REJECTED, SUPERSEDED = (
@@ -555,11 +555,7 @@ async def run_alerts(session: AsyncSession, site: Site, today: date) -> int:
                 new.append((row, threshold))
     if not new:
         return 0
-    users = {
-        m.user.id
-        for m in await members_svc.list_members(session, site)
-        if m.is_active and Permission.FINANCE_BUDGET_MANAGE in ROLE_PERMISSIONS[m.role]
-    }
+    users = await roles_svc.permission_holders(session, site, Permission.FINANCE_BUDGET_MANAGE)
     for row, threshold in new:
         alert = BudgetAlert(
             id=uuid.uuid7(),

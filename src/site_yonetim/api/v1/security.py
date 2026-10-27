@@ -41,7 +41,7 @@ Paging = Annotated[PageParams, Depends()]
 async def _packages(
     ctx: Annotated[SiteContext, Depends(require_module(ModuleKey.PACKAGES))],
 ) -> SiteContext:
-    if not ctx.access.can(Permission.SECURITY_PACKAGES):
+    if ctx.access.blocks_for(Permission.SECURITY_PACKAGES) == frozenset():
         raise ForbiddenError
     return ctx
 
@@ -49,9 +49,19 @@ async def _packages(
 async def _visitors(
     ctx: Annotated[SiteContext, Depends(require_module(ModuleKey.VISITORS))],
 ) -> SiteContext:
-    if not ctx.access.can(Permission.SECURITY_VISITORS):
+    if ctx.access.blocks_for(Permission.SECURITY_VISITORS) == frozenset():
         raise ForbiddenError
     return ctx
+
+
+OUT_OF_SCOPE = "Bu bölüm yetkili olduğunuz blokların dışında."
+
+
+async def _in_scope(ctx: SiteContext, permission: Permission, unit_id: uuid.UUID) -> None:
+    """Blok kapsamlı atama (PLT-09 kapsam): yalnız kendi bloklarının bölümleri. Kayıt varsa ama
+    kapsam dışındaysa 403 — sitenin içinde, kişinin yetkisi yok."""
+    if not await svc.unit_in_blocks(ctx.session, unit_id, ctx.access.blocks_for(permission)):
+        raise ForbiddenError(OUT_OF_SCOPE)
 
 
 Packages = Annotated[SiteContext, Depends(_packages)]
@@ -111,7 +121,11 @@ async def list_packages(
     status_filter: Annotated[PackageStatus | None, Query(alias="status")] = None,
     unit_id: uuid.UUID | None = None,
 ) -> Page[PackageOut]:
-    query = svc.packages_query(status=status_filter, unit_ids={unit_id} if unit_id else None)
+    query = svc.packages_query(
+        status=status_filter,
+        unit_ids={unit_id} if unit_id else None,
+        block_ids=ctx.access.blocks_for(Permission.SECURITY_PACKAGES),
+    )
     total = await ctx.session.scalar(select(func.count()).select_from(query.subquery())) or 0
     rows = list(await ctx.session.scalars(query.offset(paging.offset).limit(paging.page_size)))
     return Page(
@@ -133,6 +147,7 @@ class PackageIn(BaseModel):
 async def receive_package(
     ctx: Packages, body: PackageIn, current: CurrentUserDep, now: NowDep
 ) -> Written[PackageOut]:
+    await _in_scope(ctx, Permission.SECURITY_PACKAGES, body.unit_id)
     try:
         package = await svc.receive_package(
             ctx.session, unit_id=body.unit_id, person_id=body.person_id, carrier=body.carrier,
@@ -160,6 +175,7 @@ async def deliver_package(
     package = await svc.get_package(ctx.session, package_id)
     if package is None:
         raise NotFoundError("Kargo bulunamadı.")
+    await _in_scope(ctx, Permission.SECURITY_PACKAGES, package.unit_id)
     try:
         await svc.deliver_package(
             ctx.session, package, pickup_code=body.pickup_code, delivered_to=body.delivered_to,
@@ -224,8 +240,18 @@ async def list_visitors(
     today: TodayDep,
     day: Annotated[dt.date | None, Query(alias="date", description="boşsa bugün")] = None,
     status_filter: Annotated[VisitorStatus | None, Query(alias="status")] = None,
+    unit_id: Annotated[
+        uuid.UUID | None,
+        Query(description="bölüm kartı süzgeci; tarih verilmezse son 30 gün (yeni üstte)"),
+    ] = None,
 ) -> Page[VisitorOut]:
-    query = svc.visitors_query(day or today, status_filter)
+    blocks = ctx.access.blocks_for(Permission.SECURITY_VISITORS)
+    if unit_id is not None and day is None:
+        query = svc.visitors_query(
+            None, status_filter, blocks, unit_id=unit_id, since=today - dt.timedelta(days=30)
+        )
+    else:
+        query = svc.visitors_query(day or today, status_filter, blocks, unit_id=unit_id)
     total = await ctx.session.scalar(select(func.count()).select_from(query.subquery())) or 0
     rows = list(await ctx.session.scalars(query.offset(paging.offset).limit(paging.page_size)))
     return Page(
@@ -252,6 +278,7 @@ class VisitorIn(BaseModel):
 async def record_visitor(
     ctx: Visitors, body: VisitorIn, current: CurrentUserDep, now: NowDep, today: TodayDep
 ) -> Written[VisitorOut]:
+    await _in_scope(ctx, Permission.SECURITY_VISITORS, body.unit_id)
     try:
         visitor = await svc.record_visitor(
             ctx.session,
@@ -275,6 +302,7 @@ async def _visitor(ctx: SiteContext, visitor_id: uuid.UUID) -> Visitor:
     visitor = await svc.get_visitor(ctx.session, visitor_id)
     if visitor is None:
         raise NotFoundError("Ziyaretçi bulunamadı.")
+    await _in_scope(ctx, Permission.SECURITY_VISITORS, visitor.unit_id)
     return visitor
 
 
@@ -319,11 +347,15 @@ async def units_lookup(
 ) -> list[LookupOut]:
     if not (ModuleKey.VISITORS in ctx.modules or ModuleKey.PACKAGES in ctx.modules):
         raise NotFoundError
-    if not (
-        ctx.access.can(Permission.SECURITY_VISITORS) or ctx.access.can(Permission.SECURITY_PACKAGES)
-    ):
+    scopes = [
+        ctx.access.blocks_for(Permission.SECURITY_VISITORS),
+        ctx.access.blocks_for(Permission.SECURITY_PACKAGES),
+    ]
+    if all(s == frozenset() for s in scopes):
         raise ForbiddenError
+    # Tesis geneli izin varsa sınırsız; yoksa blok kapsamlarının birleşimi.
+    blocks = None if None in scopes else frozenset().union(*(s for s in scopes if s))
     return [
         LookupOut(unit_id=r.unit_id, unit_name=r.unit_name, occupants=r.occupants)
-        for r in await svc.lookup(ctx.session, q, today)
+        for r in await svc.lookup(ctx.session, q, today, blocks)
     ]

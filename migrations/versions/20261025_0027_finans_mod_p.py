@@ -47,6 +47,7 @@ IMMUTABLE = (
 
 _LEDGER_0016 = (
     "charge", "payment", "late_fee", "adjustment", "transfer", "advance", "opening", "refund",
+    "service", "deposit",  # göç 0031 (hizmetler)
 )  # fmt: skip
 _LEDGER = (*_LEDGER_0016, "ad_hoc_charge", "payment_plan")
 
@@ -56,6 +57,7 @@ _ACTIONS_0029 = (
     "renovation_permit", "payment_plan", "paid_service_tariff", "role_change",
     "finance_mode_change", "registration", "stock_count_difference", "approval_rule_change",
     "leave_request",  # göç 0029 (insan kaynakları)
+    "ownership_transfer",  # göç 0026 (yapı, kişiler)
 )  # fmt: skip
 _ACTIONS = (
     *_ACTIONS_0029,
@@ -75,7 +77,7 @@ def _check(table: str, column: str, values: tuple[str, ...]) -> None:
 
 
 revision: str = "0027"
-down_revision: str | None = "0029"
+down_revision: str | None = "0041"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

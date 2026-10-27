@@ -46,6 +46,7 @@ class AuditAction(StrEnum):
     IMPORT = "import"
     DOWNLOAD = "download"
     EXPORT = "export"  # dışa aktarma (Excel) — Yazılım Dokümanı M-24, PLT-07
+    CONTACT_VIEW = "contact_view"  # maskeli kişisel verinin açılması (YAP-03 S2, KVKK)
 
 
 class ActorType(StrEnum):
@@ -166,6 +167,23 @@ AUDITED_TABLES = frozenset(
         "incidents",
         "lost_items",
         "request_departments",
+        "request_categories",
+        "request_settings",
+        "reply_templates",
+        "request_internal_notes",
+        "outages",
+        "service_tariffs",
+        "service_quotes",
+        "permit_settings",
+        "permits",
+        # güvenlik, devriye, otopark (ayar ve kurulum; ziyaretçi kararları ayrıca `record` ile,
+        # kişisel veri olmadan — saklama süresi denetimden kısa)
+        "gates",
+        "security_settings",
+        "patrol_points",
+        "patrol_plans",
+        "parking_spaces",
+        "parking_allocations",
         # yönetim (anket oyları gizli: poll_votes yazılmaz)
         "meetings",
         "meeting_agenda_items",
@@ -184,6 +202,26 @@ AUDITED_TABLES = frozenset(
         "timesheet_days",
         "timesheet_exports",
         "attendance_settings",
+        # operasyon ekleri ve teknik varlık (OPS-01..06, HIZ-06/07; K28): telefon ve emanet
+        # yetkili listesi maskeli
+        "operation_settings",
+        "facility_keys",
+        "key_loans",
+        "deposited_keys",
+        "stock_counts",
+        "checklist_templates",
+        "checklist_inspections",
+        "insurance_policies",
+        "insurance_claims",
+        "meters",
+        "meter_readings",
+        "task_templates",
+        "task_completions",
+        "technical_assets",
+        "asset_inspection_schedules",
+        "asset_inspection_records",
+        "maintenance_plans",
+        "maintenance_runs",
         # ayarlar
         "charge_types",
         "allocation_rules",
@@ -197,20 +235,37 @@ AUDITED_TABLES = frozenset(
         "persons",
         "unit_parties",
         "registration_links",
+        "common_areas",
+        "unit_attribute_changes",
+        "structure_settings",
+        "household_members",
+        "vehicles",
+        "invitations",
+        "custom_fields",
+        "custom_field_values",
         # onay mekanizması (kararlar değişmez; vekâleten karar `delegate` aktörüyle)
         "approval_rules",
         "approval_rule_versions",
         "approval_requests",
         "approval_decisions",
         "approval_delegations",
+        # iletişim ve acil durum (yoklama ayrıntısı `emergency_units` kişisel veri: yazılmaz,
+        # 30 gün sonra silinir; acil bilgi kartı görsel içerdiği için elle özetle yazılır)
+        "emergencies",
+        "emergency_settings",
+        "notification_template_versions",
+        "transparency_reports",
         # belge arşivi (gizli belge açılışı ayrıca document_access_logs'ta)
         "documents",
         "document_versions",
         # yetki / üyelik
         "site_memberships",
+        "site_roles",
+        "site_role_assignments",
     }
 )
-_SKIPPED_COLUMNS = frozenset({"id", "site_id", "created_at", "updated_at"})
+# `token_hash`: davet belirtecinin özeti bile kayda girmez.
+_SKIPPED_COLUMNS = frozenset({"id", "site_id", "created_at", "updated_at", "token_hash"})
 _PENDING = "audit_pending"
 
 

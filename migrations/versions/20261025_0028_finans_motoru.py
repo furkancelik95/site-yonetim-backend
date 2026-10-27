@@ -23,7 +23,7 @@ from sqlalchemy.dialects import postgresql
 from site_yonetim.db.rls import disable_tenant_rls, enable_tenant_rls
 
 revision: str = "0028"
-down_revision: str | None = "0027"
+down_revision: str | None = "0036"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -48,8 +48,9 @@ _ACTIONS_0027 = (
     "leave_request", "period_unlock", "cash_difference", "ad_hoc_charge", "finance_parameter",
     "demand_letter",
 )  # fmt: skip
-# main'deki 0026 `ownership_transfer` ekledi — birleştirmede kaybolmasın diye burada da var.
-_ACTIONS = (*_ACTIONS_0027, "ownership_transfer", "budget", "charge_adjustment")
+# 0026 `ownership_transfer`, 0036 (P12) `transparency_report` ekledi — birleştirmede kaybolmasın.
+_ACTIONS_PREV = (*_ACTIONS_0027, "ownership_transfer", "transparency_report")
+_ACTIONS = (*_ACTIONS_PREV, "budget", "charge_adjustment")
 
 _RUN_STATUS_OLD = ("draft", "posted", "reversed")
 _RUN_STATUS = (
@@ -622,7 +623,7 @@ def downgrade() -> None:
         disable_tenant_rls(op, table)
     # Yeni işlem tipli / durumlu satır varsa kısıt geri kurulamaz: veri silinmez, geri dönüş durur.
     for table in ("approval_rules", "approval_requests"):
-        _check(table, "action_type", (*_ACTIONS_0027, "ownership_transfer"))
+        _check(table, "action_type", _ACTIONS_PREV)
     op.drop_constraint(
         op.f("ck_charge_schedules_draft_lead_days_range"), "charge_schedules", type_="check"
     )

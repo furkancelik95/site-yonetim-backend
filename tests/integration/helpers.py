@@ -8,7 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from site_yonetim.core.security import hash_password
 from site_yonetim.db.tenancy import site_scope
-from site_yonetim.models import SiteMembership, User
+from site_yonetim.domain.roles import TEMPLATE_BY_NAME
+from site_yonetim.models import SiteMembership, SiteRoleAssignment, User
 
 DEFAULT_PASSWORD = "Gizli-Parola-2026"
 
@@ -36,9 +37,15 @@ async def add_site_membership(
     role: str,
     **fields: object,
 ) -> None:
+    """Üyelik + tesis kapsamlı rol ataması. `role`: şablon adı ("Yönetici") ya da rol anahtarı
+    (`manager`, özel rolde `custom-…`). `**fields` üyeliğe gider (`is_active`, `person_id`)."""
+    template = TEMPLATE_BY_NAME.get(role)
     with site_scope(site_id):
         async with factory() as session, session.begin():
-            session.add(SiteMembership(user_id=user_id, role=role, **fields))
+            session.add(SiteMembership(user_id=user_id, **fields))
+            session.add(
+                SiteRoleAssignment(user_id=user_id, role_key=template.key if template else role)
+            )
 
 
 async def login_headers(
