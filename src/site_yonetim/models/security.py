@@ -1,7 +1,7 @@
 """Kargo ve ziyaretçi — docs/03 §9. KİRACI tablosu.
 
 Ziyaretçi adı, telefonu ve plakası kişisel veridir: yalnız güvenlik izniyle görünür, loga
-yazılmaz. Saklama süresi açık karar (docs/12 K8).
+yazılmaz. Saklama süresi site ayarı (`security_settings.retention_months`, K8 varsayılanı 6 ay).
 """
 
 import datetime as dt
@@ -73,6 +73,8 @@ class Visitor(TenantMixin, Base):
     exited_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     recorded_by: Mapped[str | None] = mapped_column(Text)
     note: Mapped[str | None] = mapped_column(Text)
+    # Saklama süresi dolunca (site ayarı, K8) ad/telefon/plaka/not silinir — gece işi.
+    anonymized_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Incident(TenantMixin, Base):

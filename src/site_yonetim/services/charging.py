@@ -10,7 +10,7 @@ Motor girdisi sabit sayıda sorguyla kurulur (bölüm sayısından bağımsız �
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
@@ -71,6 +71,7 @@ from site_yonetim.models import (
 )
 from site_yonetim.services import ledger, period_lock, summary
 from site_yonetim.services.budget import current_plan
+from site_yonetim.services.structure import apply_due_attribute_changes
 
 BUSINESS_TZ = ZoneInfo("Europe/Istanbul")
 
@@ -297,6 +298,9 @@ async def prepare(
             "due_before_charge", "Vade tarihi tahakkuk tarihinden önce olamaz.", field="due_date"
         )
     items, not_due = await _items(session, plan, period)
+    # Tarihi gelmiş yürürlük tarihli öznitelikler (m², arsa payı, tip — YAP-02 S3) gece işini
+    # beklemeden uygulanır: tahakkuk, dönemin yürürlükteki değerini kullanır.
+    await apply_due_attribute_changes(session, today, datetime.now(UTC))
     data = ChargeInput(
         charge_date=charge_date,
         due_date=due_date,

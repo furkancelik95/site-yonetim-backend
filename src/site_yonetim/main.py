@@ -4,14 +4,17 @@ import logging
 import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import cast
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.responses import JSONResponse
 
+from site_yonetim.api.v1.finance_common import finance_error
 from site_yonetim.api.v1.router import API_V1_PREFIX, api_router
 from site_yonetim.core.config import Settings, get_settings
-from site_yonetim.core.errors import install_error_handlers
+from site_yonetim.core.errors import api_error_response, install_error_handlers
 from site_yonetim.core.logging import configure_logging
 from site_yonetim.core.middleware import (
     BodySizeLimitMiddleware,
@@ -20,6 +23,7 @@ from site_yonetim.core.middleware import (
 )
 from site_yonetim.db.session import create_engine_from_settings, create_session_factory
 from site_yonetim.domain.files import MAX_FILE_BYTES
+from site_yonetim.domain.finance import FinanceRuleError
 from site_yonetim.seed.demo import seed_demo
 from site_yonetim.services.imports import MAX_UPLOAD_BYTES
 
@@ -58,6 +62,10 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             await app.state.engine.dispose()
 
 
+async def _finance_rule_error(_: Request, error: Exception) -> JSONResponse:
+    return api_error_response(finance_error(cast(FinanceRuleError, error)))
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     configure_logging(settings.log_level)
@@ -78,6 +86,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.session_factory = None
 
     install_error_handlers(app)
+    # Finans kuralı (ör. dönem kilidi `period_locked`) her uçta aynı yanıta çevrilir; uç kendisi
+    # yakalamasa da (aktarım geri alma, ücretli hizmet, tadilat depozitosu) 409/422 döner.
+    app.add_exception_handler(FinanceRuleError, _finance_rule_error)
     app.include_router(api_router)
 
     # Sıra: en son eklenen en dışta çalışır.

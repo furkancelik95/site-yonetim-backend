@@ -32,15 +32,19 @@ from site_yonetim.models import (
     LedgerAccount,
     LedgerEntry,
     Organization,
+    Outage,
     Package,
     Payment,
     PaymentAllocation,
     PaymentPlan,
     Period,
+    Permit,
     Person,
     Plan,
     Request,
     RequestEvent,
+    ServiceQuote,
+    ServiceTariff,
     Site,
     SiteModule,
     Unit,
@@ -382,7 +386,17 @@ async def test_demo_duyuru_ve_talep(
                 announcement_count = await session.scalar(
                     select(func.count()).select_from(Announcement)
                 )
-        assert statuses == {"open", "in_progress", "waiting", "resolved", "closed"}
+                extras = [
+                    await session.scalar(select(func.count()).select_from(model))
+                    for model in (Outage, Permit, ServiceQuote, ServiceTariff)
+                ]
+                pending = await session.scalar(
+                    select(Request.auto_close_at).where(Request.status == "resolved")
+                )
+        assert statuses == {"open", "assigned", "in_progress", "waiting", "resolved", "closed"}
+        assert extras == [1, 1, 1, 3]  # ana olay, tadilat başvurusu, teklif, tarife (SR 49–52)
+        assert pending is not None
+        assert pending.date() > SEED_DAY  # sakin onayı bekliyor
         assert announcement_count == 4
 
     resident = await login_headers(api, "sakin@demo.local", DEMO_PASSWORD)
@@ -394,7 +408,19 @@ async def test_demo_duyuru_ve_talep(
     ]
     manager = await login_headers(api, "yonetici@demo.local", DEMO_PASSWORD)
     requests_page = (await api.get("/api/v1/sites/aksu-konaklari/requests", headers=manager)).json()
-    assert requests_page["total"] == 6
+    # 6 demo talebi + bugün planı gelen hidrofor bakımının iş emri (HIZ-06)
+    assert requests_page["total"] == 7
+    base = "/api/v1/sites/aksu-konaklari"
+    assets = (await api.get(f"{base}/technical-assets", headers=manager)).json()
+    assert len(assets) == 6
+    warnings = {a["next_inspection"]["warning"] for a in assets if a["next_inspection"]}
+    assert {"7", "30"} <= warnings  # yaklaşan yasal muayeneler (K28, HIZ-07)
+    assert (await api.get(f"{base}/assets", headers=manager)).json() == []  # mali demirbaş ayrı
+    keys = (await api.get(f"{base}/keys", headers=manager)).json()
+    loans = [k for k in keys if k["loan"]]
+    assert len(loans) == 2  # biri dışarıda; gecikme gerçek saate göre (sabit demo gününde ikisi)
+    assert any(k["overdue"] for k in loans)
+    assert len((await api.get(f"{base}/maintenance-runs?status=open", headers=manager)).json()) == 1
 
 
 async def test_demo_kasa_ve_gider(

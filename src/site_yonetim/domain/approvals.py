@@ -43,6 +43,7 @@ class ActionType(StrEnum):
     REGISTRATION = "registration"  # kayıt başvurusu
     STOCK_COUNT_DIFFERENCE = "stock_count_difference"  # stok sayım farkı
     APPROVAL_RULE_CHANGE = "approval_rule_change"  # onay kuralı değişikliği
+    OWNERSHIP_TRANSFER = "ownership_transfer"  # malik değişimi: satış / veraset (YAP-04)
     LEAVE_REQUEST = "leave_request"  # izin talebi (IK-03)
     PERIOD_UNLOCK = "period_unlock"  # dönem kilidi açma (FIN-13)
     CASH_DIFFERENCE = "cash_difference"  # kasa sayım farkı (FIN-11)
@@ -71,6 +72,7 @@ ACTION_LABELS: dict[ActionType, str] = {
     ActionType.REGISTRATION: "Kayıt başvurusu",
     ActionType.STOCK_COUNT_DIFFERENCE: "Stok sayım farkı",
     ActionType.APPROVAL_RULE_CHANGE: "Onay kuralı değişikliği",
+    ActionType.OWNERSHIP_TRANSFER: "Malik değişimi (satış / veraset)",
     ActionType.LEAVE_REQUEST: "İzin talebi",
     ActionType.PERIOD_UNLOCK: "Dönem kilidi açma",
     ActionType.CASH_DIFFERENCE: "Kasa farkı",

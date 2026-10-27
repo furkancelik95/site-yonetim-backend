@@ -47,5 +47,6 @@ def test_kisi_iletisim_bilgisi_izin_yoksa_gizlenir() -> None:
     shown = PersonOut.of(person, contact=True)
 
     assert (hidden.phone, hidden.email) == (None, None)
-    assert shown.phone == "+905321234567"
+    # YAP-03 S1: izinli kullanıcı da maskeli görür; açık değer contact-views ile (denetimli)
+    assert (shown.phone, shown.email) == ("+90 532 *** ** 67", "a***@b.co")
     assert person.search_name == "ayşe yılmaz"

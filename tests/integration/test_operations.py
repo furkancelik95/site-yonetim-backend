@@ -138,6 +138,9 @@ async def test_talep_acilir_ve_durumu_degisir(ops: Ops) -> None:
 
     tech = await ops.user("teknik@test.local", "Teknik Personel")
     request_id = data["id"]
+    assigned = await ops.post(f"/requests/{request_id}/assign", {"assignee": "Tesisatçı Ali"}, tech)
+    assert assigned.json()["message"] == "#1 talep Tesisatçı Ali kişisine atandı."
+    assert assigned.json()["data"]["status_label"] == "Atandı"
     progress = await ops.post(f"/requests/{request_id}/status", {"status": "in_progress"}, tech)
     assert progress.json()["data"]["status_label"] == "İşlemde"
     no_resolution = await ops.post(f"/requests/{request_id}/status", {"status": "resolved"}, tech)
@@ -145,8 +148,6 @@ async def test_talep_acilir_ve_durumu_degisir(ops: Ops) -> None:
     assert "resolution" in no_resolution.json()["error"]["fields"]
     same = await ops.post(f"/requests/{request_id}/status", {"status": "in_progress"}, tech)
     assert same.status_code == 409
-    assigned = await ops.post(f"/requests/{request_id}/assign", {"assignee": "Tesisatçı Ali"}, tech)
-    assert assigned.json()["message"] == "#1 talep Tesisatçı Ali kişisine atandı."
     resolved = await ops.post(
         f"/requests/{request_id}/status",
         {"status": "resolved", "resolution": "Conta değişti"},
@@ -160,14 +161,18 @@ async def test_talep_acilir_ve_durumu_degisir(ops: Ops) -> None:
     detail = (await ops.get(f"/requests/{request_id}", sakin)).json()
     assert [e["kind"] for e in detail["events"]] == [
         "created",
-        "status_changed",
         "assigned",
+        "status_changed",
+        "status_changed",
         "resolved",
     ]
     assert detail["events"][-1]["description"] == "Durum: İşlemde → Çözüldü. Çözüm: Conta değişti"
     assert detail["events"][-1]["actor_name"] == "Test KULLANICI"
 
-    reopened = await ops.post(f"/requests/{request_id}/status", {"status": "open"}, tech)
+    # Personel çözümü yetersiz bulursa işleme geri döner (K18); "açık"a dönüş yok.
+    back = await ops.post(f"/requests/{request_id}/status", {"status": "open"}, tech)
+    assert back.json()["error"]["code"] == "invalid_transition"
+    reopened = await ops.post(f"/requests/{request_id}/status", {"status": "in_progress"}, tech)
     assert reopened.json()["data"]["resolved_at"] is None
 
 
@@ -198,7 +203,7 @@ async def test_resident_rules(ops: Ops) -> None:
     assert comment.status_code == 201
     assert comment.json()["data"]["events"][-1]["description"] == "Hâlâ yanıyor"
     denied = await ops.post(
-        f"/requests/{own_id}/status", {"status": "closed", "resolution": "x"}, sakin
+        f"/requests/{own_id}/status", {"status": "cancelled", "resolution": "x"}, sakin
     )
     assert denied.status_code == 403
 
