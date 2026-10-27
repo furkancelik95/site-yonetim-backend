@@ -5,11 +5,11 @@
 - Değişmez (forbid_history_change): `purchase_decisions`, `purchase_receipt_lines`,
   `vendor_invoice_lines`.
 - Onay mekanizmasına yeni işlem türü: `invoice_difference` (fatura farkı). **CHECK listesi**
-  (`approval_rules/approval_requests.action_type`) main'deki son göçten (0026) alındı + yeni
-  değer; paralel paketlerle birleştirmede koordinatör listeyi birleştirir.
+  (`approval_rules/approval_requests.action_type`) 0028'den alındı + yeni
+  değer (birleştirme P10 üzerine yapıldı).
 
 Revision ID: 0034
-Revises: 0031
+Revises: 0028
 Create Date: 2026-10-27 11:49:50.751359
 """
 
@@ -39,30 +39,16 @@ TABLES = (
 )
 IMMUTABLE = ("purchase_decisions", "purchase_receipt_lines", "vendor_invoice_lines")
 
-# main'deki son liste (göç 0026: 0024 + leave_request + ownership_transfer)
+# Göç 0028'deki liste (0027 tam liste + ownership_transfer + transparency_report + budget +
+# charge_adjustment); bu göç `invoice_difference` ekler.
 _ACTIONS_OLD = (
-    "charge_rule",
-    "charge_run",
-    "charge_run_reversal",
-    "refund",
-    "debt_write_off",
-    "expense",
-    "emergency_expense",
-    "purchase_request",
-    "purchase_order",
-    "quote_exception",
-    "reservation",
-    "renovation_permit",
-    "payment_plan",
-    "paid_service_tariff",
-    "role_change",
-    "finance_mode_change",
-    "registration",
-    "stock_count_difference",
-    "approval_rule_change",
-    "leave_request",
-    "ownership_transfer",
-)
+    "charge_rule", "charge_run", "charge_run_reversal", "refund", "debt_write_off", "expense",
+    "emergency_expense", "purchase_request", "purchase_order", "quote_exception", "reservation",
+    "renovation_permit", "payment_plan", "paid_service_tariff", "role_change",
+    "finance_mode_change", "registration", "stock_count_difference", "approval_rule_change",
+    "leave_request", "period_unlock", "cash_difference", "ad_hoc_charge", "finance_parameter",
+    "demand_letter", "ownership_transfer", "transparency_report", "budget", "charge_adjustment",
+)  # fmt: skip
 _ACTIONS_NEW = (*_ACTIONS_OLD, "invoice_difference")
 _SELECTED_QUOTE_FK = "fk_purchase_requests_site_id_selected_quote_id_purchase_quotes"
 
@@ -77,7 +63,7 @@ def _action_check(actions: tuple[str, ...]) -> None:
 
 
 revision: str = "0034"
-down_revision: str | None = "0031"
+down_revision: str | None = "0028"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
