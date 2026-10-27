@@ -25,6 +25,7 @@ from site_yonetim.db.session import create_engine_from_settings, create_session_
 from site_yonetim.domain.files import MAX_FILE_BYTES
 from site_yonetim.domain.finance import FinanceRuleError
 from site_yonetim.seed.demo import seed_demo
+from site_yonetim.services.channels import channels_from_settings
 from site_yonetim.services.imports import MAX_UPLOAD_BYTES
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,14 @@ _UPLOAD_LIMITS = (
     (re.compile(rf"{API_V1_PREFIX}/sites/[^/]+/bank-imports$"), MAX_UPLOAD_BYTES + 64 * 1024),
     (re.compile(rf"{API_V1_PREFIX}/sites/[^/]+/expenses"), MAX_FILE_BYTES + 64 * 1024),
     (re.compile(rf"{API_V1_PREFIX}/sites/[^/]+/documents$"), MAX_FILE_BYTES + 64 * 1024),
+    # Satın alma belgeleri: teklif, kabul fotoğrafı/irsaliye, fatura; tedarikçi teklif belgesi
+    (
+        re.compile(
+            rf"{API_V1_PREFIX}/sites/[^/]+/(purchase-quotes|purchase-receipts|vendor-invoices)/[^/]+/file"
+        ),
+        MAX_FILE_BYTES + 64 * 1024,
+    ),
+    (re.compile(rf"{API_V1_PREFIX}/public/quote-links/[^/]+/file"), MAX_FILE_BYTES + 64 * 1024),
 )
 
 
@@ -84,6 +93,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.engine = None
     app.state.session_factory = None
+    app.state.channels = channels_from_settings(settings)
 
     install_error_handlers(app)
     # Finans kuralı (ör. dönem kilidi `period_locked`) her uçta aynı yanıta çevrilir; uç kendisi

@@ -155,6 +155,7 @@ class AccountSpec:
     organization_role: str | None = None
     site_slug: str | None = None
     site_role: str | None = None
+    phone: str | None = None  # P5: saha ve sakin telefon + SMS koduyla da girer
 
 
 # docs/10 §2. Sakin hesabı ayrıca kurulur: Aksu'da en borçlu oturan hesabın kişisine bağlanır.
@@ -166,11 +167,19 @@ ACCOUNTS: tuple[AccountSpec, ...] = (
         "mimoza@demo.local", "Hakan Tunç", site_slug="mimoza-apartmani", site_role="Yönetici"
     ),
     AccountSpec(
-        "guvenlik@demo.local", "Recep Er", site_slug="aksu-konaklari", site_role="Güvenlik"
+        "guvenlik@demo.local",
+        "Recep Er",
+        site_slug="aksu-konaklari",
+        site_role="Güvenlik",
+        phone="+905550000002",
     ),
     AccountSpec("denetci@demo.local", "Nuray Şen", site_slug="aksu-konaklari", site_role="Denetçi"),
     AccountSpec(
-        "teknik@demo.local", "Ergün Kılıç", site_slug="aksu-konaklari", site_role="Teknik Personel"
+        "teknik@demo.local",
+        "Ergün Kılıç",
+        site_slug="aksu-konaklari",
+        site_role="Teknik Personel",
+        phone="+905550000003",
     ),
 )
 
@@ -250,7 +259,9 @@ LAST_MONTH_FACTOR = Decimal("0.90")
 OLDER_MONTHS_BONUS = Decimal("0.04")
 CASH_SHARE = 0.25  # ~%25 nakit, gerisi havale
 PAYMENT_DAYS = (2, 25)  # ayın 2'si – 25'i
-RESIDENT = AccountSpec("sakin@demo.local", "", site_slug="aksu-konaklari", site_role="Sakin")
+RESIDENT = AccountSpec(
+    "sakin@demo.local", "", site_slug="aksu-konaklari", site_role="Sakin", phone="+905550000001"
+)
 
 
 # --- Duyuru ve talep (docs/10 §1.4) ----------------------------------------------
@@ -404,6 +415,18 @@ SHIFT_TEMPLATES: tuple[tuple[str, str, str, int], ...] = (
     ("Gece", "00:00", "08:00", 30),
 )
 
+
+# --- Satın alma (servis istekleri 62–67) -------------------------------------------------
+# Tedarikçi: unvan, vergi no, kategori, IBAN (geçerli kontrol basamaklı, örnek), durum.
+VENDORS: tuple[tuple[str, str, str, str | None, str], ...] = (
+    ("Akın Pompa ve Tesisat Ltd. Şti.", "1111111111", "Tesisat", "TR850001000000000012345678",
+     "active"),
+    ("Bora Elektrik San. Tic. A.Ş.", "2222222222", "Elektrik malzemesi",
+     "TR760006200000000098765432", "active"),
+    ("Ceren Temizlik Malzemeleri", "3333333333", "Temizlik malzemesi", None, "active"),
+    ("Doruk Asansör Bakım", "4444444444", "Asansör bakım", "TR810004600000000055501234",
+     "passive"),
+)  # fmt: skip
 
 # --- Operasyon ekleri ve teknik varlık (servis istekleri 53–58; HIZ-06/07; K28) --------------
 # Anahtar: tip, kod, ad, alan, yetkili roller (boş: herkes).

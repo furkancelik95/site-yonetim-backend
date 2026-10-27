@@ -41,15 +41,19 @@ from site_yonetim.models import (
     Permit,
     Person,
     Plan,
+    PurchaseRequest,
     Request,
     RequestEvent,
     ServiceQuote,
     ServiceTariff,
     Site,
     SiteModule,
+    StockItem,
     Unit,
     UnitType,
     User,
+    Vendor,
+    VendorInvoice,
 )
 from site_yonetim.seed.demo import DemoSeedRefusedError, seed_demo
 from site_yonetim.seed.demo_data import DEMO_PASSWORD, SITES, occupancy_for
@@ -119,6 +123,18 @@ async def test_demo_verisi_yuklenir(
         "reservations", "visitors", "packages", "valet",
         "general-assembly", "surveys", "staff",
     }  # fmt: skip
+    # Satın alma (servis istekleri 62–67): açık, teklifli, siparişli talepler; eşleşen ve fark
+    # çıkan birer fatura; kabulde stoğa giren ampuller.
+    with site_scope(sites["aksu-konaklari"].id):
+        async with session_factory() as session:
+            statuses = sorted(await session.scalars(select(PurchaseRequest.status)))
+            invoices = sorted(await session.scalars(select(VendorInvoice.status)))
+            vendors = await session.scalar(select(func.count()).select_from(Vendor))
+            stock = await session.scalar(select(StockItem.quantity))
+    assert statuses == ["ordered", "ordered", "quoting", "quoting"]
+    assert invoices == ["diff_pending", "matched"]
+    assert vendors == 4
+    assert stock == Decimal("40.000")
 
 
 async def test_demo_talepleri_zaman_sirasinda(
@@ -325,6 +341,12 @@ async def test_demo_tahsilat_ve_sakin(
                 paid = await session.scalar(select(func.sum(Payment.amount)))
                 allocated = await session.scalar(select(func.sum(PaymentAllocation.amount)))
                 summary = await session.scalar(select(func.sum(AccountBalance.balance)))
+                # Ücretli rezervasyonlar (SR 60) ve dönem dışı ücretler cariye ayrıca yazılır.
+                reserved = await session.scalar(
+                    select(
+                        func.coalesce(func.sum(LedgerEntry.debit - LedgerEntry.credit), 0)
+                    ).where(LedgerEntry.source == "reservation")
+                )
                 ad_hoc = await session.scalar(
                     select(
                         func.coalesce(func.sum(LedgerEntry.debit - LedgerEntry.credit), 0)
@@ -333,7 +355,7 @@ async def test_demo_tahsilat_ve_sakin(
         assert charged is not None
         assert paid is not None
         assert paid == allocated  # demo tahsilatı borç tutarında: avans yok
-        assert summary == charged - paid + ad_hoc  # dönem dışı ücretler (P03a demo)
+        assert summary == charged - paid + reserved + ad_hoc  # dönem dışı ücretler (P03a demo)
         with site_scope(sites[spec.slug]):
             async with session_factory() as session:
                 locked = await session.scalar(
@@ -397,12 +419,15 @@ async def test_demo_duyuru_ve_talep(
         assert extras == [1, 1, 1, 3]  # ana olay, tadilat başvurusu, teklif, tarife (SR 49–52)
         assert pending is not None
         assert pending.date() > SEED_DAY  # sakin onayı bekliyor
-        assert announcement_count == 4
+        # Aksu: + iki genel kurul çağrısı (geçmiş ve yaklaşan; servis istekleri 75–77)
+        assert announcement_count == (7 if slug == sites["aksu-konaklari"] else 5)  # + okuma onaylı
 
     resident = await login_headers(api, "sakin@demo.local", DEMO_PASSWORD)
     listed = (await api.get("/api/v1/sites/aksu-konaklari/announcements", headers=resident)).json()
     assert [a["title"] for a in listed["items"]] == [
+        "Olağanüstü genel kurul toplantı çağrısı",  # malik: okuma onaylı çağrı (75), sabit
         "Olağan genel kurul toplantısı",
+        "Asansör yenileme çalışması — okuma onayı",
         "Planlı su kesintisi",
         "Aidat ödeme hatırlatması",
     ]
@@ -421,6 +446,22 @@ async def test_demo_duyuru_ve_talep(
     assert len(loans) == 2  # biri dışarıda; gecikme gerçek saate göre (sabit demo gününde ikisi)
     assert any(k["overdue"] for k in loans)
     assert len((await api.get(f"{base}/maintenance-runs?status=open", headers=manager)).json()) == 1
+    areas = (await api.get(f"{base}/reservable-areas", headers=manager)).json()
+    assert {a["name"] for a in areas} >= {"Spor salonu", "Toplantı salonu", "Mangal alanı"}
+    booked = (
+        await api.get(f"{base}/reservations", params={"page_size": 200}, headers=manager)
+    ).json()
+    assert {r["status"] for r in booked["items"]} >= {
+        "checked_in",
+        "no_show",
+        "approved",
+        "pending",
+    }
+    waiting = (await api.get(f"{base}/waitlist", headers=manager)).json()
+    assert waiting["total"] == 1
+    mine = (await api.get(f"{base}/resident/reservations", headers=resident)).json()
+    assert len(mine["reservations"]) == 2
+    assert len(mine["waitlist"]) == 1
 
 
 async def test_demo_kasa_ve_gider(
@@ -589,3 +630,33 @@ async def test_demo_sozlesme_performansi(
     platform = await login_headers(api, "platform@demo.local", DEMO_PASSWORD)
     index = (await api.get("/api/v1/platform/index-values", headers=platform)).json()
     assert (index["total"], index["items"][0]["period"]) == (13, "2026-09")
+
+
+async def test_demo_genel_kurul(
+    api: httpx2.AsyncClient,
+    dev_settings: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+    seed_day: date,
+) -> None:
+    """Servis istekleri 75–77: geçmiş genel kurul tutanaklı ve karar defterinde; yaklaşan genel
+    kurulun çağrısı gönderilmiş."""
+    await seed_demo(dev_settings, session_factory, today=SEED_DAY)
+    manager = await login_headers(api, "yonetici@demo.local", DEMO_PASSWORD)
+    base = "/api/v1/sites/aksu-konaklari"
+    meetings = (await api.get(f"{base}/meetings", headers=manager)).json()["items"]
+    assert [(m["kind"], m["status"]) for m in meetings] == [
+        ("general_extraordinary", "planned"),
+        ("general_ordinary", "held"),
+    ]
+    upcoming, past = meetings
+    held = (await api.get(f"{base}/meetings/{past['id']}/assembly", headers=manager)).json()
+    assert held["minutes"]["finalized_at"] is not None
+    assert held["quorum"]["ok"] is True
+    results = [held["votes"][i["id"]]["result"]["accepted"] for i in past["agenda"]]
+    assert results == [True, True, True, False]  # 4/5 bariyer maddesi RET
+    book = (await api.get(f"{base}/decision-book", headers=manager)).json()
+    assert [e["no"] for e in book["items"]] == [3, 2, 1]
+    coming = (await api.get(f"{base}/meetings/{upcoming['id']}/assembly", headers=manager)).json()
+    assert coming["invitation"]["recipients"] > 0
+    assert 0 < coming["invitation"]["read"] < coming["invitation"]["recipients"]
+    assert coming["attendance"] == []

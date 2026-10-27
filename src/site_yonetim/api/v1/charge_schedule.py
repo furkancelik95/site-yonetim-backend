@@ -2,6 +2,10 @@
 
 Okuma `finance.read`, değiştirme `finance.charge.post`. Kesimi gece işi yapar
 (`cli run-charge-schedules`, `services/charge_schedule.py`). Ayar değişikliği denetim kaydında.
+
+K25: vade artık takvimde değil, finans parametresi `due_day` (varsayılan ayın 10'u); yanıtta
+salt okunur döner. FIN-05: "Tahakkuk" onay kuralı varsa taslak kesimden `draft_lead_days` gün
+önce hazırlanıp onaya gider (`approval_required`).
 """
 
 import datetime as dt
@@ -10,13 +14,15 @@ import uuid
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from site_yonetim.api.deps import SiteContext, TodayDep
+from site_yonetim.api.deps import CurrentUserDep, SiteContext, TodayDep
 from site_yonetim.api.schemas import Written
 from site_yonetim.api.v1.finance_common import ChargePost, FinanceRead, finance_error
 from site_yonetim.domain.charging.periods import YearMonth
 from site_yonetim.domain.finance import FinanceRuleError, ScheduleRunStatus
 from site_yonetim.models import ChargeSchedule
+from site_yonetim.services import charge_drafts, finance_params
 from site_yonetim.services import charge_schedule as svc
+from site_yonetim.services.approvals import Person
 
 router = APIRouter(prefix="/sites/{slug}", tags=["tahakkuk"])
 
@@ -24,7 +30,9 @@ router = APIRouter(prefix="/sites/{slug}", tags=["tahakkuk"])
 class ScheduleIn(BaseModel):
     enabled: bool
     charge_day: int = Field(description="ayın kaçında: 1–28")
-    due_days: int = Field(description="tahakkuktan kaç gün sonra son ödeme: 0–60")
+    draft_lead_days: int = Field(
+        default=5, description="onay kuralı varsa taslak kesimden kaç gün önce: 0–15"
+    )
     notify_on_run: bool = True
 
 
@@ -39,7 +47,11 @@ class LastRunOut(BaseModel):
 class ScheduleOut(BaseModel):
     enabled: bool
     charge_day: int
-    due_days: int
+    draft_lead_days: int
+    due_day: int = Field(description="K25 vade günü — finans parametresi (salt okunur)")
+    approval_required: bool = Field(
+        description="'Tahakkuk' onay kuralı var: taslak hazırlanıp onaya gider (FIN-05)"
+    )
     notify_on_run: bool = Field(description="bildirim sağlayıcısı yok (K5): şimdilik yalnız kayıt")
     next_run_on: dt.date | None = Field(description="kapalıysa null; İstanbul yerel tarihi")
     last_run: LastRunOut | None
@@ -47,15 +59,18 @@ class ScheduleOut(BaseModel):
 
 async def _out(ctx: SiteContext, schedule: ChargeSchedule | None, today: dt.date) -> ScheduleOut:
     last = await svc.last_run(ctx.session)
-    enabled, charge_day, due_days, notify = (
-        (schedule.enabled, schedule.charge_day, schedule.due_days, schedule.notify_on_run)
+    enabled, charge_day, lead, notify = (
+        (schedule.enabled, schedule.charge_day, schedule.draft_lead_days, schedule.notify_on_run)
         if schedule
-        else (False, svc.DEFAULT_DAY, svc.DEFAULT_DUE_DAYS, True)
+        else (False, svc.DEFAULT_DAY, svc.DEFAULT_LEAD_DAYS, True)
     )
+    params = await finance_params.current(ctx.session, today)
     return ScheduleOut(
         enabled=enabled,
         charge_day=charge_day,
-        due_days=due_days,
+        draft_lead_days=lead,
+        due_day=int(params["due_day"]),
+        approval_required=await charge_drafts.rule_exists(ctx.session, today),
         notify_on_run=notify,
         next_run_on=await svc.next_run(ctx.session, schedule, today) if schedule else None,
         last_run=LastRunOut(
@@ -72,20 +87,23 @@ async def _out(ctx: SiteContext, schedule: ChargeSchedule | None, today: dt.date
 
 @router.get("/charge-schedule", summary="Otomatik aylık tahakkuk ayarı")
 async def get_schedule(ctx: FinanceRead, today: TodayDep) -> ScheduleOut:
-    """Hiç kaydedilmediyse varsayılan: kapalı, gün 1, vade 14."""
+    """Hiç kaydedilmediyse varsayılan: kapalı, gün 1, taslak 5 gün önce."""
     return await _out(ctx, await svc.get(ctx.session), today)
 
 
 @router.put("/charge-schedule", summary="Otomatik aylık tahakkuk ayarını kaydet")
-async def put_schedule(ctx: ChargePost, body: ScheduleIn, today: TodayDep) -> Written[ScheduleOut]:
+async def put_schedule(
+    ctx: ChargePost, body: ScheduleIn, today: TodayDep, current: CurrentUserDep
+) -> Written[ScheduleOut]:
     try:
         schedule, turned_on = await svc.save(
             ctx.session,
             enabled=body.enabled,
             charge_day=body.charge_day,
-            due_days=body.due_days,
+            draft_lead_days=body.draft_lead_days,
             notify_on_run=body.notify_on_run,
             today=today,
+            actor=Person(current.user.id, current.user.full_name),
         )
     except FinanceRuleError as exc:
         raise finance_error(exc) from exc

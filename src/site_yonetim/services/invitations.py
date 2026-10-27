@@ -51,6 +51,7 @@ from site_yonetim.models import (
     UnitParty,
     User,
 )
+from site_yonetim.services import privacy as privacy_svc
 from site_yonetim.services import structure
 from site_yonetim.services.vehicles import read_settings
 
@@ -303,7 +304,9 @@ async def _login(
     if person.user_id is None:
         person.user_id = user.id
     await session.flush()
-    return user.email, password
+    # Formdaki "aydınlatma metnini okudum" onayı hesaba bağlanır (P6) — o anki son sürüm.
+    await privacy_svc.link_invitation(session, user.id, None)
+    return user.email or user.phone or "", password
 
 
 async def accept(

@@ -8,7 +8,7 @@ Mevcut bedelli sözleşmelerin bugünkü bedeli geçmişe başlangıç tarihinde
 yazılır. Veri silinmez.
 
 Revision ID: 0035
-Revises: 0043
+Revises: 0037
 Create Date: 2026-10-27 17:19:51.371166
 """
 
@@ -31,19 +31,18 @@ TABLES = (
 # Değişmez kayıtlar (forbid_history_change: göç 0008).
 IMMUTABLE = ("contract_amounts", "index_values")
 
-# Onay işlem tipleri: main'deki en son liste (göç 0036) + bu paket.
-_ACTIONS_0027 = (
+# Onay işlem tipleri: göç 0034'teki tam liste (0027 tam + ownership_transfer + transparency_report +
+# budget + charge_adjustment + invoice_difference) + bu paket.
+_ACTIONS_0034 = (
     "charge_rule", "charge_run", "charge_run_reversal", "refund", "debt_write_off", "expense",
     "emergency_expense", "purchase_request", "purchase_order", "quote_exception", "reservation",
     "renovation_permit", "payment_plan", "paid_service_tariff", "role_change",
     "finance_mode_change", "registration", "stock_count_difference", "approval_rule_change",
-    "leave_request",  # göç 0029 (insan kaynakları)
-    "ownership_transfer",  # göç 0026 (yapı, kişiler)
-    "period_unlock", "cash_difference", "ad_hoc_charge", "finance_parameter",
-    "demand_letter",  # göç 0027 (finans Mod P)
+    "leave_request", "period_unlock", "cash_difference", "ad_hoc_charge", "finance_parameter",
+    "demand_letter", "ownership_transfer", "transparency_report", "budget", "charge_adjustment",
+    "invoice_difference",
 )  # fmt: skip
-_ACTIONS_0036 = (*_ACTIONS_0027, "transparency_report")  # göç 0036 (iletişim)
-_ACTIONS = (*_ACTIONS_0036, "penalty_deduction", "contract_escalation")
+_ACTIONS = (*_ACTIONS_0034, "penalty_deduction", "contract_escalation")
 
 
 def _check(table: str, column: str, values: tuple[str, ...]) -> None:
@@ -54,7 +53,7 @@ def _check(table: str, column: str, values: tuple[str, ...]) -> None:
 
 
 revision: str = "0035"
-down_revision: str | None = "0043"
+down_revision: str | None = "0037"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -508,7 +507,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     # Yeni işlem tipli onay satırı varsa kısıt geri kurulamaz: veri silinmez, geri dönüş durur.
     for table in ("approval_rules", "approval_requests"):
-        _check(table, "action_type", _ACTIONS_0036)
+        _check(table, "action_type", _ACTIONS_0034)
     for table in IMMUTABLE:
         op.execute(f'DROP TRIGGER IF EXISTS {table}_immutable ON "{table}"')
     for table in reversed(TABLES):

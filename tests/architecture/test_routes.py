@@ -14,7 +14,13 @@ from fastapi import FastAPI
 from fastapi.dependencies.models import Dependant
 from fastapi.routing import APIRoute, iter_route_contexts
 
-from site_yonetim.api.deps import current_user, password_changed, platform_admin, site_context
+from site_yonetim.api.deps import (
+    consent_given,
+    current_user,
+    password_changed,
+    platform_admin,
+    site_context,
+)
 from site_yonetim.main import create_app
 from tests.conftest import SettingsFactory
 
@@ -28,13 +34,40 @@ PUBLIC_ROUTES = {
     # Sakinin kendini kaydetmesi (servis isteği 13): IP başına istek sınırı, tahmin edilemez kod,
     # yalnız site adı döner, başvuru yönetici onayı bekler.
     "/api/v1/public/registration/{code}",
+    # P5 / PLT-01, §4.7: kodla giriş, parola sıfırlama, davet. Hedef başına sınır (60 sn, günde
+    # 10, 5 hatada 15 dk) + IP başına istek sınırı; kayıtlı/kayıtsız aynı yanıt; kodun ve davet
+    # jetonunun yalnız özeti saklanır.
+    "/api/v1/auth/otp/request",
+    "/api/v1/auth/otp/verify",
+    "/api/v1/auth/password/forgot",
+    "/api/v1/auth/password/reset",
+    "/api/v1/auth/invitations/{token}",
+    "/api/v1/auth/invitations/{token}/accept",
     # Davetle kayıt (servis isteği 23): IP başına istek sınırı, belirtecin yalnız özeti saklanır,
     # telefon davetteki numarayla tam eşleşmeli; yanıt yalnız site/bölüm adı ve son 4 hane.
     "/api/v1/public/invitations/{token}",
     "/api/v1/public/invitations/{token}/accept",
+    # Aydınlatma metni (RAP-04, P6): yalnız site adı ve yayımlanmış metin; IP başına istek sınırı.
+    "/api/v1/public/privacy-notice/{slug}",
+    # Tedarikçi teklif linki (servis isteği 64, SAT-02): IP başına istek sınırı, belirteç 256 bit
+    # ve yalnız özeti saklanır, tek kullanımlık ve süreli; yanıt yalnız talep kalemleri. Belge
+    # ekleme yalnız gönderimden sonraki 1 saatte, bir kez.
+    "/api/v1/public/quote-links/{token}",
+    "/api/v1/public/quote-links/{token}/file",
 }
 # Geçici parolalı oturumun erişebildiği uçlar (docs/05 §8.1). Gerisi `password_changed` ister.
-PASSWORD_PENDING_ROUTES = {"/api/v1/me", "/api/v1/auth/change-password"}
+PASSWORD_PENDING_ROUTES = {
+    "/api/v1/me",
+    "/api/v1/auth/change-password",
+    # Yönetici rolünde 2FA kurulumu (geçiş süresi bitince yalnız bunlar açık) ve girişin ikinci
+    # adımı (`mfa_passed` bile istemez — kod bekleyen oturuma açık tek uç).
+    "/api/v1/me/security",
+    "/api/v1/auth/mfa/setup",
+    "/api/v1/auth/mfa/enable",
+    "/api/v1/auth/mfa/verify",
+}
+# Aydınlatma onayı bekleyen oturumun erişebildiği uçlar (PM kararı P6). Gerisi `consent_given`.
+CONSENT_PENDING_ROUTES = PASSWORD_PENDING_ROUTES | {"/api/v1/me/consents"}
 
 
 def _calls(dependant: Dependant) -> set[object]:
@@ -85,6 +118,21 @@ def test_gecici_parolada_yalniz_me_ve_parola_degisikligi(
 
     assert paths >= PASSWORD_PENDING_ROUTES
     assert offenders == [], "Bu uç geçici parolalı oturuma açık: CurrentUserDep kullanın"
+
+
+def test_onay_beklerken_yalniz_me_ve_onay_uclari(
+    routes: list[tuple[str, set[object]]],
+) -> None:
+    """P6: güncel aydınlatma metni onaylanmadan yalnız /me, /auth/* ve /me/consents çalışır."""
+    offenders = [
+        path
+        for path, calls in routes
+        if path not in PUBLIC_ROUTES | CONSENT_PENDING_ROUTES and consent_given not in calls
+    ]
+    paths = {path for path, _ in routes}
+
+    assert paths >= CONSENT_PENDING_ROUTES
+    assert offenders == [], "Bu uç onay beklerken çalışır: CurrentUserDep kullanın"
 
 
 def test_site_uclari_site_baglamindan_gecer(routes: list[tuple[str, set[object]]]) -> None:

@@ -25,6 +25,9 @@ GLOBAL_TABLES = {
     "notification_preferences",  # kişinin kanal tercihi, siteden bağımsız
     "push_tokens",  # cihazın push jetonu, siteden bağımsız
     "index_values",  # TÜFE/ÜFE endeksi: tüm tesislerde ortak (SAT-06, 15.3)
+    "otp_challenges",  # SMS/e-posta kodu: giriş site bağlamından önce (hedef başına sınır)
+    "mfa_recovery_codes",  # 2FA yedek kodu: hesaba aittir
+    "user_invitations",  # hesap daveti: hesap globaldir (site adı yalnız gösterim)
 }
 
 TABLES: list[Table] = list(Base.metadata.sorted_tables)

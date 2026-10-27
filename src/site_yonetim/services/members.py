@@ -1,8 +1,8 @@
 """Site kullanıcıları ve rolleri — frontend servis isteği 12; çoklu rol, kapsam ve süre (P18,
 PLT-09). Açık site kapsamında; transaction'ı çağıran yönetir.
 
-- Yeni e-posta → yeni kullanıcı + **geçici parola** (yalnız yanıtta döner; hash'li saklanır, loga
-  ve denetim kaydına yazılmaz). İlk girişte parola değiştirmek zorunlu.
+- Yeni e-posta → yeni kullanıcı + **72 saatlik davet bağlantısı** (P5, PLT-09): kişi parolasını
+  bağlantıdan belirler; geçici parola yok (`services/user_invitations.py`).
 - Kayıtlı e-posta → yeni kullanıcı açılmaz, mevcut kullanıcıya bu sitede rol verilir.
 - Bir kişinin birden çok rolü olabilir; roller `services/roles.py` ile atanır/kaldırılır.
 - Yönetim şirketi üyeliğinden gelen erişim (`source = organization`) buradan değiştirilemez.
@@ -11,7 +11,6 @@ PLT-09). Açık site kapsamında; transaction'ı çağıran yönetir.
 - Erişimi kapatma kaydı silmez; kullanıcının açık oturumları sonlandırılır.
 """
 
-import secrets
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -19,7 +18,6 @@ from datetime import datetime
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from site_yonetim.core.security import hash_password
 from site_yonetim.domain.access import (
     ORGANIZATION_ROLE_TO_SITE_ROLE,
     TEMPLATE_KEYS,
@@ -41,8 +39,9 @@ from site_yonetim.models import (
     User,
 )
 from site_yonetim.services import roles as roles_svc
-
-TEMPORARY_PASSWORD_BYTES = 12
+from site_yonetim.services import user_invitations
+from site_yonetim.services.auth_events import Client
+from site_yonetim.services.channels import Channels
 
 
 class MemberRuleError(Exception):
@@ -209,7 +208,16 @@ class Actor:
 @dataclass(frozen=True, slots=True)
 class Added:
     member: Member
-    temporary_password: str | None  # yalnız yeni kullanıcıda; saklanmaz
+    invitation: user_invitations.SentInvitation | None  # yalnız yeni kullanıcıda
+
+
+@dataclass(frozen=True, slots=True)
+class Inviter:
+    """Davet gönderimi için bağlam (API katmanından)."""
+
+    web_url: str
+    channels: Channels
+    client: Client
 
 
 async def add_member(
@@ -221,6 +229,7 @@ async def add_member(
     assignment: roles_svc.AssignmentInput,
     actor: Actor,
     now: datetime,
+    inviter: Inviter,
 ) -> Added:
     errors: dict[str, str] = {}
     try:
@@ -239,7 +248,7 @@ async def add_member(
         raise FormFieldError(errors)
 
     user: User | None = await session.scalar(select(User).where(User.email == address))
-    password = None
+    sent = None
     if user is not None:
         taken = await session.scalar(
             select(SiteMembership.id).where(SiteMembership.user_id == user.id)
@@ -247,16 +256,20 @@ async def add_member(
         if taken is not None:
             raise MemberRuleError("already_member", "Bu e-posta zaten sitede kullanıcı.")
     else:
-        password = secrets.token_urlsafe(TEMPORARY_PASSWORD_BYTES)
-        user = User(
-            email=address,
-            full_name=name,
-            password_hash=hash_password(password),
-            kind=UserKind.STAFF.value,
-            must_change_password=True,
-        )
+        user = User(email=address, full_name=name, password_hash=None, kind=UserKind.STAFF.value)
         session.add(user)
         await session.flush()
+        sent = await user_invitations.invite(
+            session,
+            user,
+            site_name=site.name,
+            role_label=role.name if role else None,
+            invited_by_name=actor.name,
+            now=now,
+            web_url=inviter.web_url,
+            channels=inviter.channels,
+            client=inviter.client,
+        )
     membership = SiteMembership(user_id=user.id, is_active=True)
     session.add(membership)
     await session.flush()
@@ -264,7 +277,37 @@ async def add_member(
         session, site, user_id=user.id, data=assignment, actor_id=actor.user_id,
         actor_permissions=actor.permissions, actor_name=actor.name, now=now,
     )  # fmt: skip
-    return Added(await get_member(session, site, membership.id, now), password)
+    return Added(await get_member(session, site, membership.id, now), sent)
+
+
+async def resend_invitation(
+    session: AsyncSession,
+    site: Site,
+    member_id: uuid.UUID,
+    *,
+    actor: Actor,
+    now: datetime,
+    inviter: Inviter,
+) -> user_invitations.SentInvitation:
+    """Parolasını henüz belirlememiş kullanıcıya yeni davet (eskisi geçersiz)."""
+    member = await get_member(session, site, member_id, now)
+    if member.source != "site":
+        raise LookupError
+    if member.user.password_hash is not None:
+        raise MemberRuleError(
+            "already_active", "Kullanıcı parolasını belirlemiş; davet gerekmiyor."
+        )
+    return await user_invitations.invite(
+        session,
+        member.user,
+        site_name=site.name,
+        role_label=member.primary.name if member.primary else None,
+        invited_by_name=actor.name,
+        now=now,
+        web_url=inviter.web_url,
+        channels=inviter.channels,
+        client=inviter.client,
+    )
 
 
 async def _revoke_sessions(session: AsyncSession, user_id: uuid.UUID, now: datetime) -> None:

@@ -157,6 +157,12 @@ AUDITED_TABLES = frozenset(
         "ad_hoc_charges",
         "accounting_mapping_versions",
         "finance_parameter_versions",
+        # finans motoru (P03b): aidat kuralları, satır düzeltmesi, yıllık bütçe
+        "billing_rules",
+        "billing_rule_versions",
+        "charge_adjustments",
+        "budgets",
+        "budget_lines",
         # operasyon
         "incidents",
         "lost_items",
@@ -170,6 +176,9 @@ AUDITED_TABLES = frozenset(
         "service_quotes",
         "permit_settings",
         "permits",
+        # rezervasyon: alan kuralları ve K11 ayarı (rezervasyonların kendisi karar alanlarını taşır)
+        "reservation_rules",
+        "reservation_settings",
         # güvenlik, devriye, otopark (ayar ve kurulum; ziyaretçi kararları ayrıca `record` ile,
         # kişisel veri olmadan — saklama süresi denetimden kısa)
         "gates",
@@ -181,6 +190,13 @@ AUDITED_TABLES = frozenset(
         # yönetim (anket oyları gizli: poll_votes yazılmaz)
         "meetings",
         "meeting_agenda_items",
+        "assembly_settings",
+        "assemblies",
+        "assembly_items",
+        "assembly_attendance",
+        "assembly_ballots",
+        "assembly_minutes",
+        "decision_book_entries",
         "polls",
         "contracts",
         # sözleşme performansı (SAT-06, 15.3; servis istekleri 68–70)
@@ -250,9 +266,34 @@ AUDITED_TABLES = frozenset(
         "approval_requests",
         "approval_decisions",
         "approval_delegations",
+        # satın alma (SAT-01..06): kartlar, talep/teklif/karar, sipariş/kabul, fatura. Teklif
+        # linkinin belirteç özeti kayda girmez (`token_hash`).
+        "vendors",
+        "purchase_settings",
+        "purchase_requests",
+        "purchase_quotes",
+        "purchase_quote_links",
+        "purchase_decisions",
+        "purchase_orders",
+        "purchase_receipts",
+        "vendor_invoices",
+        # iletişim ve acil durum (yoklama ayrıntısı `emergency_units` kişisel veri: yazılmaz,
+        # 30 gün sonra silinir; acil bilgi kartı görsel içerdiği için elle özetle yazılır)
+        "emergencies",
+        "emergency_settings",
+        "notification_template_versions",
+        "transparency_reports",
         # belge arşivi (gizli belge açılışı ayrıca document_access_logs'ta)
         "documents",
         "document_versions",
+        # KVKK (RAP-04): metin sürümü, başvuru ve yanıtı, saklama politikası (onay ve rıza
+        # satırları kendisi değişmez kayıttır; denetim paketi özetle `record` ile yazılır)
+        "privacy_notices",
+        "privacy_requests",
+        "retention_policies",
+        # bildirim gönderimi (PLT-05, ILT-05, RAP-05): SMS hesabı/sessiz saat ve planlı rapor
+        "site_messaging_settings",
+        "scheduled_reports",
         # yetki / üyelik
         "site_memberships",
         "site_roles",

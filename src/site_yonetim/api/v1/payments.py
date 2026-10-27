@@ -144,6 +144,12 @@ class EntryOut(BaseModel):
     source_id: uuid.UUID | None
     description: str
     running_balance: Money = Field(description="bu hareketten sonraki bakiye")
+    allocated: Money = Field(
+        default=Decimal("0.00"), description="borca yapılan mahsuplar (tahsilat + avans)"
+    )
+    advance_applied: Money = Field(
+        default=Decimal("0.00"), description="önceden yatırılmış avanstan mahsup edilen (D-6)"
+    )
 
 
 class LastChargeOut(BaseModel):
@@ -182,6 +188,8 @@ async def account_statement(
                     source_id=line.entry.source_id,
                     description=line.entry.description,
                     running_balance=line.running_balance,
+                    allocated=line.allocated,
+                    advance_applied=line.advance_applied,
                 )
                 for line in lines
             ],

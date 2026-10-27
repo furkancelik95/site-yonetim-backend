@@ -3,7 +3,7 @@
 Hiçbiri silinmez: toplantı iptal edilir, sözleşme arşivlenir, demirbaş kullanım dışı yapılır,
 stok hareketi ters hareketle düzeltilir (hareket tablosu değişmez), personele ayrılış
 tarihi girilir.
-Anket oyları **gizlidir**: oy tablosu denetim kaydına yazılmaz.
+Anket yanıtları denetim kaydına yazılmaz (gizlilik anket bazında, K31).
 """
 
 import datetime as dt
@@ -11,6 +11,7 @@ import uuid
 from decimal import Decimal
 
 from sqlalchemy import (
+    ARRAY,
     CheckConstraint,
     Date,
     DateTime,
@@ -19,6 +20,7 @@ from sqlalchemy import (
     Numeric,
     Text,
     UniqueConstraint,
+    Uuid,
     text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -34,6 +36,7 @@ from site_yonetim.domain.management import (
     MeetingKind,
     MeetingStatus,
     PollAudience,
+    PollQuestionKind,
     StockDirection,
 )
 from site_yonetim.models.finance import MONEY
@@ -94,6 +97,10 @@ class MeetingAgendaItem(TenantMixin, Base):
 
 
 class Poll(TenantMixin, Base):
+    """Anket (ILT-03). `question` anketin başlığıdır; sorular `poll_questions`'ta (eski tek
+    soruluk anketler göçte tek "tek seçim" sorusuna çevrildi). Gizlilik anket bazında (K31):
+    `is_anonymous` → kim yanıtladı tutulmaz; `one_per_unit` → bölüm başına tek yanıt."""
+
     __tablename__ = "polls"
     __table_args__ = tenant_table_args(
         CheckConstraint(enum_check("audience", PollAudience), name="audience"),
@@ -106,35 +113,106 @@ class Poll(TenantMixin, Base):
     ends_on: Mapped[dt.date] = mapped_column(Date)
     closed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))  # erken kapanış
     created_by_name: Mapped[str | None] = mapped_column(Text)
+    is_anonymous: Mapped[bool] = mapped_column(default=True, server_default=text("true"))
+    one_per_unit: Mapped[bool] = mapped_column(default=True, server_default=text("true"))
+    block_ids: Mapped[list[uuid.UUID] | None] = mapped_column(ARRAY(Uuid))  # boş = tüm site
+
+
+class PollQuestion(TenantMixin, Base):
+    __tablename__ = "poll_questions"
+    __table_args__ = tenant_table_args(
+        tenant_fk("poll_id", "polls"),
+        UniqueConstraint("poll_id", "order"),
+        CheckConstraint(enum_check("kind", PollQuestionKind), name="kind"),
+    )
+
+    poll_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    order: Mapped[int]
+    text: Mapped[str] = mapped_column(Text)
+    kind: Mapped[str] = mapped_column(Text)
+    required: Mapped[bool] = mapped_column(default=True)
 
 
 class PollOption(TenantMixin, Base):
     __tablename__ = "poll_options"
     __table_args__ = tenant_table_args(
         tenant_fk("poll_id", "polls"),
-        UniqueConstraint("poll_id", "order"),
+        tenant_fk("question_id", "poll_questions"),
+        UniqueConstraint("question_id", "order"),
     )
 
     poll_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    question_id: Mapped[uuid.UUID] = mapped_column(index=True)
     order: Mapped[int]
     label: Mapped[str] = mapped_column(Text)
 
 
-class PollVote(TenantMixin, Base):
-    """Bir bağımsız bölüm = bir oy (benzersiz kısıt; eşzamanlı iki istekte de). Oy kişiye değil
-    bölüme yazılır, değiştirilemez. Kimin oy verdiği tutulmaz — gizli oy."""
+class PollBallot(TenantMixin, Base):
+    """Bir yanıt (oy pusulası); değiştirilemez. `one_per_unit` ankette bölüme yazılır
+    (`(anket, bölüm)` benzersiz — eşzamanlı iki istekte de). İsimli ankette `person_id` tutulur
+    (kişisel veri; isimli dökümü yalnız yetkili görür). Anonim + kişi başına ankette pusula
+    kimseye bağlanmaz; tekrar oy `poll_participants` ile engellenir. Denetim kaydına yazılmaz."""
 
-    __tablename__ = "poll_votes"
+    __tablename__ = "poll_ballots"
     __table_args__ = tenant_table_args(
         tenant_fk("poll_id", "polls"),
-        tenant_fk("option_id", "poll_options"),
         tenant_fk("unit_id", "units"),
-        UniqueConstraint("poll_id", "unit_id"),
+        tenant_fk("person_id", "persons"),
+        Index(
+            "uq_poll_ballots_unit",
+            "poll_id",
+            "unit_id",
+            unique=True,
+            postgresql_where=text("unit_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_poll_ballots_person",
+            "poll_id",
+            "person_id",
+            unique=True,
+            postgresql_where=text("unit_id IS NULL AND person_id IS NOT NULL"),
+        ),
     )
 
     poll_id: Mapped[uuid.UUID] = mapped_column(index=True)
-    option_id: Mapped[uuid.UUID]
-    unit_id: Mapped[uuid.UUID]
+    unit_id: Mapped[uuid.UUID | None]
+    person_id: Mapped[uuid.UUID | None]
+
+
+class PollAnswer(TenantMixin, Base):
+    """Pusuladaki yanıt: seçim (çoklu seçimde seçenek başına bir satır), puan ya da metin."""
+
+    __tablename__ = "poll_answers"
+    __table_args__ = tenant_table_args(
+        tenant_fk("ballot_id", "poll_ballots"),
+        tenant_fk("poll_id", "polls"),
+        tenant_fk("question_id", "poll_questions"),
+        tenant_fk("option_id", "poll_options"),
+        UniqueConstraint("ballot_id", "question_id", "option_id"),
+        CheckConstraint("rating IS NULL OR rating BETWEEN 1 AND 5", name="rating"),
+        Index("ix_poll_answers_poll_question", "site_id", "poll_id", "question_id"),
+    )
+
+    ballot_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    poll_id: Mapped[uuid.UUID]
+    question_id: Mapped[uuid.UUID]
+    option_id: Mapped[uuid.UUID | None]
+    rating: Mapped[int | None]
+    text: Mapped[str | None] = mapped_column(Text)
+
+
+class PollParticipant(TenantMixin, Base):
+    """Anonim + kişi başına ankette kimin katıldığı (neye oy verdiği değil) — tekrar oyu önler."""
+
+    __tablename__ = "poll_participants"
+    __table_args__ = tenant_table_args(
+        tenant_fk("poll_id", "polls"),
+        tenant_fk("person_id", "persons"),
+        UniqueConstraint("poll_id", "person_id"),
+    )
+
+    poll_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    person_id: Mapped[uuid.UUID]
 
 
 # --- Sözleşme (16) ------------------------------------------------------------------

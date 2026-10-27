@@ -34,6 +34,19 @@ async def patch(
     )
 
 
+NEW_PASSWORD = "Davet-parolasi-2026"  # gitleaks:allow — test parolası
+
+
+async def accept(w: World, added: dict[str, Any], password: str = NEW_PASSWORD) -> dict[str, str]:
+    """Davet bağlantısından parola belirler; oturum başlığını döner (P5: geçici parola yok)."""
+    token = added["invitation"]["preview_url"].rsplit("/", 1)[1]
+    response = await w.api.post(
+        f"/api/v1/auth/invitations/{token}/accept", json={"password": password}
+    )
+    assert response.status_code == 200, response.text
+    return {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+
 async def members(w: World) -> list[dict[str, Any]]:
     response = await w.get("/members")
     assert response.status_code == 200, response.text
@@ -52,7 +65,7 @@ async def test_rol_sablonlari_listesi(world: World) -> None:
     assert {r["kind"] for r in roles} == {"system"}
 
 
-async def test_yeni_kullanici_gecici_parolayla(world: World) -> None:
+async def test_yeni_kullanici_davetle(world: World) -> None:
     [kerem] = await members(world)
     assert (kerem["full_name"], kerem["role_key"], kerem["source"]) == (
         "Kerem YILDIRIM",
@@ -65,34 +78,48 @@ async def test_yeni_kullanici_gecici_parolayla(world: World) -> None:
     assert response.headers["cache-control"] == "no-store"
     body = response.json()
     assert body["message"] == (
-        "Selin Arı Muhasebe olarak eklendi. Geçici parolayı kişiye elden iletin; "
-        "ilk girişte değiştirecek."
+        "Selin Arı Muhasebe olarak eklendi. 72 saat geçerli davet bağlantısı s***@ornek.local "
+        "adresine gönderildi; kişi parolasını bağlantıdan belirler."
     )
     member = body["data"]["member"]
     assert (member["email"], member["role_key"], member["role_name"]) == (
         "selin@ornek.local", "accounting", "Muhasebe"
     )  # fmt: skip
-    password = body["data"]["temporary_password"]
-    assert len(password) >= 16
+    assert member["invitation_pending"] is True
+    invitation = body["data"]["invitation"]
+    assert invitation["sent_to"] == ["s***@ornek.local"]
+    url = invitation["preview_url"]
+    assert "/hesap-davet/" in url
+    # parola belirlenmeden giriş yok
     login = await world.api.post(
-        "/api/v1/auth/login", json={"email": "selin@ornek.local", "password": password}
+        "/api/v1/auth/login", json={"email": "selin@ornek.local", "password": "x" * 12}
     )
-    assert login.json()["must_change_password"] is True
+    assert login.status_code == 401
+    token = url.rsplit("/", 1)[1]
+    info = await world.api.get(f"/api/v1/auth/invitations/{token}")
+    assert info.json()["status"] == "pending"
+    assert info.json()["site_name"] == "Aksu Konakları"
+    headers = await accept(world, body["data"])
+    assert (await world.api.get("/api/v1/me", headers=headers)).status_code == 200
+    again = await world.api.post(
+        f"/api/v1/auth/invitations/{token}/accept", json={"password": NEW_PASSWORD}
+    )
+    assert again.status_code == 410
     assert [m["full_name"] for m in await members(world)] == ["Kerem YILDIRIM", "Selin Arı"]
 
-    # geçici parola denetim kaydına yazılmaz
+    # davet bağlantısı denetim kaydına yazılmaz
     audit = (await world.get("/audit", params={"entity": "site_memberships"})).json()
-    assert password not in str(audit)
+    assert token not in str(audit)
 
 
 async def test_kayitli_e_posta_mevcut_kullaniciya_rol(world: World) -> None:
     await create_user(world.factory, "selin@ornek.local", full_name="Selin Arı")
     response = await add(world)
     assert response.status_code == 201
-    assert response.json()["data"]["temporary_password"] is None
+    assert response.json()["data"]["invitation"] is None
     assert response.json()["message"] == (
         "Selin Arı kayıtlı bir kullanıcı; bu sitede Muhasebe rolü verildi. "
-        "Mevcut parolasıyla giriş yapar."
+        "Mevcut hesabıyla giriş yapar."
     )
     again = await add(world)
     assert again.status_code == 409
@@ -109,7 +136,7 @@ async def test_dogrulama(world: World) -> None:
 async def test_rol_degistir_kapat_ac(world: World) -> None:
     created = (await add(world)).json()["data"]
     member_id = created["member"]["id"]
-    selin = await login_headers(world.api, "selin@ornek.local", created["temporary_password"])
+    selin = await accept(world, created)
 
     changed = await patch(world, member_id, {"role_key": "board"})
     assert changed.json()["message"] == "Selin Arı rolü Yönetim Kurulu Üyesi olarak kaydedildi."
@@ -150,17 +177,7 @@ async def test_kendi_kaydi_ve_son_yonetici(world: World) -> None:
             world, {"full_name": "Deniz Ak", "email": "deniz@ornek.local", "role_key": "manager"}
         )
     ).json()
-    deniz = await login_headers(
-        world.api, "deniz@ornek.local", second["data"]["temporary_password"]
-    )
-    await world.api.post(
-        "/api/v1/auth/change-password",
-        json={
-            "current_password": second["data"]["temporary_password"],
-            "new_password": "Yeni-parola-1",
-        },
-        headers=deniz,
-    )
+    deniz = await accept(world, second["data"])
     demoted = await patch(world, kerem["id"], {"role_key": "board"}, headers=deniz)
     assert demoted.status_code == 200, demoted.text
 

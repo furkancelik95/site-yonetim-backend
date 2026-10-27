@@ -46,6 +46,7 @@ class ActionType(StrEnum):
     APPROVAL_RULE_CHANGE = "approval_rule_change"  # onay kuralı değişikliği
     OWNERSHIP_TRANSFER = "ownership_transfer"  # malik değişimi: satış / veraset (YAP-04)
     LEAVE_REQUEST = "leave_request"  # izin talebi (IK-03)
+    INVOICE_DIFFERENCE = "invoice_difference"  # tedarikçi faturası farkı (SAT-05 üçlü eşleşme)
     PERIOD_UNLOCK = "period_unlock"  # dönem kilidi açma (FIN-13)
     CASH_DIFFERENCE = "cash_difference"  # kasa sayım farkı (FIN-11)
     AD_HOC_CHARGE = "ad_hoc_charge"  # dönem dışı ücret (FIN-06)
@@ -53,12 +54,15 @@ class ActionType(StrEnum):
     DEMAND_LETTER = "demand_letter"  # ihtarname (FIN-12)
     PENALTY_DEDUCTION = "penalty_deduction"  # sözleşme ceza kesintisi (SAT-06, 15.3)
     CONTRACT_ESCALATION = "contract_escalation"  # sözleşme bedel artışı (SAT-06, 15.3)
+    BUDGET = "budget"  # yıllık bütçe ve işletme projesi kesinleştirme (FIN-17, D-16)
+    CHARGE_ADJUSTMENT = "charge_adjustment"  # kesinleşmiş tahakkukta satır düzeltmesi (FIN-05)
+    TRANSPARENCY_REPORT = "transparency_report"  # şeffaflık raporu yayını (RAP-02)
 
 
 ACTION_LABELS: dict[ActionType, str] = {
     ActionType.CHARGE_RULE: "Aidat kuralı",
     ActionType.CHARGE_RUN: "Tahakkuk",
-    ActionType.CHARGE_RUN_REVERSAL: "Tahakkuk iptali / düzeltme",
+    ActionType.CHARGE_RUN_REVERSAL: "Tahakkuk iptali",
     ActionType.REFUND: "İade",
     ActionType.DEBT_WRITE_OFF: "Borç silme",
     ActionType.EXPENSE: "Gider",
@@ -77,6 +81,7 @@ ACTION_LABELS: dict[ActionType, str] = {
     ActionType.APPROVAL_RULE_CHANGE: "Onay kuralı değişikliği",
     ActionType.OWNERSHIP_TRANSFER: "Malik değişimi (satış / veraset)",
     ActionType.LEAVE_REQUEST: "İzin talebi",
+    ActionType.INVOICE_DIFFERENCE: "Fatura farkı (üçlü eşleşme)",
     ActionType.PERIOD_UNLOCK: "Dönem kilidi açma",
     ActionType.CASH_DIFFERENCE: "Kasa farkı",
     ActionType.AD_HOC_CHARGE: "Dönem dışı ücret",
@@ -84,6 +89,9 @@ ACTION_LABELS: dict[ActionType, str] = {
     ActionType.DEMAND_LETTER: "İhtarname",
     ActionType.PENALTY_DEDUCTION: "Ceza kesintisi",
     ActionType.CONTRACT_ESCALATION: "Sözleşme artışı",
+    ActionType.BUDGET: "Bütçe",
+    ActionType.CHARGE_ADJUSTMENT: "Tahakkuk düzeltme",
+    ActionType.TRANSPARENCY_REPORT: "Şeffaflık raporu",
 }
 
 

@@ -42,6 +42,8 @@ ENVIRONMENT=development
 SEED_DEMO_DATA=true
 JWT_SECRET=$(rnd)
 LOG_LEVEL=INFO
+# Demo: yönetici hesaplarında 2FA kurulumu uyarıyla istenir, süre dolup erişim kapanmaz.
+MFA_GRACE_DAYS=180
 EOF
   umask 022
 fi

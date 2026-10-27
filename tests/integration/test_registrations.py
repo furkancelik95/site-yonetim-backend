@@ -120,7 +120,9 @@ async def test_onay_bolume_kiraci_ekler_ve_giris_hesabi_acar(world: World) -> No
     approved = await approve(world, registration["id"])
     assert approved.status_code == 200, approved.text
     body = approved.json()
-    assert body["message"].startswith("Test DENEME A-1 kiracı olarak eklendi. Giriş hesabı açıldı;")
+    assert body["message"].startswith(
+        "Test DENEME A-1 kiracı olarak eklendi. Giriş hesabı telefonla açıldı;"
+    )
     data = body["data"]
     assert (data["status"], data["unit_name"], data["decided_by"]) == (
         "approved",
@@ -132,11 +134,16 @@ async def test_onay_bolume_kiraci_ekler_ve_giris_hesabi_acar(world: World) -> No
 
     parties = (await world.get(f"/units/{world.unit_id}")).json()
     assert "Test DENEME" in str(parties)
+    assert (data["login"], data["login_phone"]) == ("created", "+90******2233")
+    # P5: sakin telefon + SMS koduyla girer (geçici parola yok)
+    sent = await world.api.post("/api/v1/auth/otp/request", json={"phone": "05321112233"})
+    assert sent.status_code == 200, sent.text
+    code_ = sent.json()["data"]["test_code"]
     login = await world.api.post(
-        "/api/v1/auth/login",
-        json={"email": "test.deneme@ornek.local", "password": data["temporary_password"]},
+        "/api/v1/auth/otp/verify", json={"phone": "05321112233", "code": code_}
     )
-    assert login.json()["must_change_password"] is True
+    assert login.status_code == 200, login.text
+    assert login.json()["must_change_password"] is False
 
     twice = await approve(world, registration["id"])
     assert twice.status_code == 409
@@ -145,7 +152,7 @@ async def test_onay_bolume_kiraci_ekler_ve_giris_hesabi_acar(world: World) -> No
     assert audit[0]["after"] == {"reference": "KB-0001", "status": "approved"}
 
 
-async def test_kayitli_kisi_yeniden_acilmaz_eposta_yoksa_hesap_yok(world: World) -> None:
+async def test_kayitli_kisi_yeniden_acilmaz_eposta_yoksa_telefon_hesabi(world: World) -> None:
     created = await world.post(
         "/people", {"first_name": "Test", "last_name": "Deneme", "phone": "05321112233"}
     )
@@ -156,8 +163,10 @@ async def test_kayitli_kisi_yeniden_acilmaz_eposta_yoksa_hesap_yok(world: World)
     approved = await approve(world, registration["id"])
     assert approved.status_code == 200, approved.text
     assert await persons(world) == before  # telefonla eşleşen kişi kullanıldı
-    assert approved.json()["data"]["temporary_password"] is None
-    assert approved.json()["message"].endswith("E-posta verilmediği için giriş hesabı açılmadı.")
+    assert approved.json()["data"]["login"] == "created"
+    assert approved.json()["message"].endswith(
+        "Giriş hesabı telefonla açıldı; kişiye SMS gitti — telefon numarasıyla, SMS koduyla girer."
+    )
 
 
 async def test_malik_hissesi_doluysa_409(world: World) -> None:

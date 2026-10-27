@@ -356,10 +356,18 @@ def test_period_amount_by_frequency(site: ChargingSite, frequency: Frequency, am
     assert preview.item_totals[0].amount == Decimal(amount)
 
 
-def test_monthly_amount_is_rounded_each_month(site: ChargingSite) -> None:
-    """K3 şimdiki davranış: round(1000 / 12) = 83,33 (yılda 4 kuruş fark)."""
-    preview = build_preview(site.input(item("K", "1000", AllocationKind.EQUAL)))
-    assert preview.item_totals[0].amount == Decimal("83.33")
+def test_d5_aylik_tutar_yillik_toplami_korur(site: ChargingSite) -> None:
+    """D-5 (§8.18): yıllık/12 kuruş farkı en büyük kalanla ilk aylara — 1.000 TL/yıl → Ocak 83,34,
+    Mayıs 83,33; 12 ayın toplamı tam 1.000,00 (eski davranış 999,96 idi)."""
+    jan = build_preview(site.input(item("K", "1000", AllocationKind.EQUAL)))
+    assert jan.item_totals[0].amount == Decimal("83.34")
+    year = ZERO
+    for month in range(1, 13):
+        data = replace(
+            site.input(item("K", "1000", AllocationKind.EQUAL)), charge_date=date(2027, month, 1)
+        )
+        year += build_preview(data).item_totals[0].distributed
+    assert year == Decimal("1000.00")
 
 
 def test_negative_amount_mirrors(site: ChargingSite) -> None:
