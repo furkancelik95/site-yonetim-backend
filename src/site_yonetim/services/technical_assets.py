@@ -18,7 +18,7 @@ PM kararı **K28** (mali demirbaş `assets` ile ayrı liste). Açık site kapsam
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import Select, func, select, text
@@ -48,7 +48,7 @@ from site_yonetim.domain.facility import (
 from site_yonetim.domain.members import FormFieldError
 from site_yonetim.domain.modules import ModuleKey
 from site_yonetim.domain.notifications import NotificationCategory
-from site_yonetim.domain.operations import RequestCategory, RequestPriority
+from site_yonetim.domain.operations import RequestPriority
 from site_yonetim.models import (
     AssetInspectionRecord,
     AssetInspectionSchedule,
@@ -350,13 +350,14 @@ async def _open_request(
         requests_svc.NewRequest(
             title=title[:TITLE_MAX],
             description=description,
-            category=RequestCategory(request_category_for(TechnicalAssetCategory(asset.category))),
+            category=request_category_for(TechnicalAssetCategory(asset.category)),
             priority=priority,
             unit_id=None,
             location=asset.location,
             reported_by_person_id=None,
         ),
         actor=by,
+        now=datetime.now(UTC),
     )
 
 

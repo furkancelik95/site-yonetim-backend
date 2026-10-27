@@ -11,6 +11,7 @@ kapsamında; transaction'ı çağıran yönetir.
 
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -27,7 +28,7 @@ from site_yonetim.domain.facility import (
     inspection_score,
 )
 from site_yonetim.domain.members import FormFieldError
-from site_yonetim.domain.operations import RequestCategory, RequestPriority
+from site_yonetim.domain.operations import RequestPriority
 from site_yonetim.domain.text import ascii_fold
 from site_yonetim.models import ChecklistInspection, ChecklistTemplate
 from site_yonetim.models.operations import TITLE_MAX
@@ -247,13 +248,14 @@ async def inspect(
                 requests_svc.NewRequest(
                     title=f"Denetim: {failed['text']}"[:TITLE_MAX],
                     description=(f"{template.name} denetiminde olumsuz ({place}). Değer: {shown}."),
-                    category=RequestCategory.COMMON_AREA,
+                    category="common_area",
                     priority=RequestPriority.NORMAL,
                     unit_id=None,
                     location=place,
                     reported_by_person_id=None,
                 ),
                 actor=by.name,
+                now=datetime.now(UTC),
             )
             opened.append(str(request.id))
     record = ChecklistInspection(
