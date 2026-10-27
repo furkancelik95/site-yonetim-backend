@@ -9,6 +9,8 @@ uv run python -m site_yonetim.cli run-recurring-expenses # tekrarlanan giderler 
 uv run python -m site_yonetim.cli run-approval-jobs      # onay hatırlatma/eskalasyon (saatlik)
 uv run python -m site_yonetim.cli run-staff-jobs         # ayrılan personelin erişimini kapat (gece)
 uv run python -m site_yonetim.cli run-document-expiry    # belge geçerlilik uyarısı (günde bir)
+uv run python -m site_yonetim.cli run-finance-jobs       # dönem kilidi, borç kademeleri, ödeme
+                                                         # planı uyumu (saatlik)
 """
 
 import argparse
@@ -27,6 +29,7 @@ from site_yonetim.services import (
     bank_imports,
     charge_schedule,
     documents,
+    finance_jobs,
     login_throttle,
     rate_limit,
     reconciliation,
@@ -209,6 +212,24 @@ async def _run_document_expiry() -> int:
     return 0
 
 
+async def _run_finance_jobs() -> int:
+    """Süreli açması dolan dönemi kilitler, borç takibi kademelerini yazar, bozulan ödeme
+    planlarını bildirir (saatlik; tekrar güvenli)."""
+    engine = create_engine_from_settings(get_settings())
+    now = datetime.now(UTC)
+    try:
+        results = await finance_jobs.run_all(
+            create_session_factory(engine), now=now, today=now.astimezone(BUSINESS_TZ).date()
+        )
+    finally:
+        await engine.dispose()
+    for site_id, r in results:
+        print(f"{site_id}: kilitlenen {r.relocked}, kademe {r.reminders}, bozulan plan "
+              f"{r.broken_plans}")  # fmt: skip
+    print(f"{len(results)} sitede finans işi çalıştı.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="site_yonetim.cli")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -220,6 +241,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("run-approval-jobs", help="Onay hatırlatma ve eskalasyonu (saatlik)")
     sub.add_parser("run-staff-jobs", help="Ayrılan personelin site erişimini kapat (gece)")
     sub.add_parser("run-document-expiry", help="Belge geçerlilik uyarısı (günde bir)")
+    sub.add_parser("run-finance-jobs", help="Dönem kilidi, borç kademeleri, plan uyumu (saatlik)")
     reconcile = sub.add_parser("reconcile", help="Özet bakiyeleri defterle karşılaştır")
     reconcile.add_argument("--fix", action="store_true", help="Farklı siteleri onar")
     args = parser.parse_args(argv)
@@ -236,6 +258,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_run_staff_jobs())
     if args.command == "run-document-expiry":
         return asyncio.run(_run_document_expiry())
+    if args.command == "run-finance-jobs":
+        return asyncio.run(_run_finance_jobs())
     if args.command == "run-recurring-expenses":
         return asyncio.run(_run_recurring_expenses())
     if args.command == "run-charge-schedules":

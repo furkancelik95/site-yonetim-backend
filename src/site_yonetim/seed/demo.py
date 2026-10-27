@@ -97,6 +97,7 @@ from site_yonetim.seed.demo_data import (
     occupancy_for,
     units_for,
 )
+from site_yonetim.seed.demo_finance_ops import seed_finance_ops
 from site_yonetim.services import (
     announcements,
     cash,
@@ -218,6 +219,10 @@ async def _seed_demo(
                 await _seed_finance(session, spec, today)
                 await _seed_operations(session, spec, today)
                 await _seed_gate(session, spec, today)
+                first_month = YearMonth.of(today)
+                for _ in range(CHARGED_MONTHS - 1):
+                    first_month = first_month.previous()
+                await seed_finance_ops(session, site, first_month, today)
                 if ModuleKey.DOCUMENTS in await available_modules(session, site):
                     await _seed_documents(session, store, today)
                 session.add_all(

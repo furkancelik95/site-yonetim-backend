@@ -229,6 +229,64 @@ kişisel veriyi görmez (`05`). Sakin kendi hesabında kendi adını görür.
 | POST | `/sites/{slug}/cash-transfers` | `finance.cash.manage` | R | `{from_id, to_id, date, amount, note?}` → `{outgoing, incoming}` · `Idempotency-Key` |
 | POST | `/sites/{slug}/cash-movements/{id}/reverse` | `finance.cash.manage` | R | `{reason}`; tahsilat/gider kaynaklıysa 409 · `Idempotency-Key` |
 
+### 2.8a Finans Mod P — dönem kapanışı, kasa günü, borç takibi, ödeme planı, dönem dışı ücret, muhasebe aktarımı, parametreler (servis istekleri 27–34)
+**Dönem kilidi (D-11, FIN-13):** kapanıştaki (`closing`) ya da kilitli (`locked`) döneme **hiçbir
+finansal kayıt yazılamaz/değişemez** — tahakkuk ve ters kaydı, tahsilat, iade, devir bakiye, gider
+(kayıt/ödeme/düzeltme), kasa hareketi (elle, aktarım, geri alma, hesap açılışı), dönem dışı ücret ve
+iptali, ödeme planı. Hepsi **409 `period_locked`** ("Tarih kilitli döneme düşüyor (Eylül 2026); kayıt
+yazılamaz — en erken Ekim 2026 (01.10.2026)."). Kilitli döneme ait kaydın ters kaydı da reddedilir.
+Süreli açık (`temp_open`) dönemde yazma serbest; denetim kaydına `reason = period_unlocked` satırı
+düşer. Merkezi kontrol: `services/period_lock.ensure_writable`.
+
+**Onay (K21, yeni modüller):** dönem kilidi açma, kasa farkı, ödeme planı, dönem dışı ücret, finansal
+etkili parametre ve ihtarname için yürürlükte onay kuralı varsa uç **202** döner; kayıt
+`status: "approval_pending"` + `approval_request_id` taşır, onaylanınca yürür, ret/geri çekmede
+`rejected`. Kural yoksa doğrudan yürür (201/200).
+
+| Yöntem | Yol | İzin | Not |
+|---|---|---|---|
+| GET | `/sites/{slug}/fiscal-periods?year=` | `finance.read` | yılın dönemleri (yeniden eskiye, bu aya kadar): `{period: "2026-09", label, status: open\|closing\|locked\|temp_open, is_past, exceptions, closing_started_by/_at, locked_by/_at, unlock_until, unlock_reason, unlock_request_id, history[{at, by, action, note}]}` |
+| GET | `/sites/{slug}/fiscal-periods/{YYYY-MM}/close-checklist` | `finance.read` | `{period, items[{key, label, ok, detail, link, required, exception}]}` — `charge`, `cash_days`, `approvals`, `accounting` zorunlu; `expenses`, `bank` uyarı |
+| POST | `…/fiscal-periods/{p}/start-close` | `finance.charge.post` | `{exceptions?: {madde: gerekçe ≥ 10}}` → Kapanışta. 409 `period_not_ended`, `checklist_incomplete`, `invalid_status` |
+| POST | `…/fiscal-periods/{p}/lock` | `finance.charge.post` | **iki kişi kuralı**: başlatan kilitleyemez (409 `four_eyes`); süreli açık dönemi herkes kilitler |
+| POST | `…/fiscal-periods/{p}/reopen` | `finance.charge.post` | Kapanışta → Açık |
+| POST | `…/fiscal-periods/{p}/unlock-requests` | `finance.charge.post` | `{reason ≥ 20, hours: 4\|24\|72}` → süreli açık (200) ya da "Dönem kilidi açma" kuralıyla 202. 409 `unlock_pending` |
+| GET | `/sites/{slug}/cash-accounts/{id}/days` | `finance.cash.read` | `{kind, open_days[] (son 60 gün, hareketli sayılmamış), closed[CashDay] (son 90)}` |
+| POST | `/sites/{slug}/cash-accounts/{id}/days/close` | `finance.cash.manage` | `{date, counted, reason?}` → CashDay `{id, date, system_balance, counted, difference, reason, status, approval_request_id, closed_by, closed_at}` (201/202). 422 `difference_reason`; 409 `day_closed`, `not_cash`. Kapanan güne kasa hareketi 422 `cash_day_closed` |
+| GET | `/sites/{slug}/receivables/aging` | `finance.read` | `{as_of, total, buckets[{key, label, count, amount}], by_block[{block, 0_30, 31_60, 61_90, 90_plus, total}]}` — toplam = borçlular toplamı |
+| GET | `/sites/{slug}/collection-status` | `finance.read` | `{account_id: {plan_status, letter_status, last_action_at, reminder_count}}` |
+| GET | `/sites/{slug}/accounts/{id}/collection-timeline` | `finance.read` | sayfalı, yeniden eskiye: `{id, kind: reminder\|call\|note\|demand_letter\|payment_plan, channel, note, stage, by, at, letter?, plan?}` |
+| POST | `/sites/{slug}/accounts/{id}/collection-actions` | `finance.payment.record` | `{kind, channel?, note?}` — **gönderim yok (K5)**: `delivered: false`, mesaj bunu söyler |
+| POST | `/sites/{slug}/collection-actions/bulk` | `finance.payment.record` | `{account_ids[≤500], channel}` → `{count}` |
+| POST | `/sites/{slug}/accounts/{id}/demand-letters` | `finance.payment.record` | `{method: hand\|registered_mail\|notary, sent_on, tracking_no?, note?}` (iadeli/noterde takip no zorunlu) → 201/202 |
+| PATCH | `/sites/{slug}/demand-letters/{id}` | `finance.payment.record` | `{served_on}` (gönderimden önce/gelecekte 422) |
+| GET | `/sites/{slug}/payment-plans?status=` | `finance.read` | sayfalı + `counts{active, broken, completed, cancelled, approval_pending, remaining_total}` |
+| GET · POST | `/sites/{slug}/accounts/{id}/payment-plans` | `finance.read` · `finance.payment.record` | POST `{amount ≤ açık bakiye, installment_count 2–36, first_due_date ≥ bugün, note?}`; `Idempotency-Key`. 409 `plan_exists`. Plan: `{…, total, installments[{no, due_date, amount, paid, status: paid\|partial\|open\|overdue}], status, paid_total, remaining, tolerance_days}`. Yürürlükte: yapılandırılan kalemler kapanır (alacak + `payment_plan_closures`), taksitler vadeli borç (`source: payment_plan`) |
+| POST | `/sites/{slug}/payment-plans/{id}/cancel` | `finance.payment.record` | `{reason ≥ 5}`; ödenmemiş tutar ilk vadesiyle yeniden açılır. Onay bekleyen 409 `plan_pending`, tamamlanan 409 `plan_completed` |
+| GET | `/sites/{slug}/resident/payment-plans` | sakin (kendi hesapları) | yürürlükteki/iptal planları |
+| GET · PUT | `/sites/{slug}/settings/ad-hoc-charges` | `finance.read` · `finance.charge.post` | `{sources: {reservation\|service\|renovation\|penalty\|other: {mode: immediate\|next_period, due_days 0–60}}}` (varsayılan anında, 10 gün) |
+| GET · POST | `/sites/{slug}/ad-hoc-charges[?status=]` | `finance.read` · `finance.charge.post` | sayfalı · `{unit_id, account_kind, source, description, amount, due_date?}` → 201/202; `Idempotency-Key`; 422 `no_account`. `next_period` ücret sonraki tahakkukta "ek kalemler" olarak yazılır (koşu ters kaydedilirse yeniden bekler) |
+| POST | `/sites/{slug}/ad-hoc-charges/{id}/cancel` | `finance.charge.post` | `{reason}` — yazılmışsa ters kayıt; 409 `already_cancelled`, `charge_pending` |
+| GET · PUT | `/sites/{slug}/accounting/mappings` | `finance.read` · `finance.charge.post` | `{items[{key, label, debit_account, credit_account}]}` — versiyonlu; kod rakam+nokta (422 `fields.{key}.debit_account`) |
+| GET | `/sites/{slug}/accounting/exports/preview?period=` | `finance.read` | `{period, vouchers[{key, source, source_id, date, description, debit_account, credit_account, amount}], already_exported, total, missing_mappings[]}` |
+| POST | `/sites/{slug}/accounting/exports` | `finance.charge.post` | `{period}` → 201 ExportBatch; 409 `mapping_missing`, `nothing_to_export`. Fiş bir kez aktarılır (kilit) |
+| GET | `/sites/{slug}/accounting/exports` · `/{id}/file?format=csv\|xlsx` | `finance.read` | sayfalı geçmiş · dosya (CSV `;`, UTF-8 BOM; Kivi biçimi K7 sonrası) |
+| GET | `/sites/{slug}/finance-parameters` | `finance.read` | `{current, current_period, earliest_financial_period, defaults, financial_keys, versions (son 100), scheduled}` |
+| POST | `/sites/{slug}/finance-parameters/versions` | `finance.charge.post` | `{effective_period, values: {değişen alanlar}}` → 201/202. Finansal etkili erken dönem 422 `period_locked` (`fields.effective_period`); 422 `no_change` |
+| GET | `/sites/{slug}/charge-runs/preview/diff?charge_date=&due_date=` | `finance.read` | **fark raporu**: `{period, base_period, threshold, compared, counts{increase, decrease, new, missing}, rows[{account_id, unit_name, person_name, account_kind, previous, current, change_percent, flag}]}` |
+
+Finans parametreleri (varsayılan): `reminder_days [3,10,30]`, `demand_letter_day 60`, `proration day`
+(K9), `diff_threshold_percent 10`, `bank_auto_match high`, `plan_tolerance_days 10`,
+`plan_suspends_late_fee true`, `budget_warn_percent 90`, `due_day 10` (K25), `charge_source
+budget_plan` (K23), `late_fee_enabled false` · `late_fee_monthly_rate_percent "5.00"` (≤ 5) ·
+`late_fee_method daily` · `late_fee_grace_days 5` (K2), `allocation_order late_fee_first` (K24),
+`debtor_restriction_enabled false` · `_min_amount "0.00"` · `_min_days 90` (K11). Finansal etkili
+(sonraki dönemden, onaya tabi): kıst, vade günü, tahakkuk kaynağı, gecikme alanları, mahsup sırası,
+plan süresince gecikme. **Tahakkuk motoru bu parametreleri henüz okumuyor (P03b).**
+
+Gece/saatlik iş `run-finance-jobs`: süresi dolan süreli açmayı kilitler, borç takibi kademelerini
+(aynı açık vade için bir kez; ödeme planındaki hesaba yazılmaz) kaydeder, bozulan planı bildirir.
+
 ### 2.9 Rapor
 | Yöntem | Yol | İzin | Durum | Not |
 |---|---|---|---|---|

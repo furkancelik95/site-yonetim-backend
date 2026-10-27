@@ -53,18 +53,33 @@ _COMPONENT_KIND_CHECK = "kind NOT IN ('composite', 'fixed_per_unit')"
 
 
 class Period(TenantMixin, Base):
-    """Mali dönem (ay). Kapalı döneme kayıt yazılamaz."""
+    """Mali dönem (ay) ve kapanış durumu (FIN-13). Kapanıştaki ve kilitli döneme finansal kayıt
+    yazılamaz (`services/periods.ensure_writable`). Geçmiş `period_events`'te (değişmez)."""
 
     __tablename__ = "periods"
     __table_args__ = tenant_table_args(
         UniqueConstraint("site_id", "year", "month"),
         CheckConstraint("month BETWEEN 1 AND 12", name="month_range"),
         CheckConstraint(enum_check("status", PeriodStatus), name="status"),
+        CheckConstraint("(status = 'temp_open') = (unlock_until IS NOT NULL)", name="unlock_until"),
+        tenant_fk("unlock_request_id", "approval_requests"),
     )
 
     year: Mapped[int]
     month: Mapped[int]
     status: Mapped[str] = mapped_column(Text, default=PeriodStatus.OPEN.value)
+    # gerekçeli istisnalar: kontrol listesi maddesi → gerekçe (kapanış raporunda listelenir)
+    exceptions: Mapped[dict[str, str]] = mapped_column(
+        JSONB, default=dict, server_default=text("'{}'::jsonb")
+    )
+    closing_started_by_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
+    closing_started_by: Mapped[str | None] = mapped_column(Text)
+    closing_started_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    locked_by: Mapped[str | None] = mapped_column(Text)
+    locked_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    unlock_until: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    unlock_reason: Mapped[str | None] = mapped_column(Text)
+    unlock_request_id: Mapped[uuid.UUID | None]  # onay bekleyen süreli açma talebi
 
 
 class ExpenseCategory(TenantMixin, Base):

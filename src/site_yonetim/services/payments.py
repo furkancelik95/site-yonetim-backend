@@ -27,33 +27,45 @@ from site_yonetim.domain.charging.payments import (
     check_amount,
     payment_description,
 )
-from site_yonetim.domain.finance import FinanceRuleError, LedgerSource, PeriodStatus
+from site_yonetim.domain.finance import FinanceRuleError, LedgerSource
 from site_yonetim.models import (
     AccountBalance,
     LedgerAccount,
     LedgerEntry,
     Payment,
     PaymentAllocation,
-    Period,
 )
-from site_yonetim.services import cash, ledger, summary
+from site_yonetim.services import cash, ledger, period_lock, summary
 
-# Açık borç = borç hareketi − yapılmış mahsuplar; ters kaydı alınmış borç açık değildir.
-# İade (`refund`) borç tarafında yazılır ama alacağı geri ödemedir, kapatılacak borç değildir.
+# Açık borç = borç hareketi − yapılmış mahsuplar − ödeme planının kapattığı tutar; ters kaydı
+# alınmış borç açık değildir. İade (`refund`) borç tarafında yazılır ama alacağı geri ödemedir,
+# kapatılacak borç değildir.
 _OPEN_DEBTS = text(
     """
     SELECT e.id, COALESCE(e.due_date, e.date) AS due, e.source = 'late_fee' AS is_late_fee,
-           e.debit - COALESCE(SUM(pa.amount), 0) AS open_amount
+           e.debit - COALESCE(pa.total, 0) - COALESCE(pc.total, 0) AS open_amount
     FROM ledger_entries e
-    LEFT JOIN payment_allocations pa ON pa.site_id = e.site_id AND pa.ledger_entry_id = e.id
+    LEFT JOIN (
+        SELECT ledger_entry_id, SUM(amount) AS total FROM payment_allocations
+        WHERE site_id = :site_id AND ledger_entry_id IN (
+            SELECT id FROM ledger_entries WHERE site_id = :site_id AND account_id = :account_id
+        )
+        GROUP BY ledger_entry_id
+    ) pa ON pa.ledger_entry_id = e.id
+    LEFT JOIN (
+        SELECT ledger_entry_id, SUM(amount) AS total FROM payment_plan_closures
+        WHERE site_id = :site_id AND ledger_entry_id IN (
+            SELECT id FROM ledger_entries WHERE site_id = :site_id AND account_id = :account_id
+        )
+        GROUP BY ledger_entry_id
+    ) pc ON pc.ledger_entry_id = e.id
     WHERE e.site_id = :site_id AND e.account_id = :account_id AND e.debit > 0
       AND e.source <> 'refund'
       AND NOT EXISTS (
           SELECT 1 FROM ledger_entries r
           WHERE r.site_id = e.site_id AND r.reversal_of_entry_id = e.id
       )
-    GROUP BY e.id
-    HAVING e.debit - COALESCE(SUM(pa.amount), 0) > 0.005
+      AND e.debit - COALESCE(pa.total, 0) - COALESCE(pc.total, 0) > 0.005
     ORDER BY due, e.created_at, e.id
     """
 )
@@ -111,19 +123,7 @@ async def record_payment(
         raise FinanceRuleError(
             "account_closed", "Bu cari hesap kapatılmış; tahsilat yazılamaz.", conflict=True
         )
-    closed = await session.scalar(
-        select(Period.id).where(
-            Period.year == day.year,
-            Period.month == day.month,
-            Period.status == PeriodStatus.CLOSED.value,
-        )
-    )
-    if closed is not None:
-        raise FinanceRuleError(
-            "period_closed",
-            f"{day:%m/%Y} dönemi kapalı; bu tarihe tahsilat yazılamaz.",
-            conflict=True,
-        )
+    await period_lock.ensure_writable(session, day)
     cash_account = await cash.active_account(session, cash_account_id) if cash_account_id else None
     reference = _clean(reference) or account.reference_code
     note = _clean(note)

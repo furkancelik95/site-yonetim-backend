@@ -675,6 +675,11 @@ TEMPLATES: list[dict[str, Any]] = [
         "steps": [{"roles": ["Yönetim Kurulu Üyesi"], "quorum": _MAJ}],
     },
     {"action_type": ActionType.REGISTRATION, "steps": [{"roles": ["Yönetici"], "quorum": _ANY}]},
+    # FIN-13: "Dönem kilidi açma" onay kuralı (YK).
+    {
+        "action_type": ActionType.PERIOD_UNLOCK,
+        "steps": [{"roles": ["Yönetim Kurulu Üyesi"], "quorum": _MAJ}],
+    },
 ]
 TEMPLATE_REMIND, TEMPLATE_ESCALATE = 2, 5
 

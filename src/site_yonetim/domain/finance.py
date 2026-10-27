@@ -17,8 +17,13 @@ class FinanceRuleError(Exception):
 
 
 class PeriodStatus(StrEnum):
+    """Dönem kapanışı (FIN-13): Açık → Kapanışta → Kilitli; Kilitli → (istisnai) Süreli açık →
+    Kilitli. Kapanışta ve kilitli dönemde finansal kayıt yazılamaz (`services/periods.py`)."""
+
     OPEN = "open"
-    CLOSED = "closed"  # kapalı döneme kayıt yazılamaz
+    CLOSING = "closing"  # kontrol listesi geçti; yeni işlemler sonraki döneme
+    LOCKED = "locked"  # hiçbir finansal kayıt eklenemez/değişmez
+    TEMP_OPEN = "temp_open"  # onaylı, süreli açma — süre bitince kendiliğinden kilitlenir
 
 
 class ExpenseCategoryKind(StrEnum):
@@ -98,3 +103,5 @@ class LedgerSource(StrEnum):
     ADVANCE = "advance"
     OPENING = "opening"  # devir bakiye: sisteme geçişte önceki yönetimden kalan (hesap başına bir)
     REFUND = "refund"  # alacaklı bakiyenin sakine geri ödenmesi — açık borç sayılmaz
+    AD_HOC_CHARGE = "ad_hoc_charge"  # dönem dışı ücret (FIN-06)
+    PAYMENT_PLAN = "payment_plan"  # ödeme planı: yapılandırma alacağı + taksit borçları (FIN-12)

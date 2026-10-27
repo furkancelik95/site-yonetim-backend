@@ -2,6 +2,8 @@ from fastapi import APIRouter
 
 from site_yonetim.api.v1 import (
     account_ops,
+    accounting,
+    ad_hoc_charges,
     announcements,
     approvals,
     audit,
@@ -9,14 +11,18 @@ from site_yonetim.api.v1 import (
     bank_imports,
     budget,
     cash,
+    cash_days,
     certificates,
     charge_schedule,
     charges,
     contracts,
     dashboard,
+    debt_tracking,
     departments,
     documents,
     expenses,
+    finance_params,
+    fiscal_periods,
     health,
     imports,
     incidents,
@@ -26,6 +32,7 @@ from site_yonetim.api.v1 import (
     meetings,
     members,
     notifications,
+    payment_plans,
     payments,
     platform,
     polls,
@@ -60,15 +67,22 @@ api_router.include_router(incidents.router)
 api_router.include_router(structure.router)
 api_router.include_router(budget.router)
 api_router.include_router(charges.router)
+api_router.include_router(fiscal_periods.router)
+api_router.include_router(finance_params.router)
+api_router.include_router(ad_hoc_charges.router)
+api_router.include_router(accounting.router)
 api_router.include_router(charge_schedule.router)
 api_router.include_router(imports.router)
 api_router.include_router(payments.router)
 api_router.include_router(bank_imports.router)
 api_router.include_router(certificates.router)
 api_router.include_router(account_ops.router)
+api_router.include_router(debt_tracking.router)
+api_router.include_router(payment_plans.router)
 api_router.include_router(requests.router)
 api_router.include_router(departments.router)
 api_router.include_router(announcements.router)
+api_router.include_router(cash_days.router)
 api_router.include_router(cash.router)
 api_router.include_router(recurring_expenses.router)
 api_router.include_router(expenses.router)

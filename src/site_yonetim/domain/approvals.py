@@ -44,6 +44,11 @@ class ActionType(StrEnum):
     STOCK_COUNT_DIFFERENCE = "stock_count_difference"  # stok sayım farkı
     APPROVAL_RULE_CHANGE = "approval_rule_change"  # onay kuralı değişikliği
     LEAVE_REQUEST = "leave_request"  # izin talebi (IK-03)
+    PERIOD_UNLOCK = "period_unlock"  # dönem kilidi açma (FIN-13)
+    CASH_DIFFERENCE = "cash_difference"  # kasa sayım farkı (FIN-11)
+    AD_HOC_CHARGE = "ad_hoc_charge"  # dönem dışı ücret (FIN-06)
+    FINANCE_PARAMETER = "finance_parameter"  # finans parametresi değişikliği (FIN-16)
+    DEMAND_LETTER = "demand_letter"  # ihtarname (FIN-12)
 
 
 ACTION_LABELS: dict[ActionType, str] = {
@@ -67,6 +72,11 @@ ACTION_LABELS: dict[ActionType, str] = {
     ActionType.STOCK_COUNT_DIFFERENCE: "Stok sayım farkı",
     ActionType.APPROVAL_RULE_CHANGE: "Onay kuralı değişikliği",
     ActionType.LEAVE_REQUEST: "İzin talebi",
+    ActionType.PERIOD_UNLOCK: "Dönem kilidi açma",
+    ActionType.CASH_DIFFERENCE: "Kasa farkı",
+    ActionType.AD_HOC_CHARGE: "Dönem dışı ücret",
+    ActionType.FINANCE_PARAMETER: "Finans parametresi",
+    ActionType.DEMAND_LETTER: "İhtarname",
 }
 
 

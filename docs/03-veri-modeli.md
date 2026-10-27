@@ -699,6 +699,26 @@ UPDATE/DELETE tetikleyiciyle reddedilir.
 
 ---
 
+## 9a. Finans Mod P işlemleri (göç 0027; servis istekleri 27–33)
+
+| Tablo | Özet |
+|---|---|
+| `periods` (genişletildi) [K] | `status`: `open` · `closing` · `locked` · `temp_open` (eski `closed` → `locked`); `exceptions` (madde → gerekçe), kapanışı başlatan, kilitleyen, `unlock_until`, `unlock_reason`, `unlock_request_id` (onay bekleyen açma) |
+| `period_events` [K] **değişmez** | dönem durum geçmişi (`start_close`, `reopen`, `lock`, `unlock_requested`, `unlock`, `unlock_rejected`, `relocked`) |
+| `cash_days` [K] | kasa gün sonu sayımı: `system_balance`, `counted`, `difference`, `reason`, `status` (`closed` · `approval_pending` · `rejected`); hesap + gün başına bir geçerli sayım (kısmi benzersiz) |
+| `collection_actions` [K] **değişmez** | hatırlatma / arama / not; gece işi kademesi `stage` + `due_ref` (aynı açık vade için bir kez) |
+| `demand_letters` [K] | ihtarname gönderimi: yöntem, tarih, takip no, tebliğ tarihi, durum |
+| `payment_plans` [K] | ödeme planı: tutar, taksit sayısı, ilk vade, tolerans (parametreden kopya), durum (`approval_pending` · `active` · `cancelled` · `rejected`; bozuldu/tamamlandı taksitlerden) |
+| `payment_plan_installments` [K] **değişmez** | taksit → cari borç hareketi (`source: payment_plan`) |
+| `payment_plan_closures` [K] **değişmez** | planın kapattığı borç hareketleri (`restructure` · `cancel`) — açık borç hesabı bunları düşer |
+| `ad_hoc_charge_settings` · `ad_hoc_charges` [K] | dönem dışı ücret ayarı (kaynak → yansıma, vade günü) ve ücretler (borç hareketi `source: ad_hoc_charge`, iptal ters kayıt) |
+| `accounting_mapping_versions` [K] **değişmez** | hesap kodu eşlemesi (versiyonlu) |
+| `accounting_exports` · `accounting_export_items` [K] **değişmez** | üretilen fiş dosyası (içerik saklanır) ve aktarılan fişler (`voucher_key` sitede tekil → fiş bir kez aktarılır) |
+| `finance_parameter_versions` [K] | finans parametresi sürümü: yürürlük ayı, tüm değerler (JSONB), değişen alanlar, durum |
+
+`ledger_entries.source` değerlerine `ad_hoc_charge`, `payment_plan`; onay işlem tiplerine
+`period_unlock`, `cash_difference`, `ad_hoc_charge`, `finance_parameter`, `demand_letter` eklendi.
+
 ## 10. Eksik ama gerekecek
 
 Referans uygulamada yok, PRD'de MVP işaretli. Tasarlanırken bunlara yer bırak:

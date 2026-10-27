@@ -19,6 +19,7 @@ from site_yonetim.db.tenancy import all_sites_scope, site_scope
 from site_yonetim.main import create_app
 from site_yonetim.models import (
     AccountBalance,
+    AdHocCharge,
     Announcement,
     Block,
     BudgetPlan,
@@ -34,6 +35,7 @@ from site_yonetim.models import (
     Package,
     Payment,
     PaymentAllocation,
+    PaymentPlan,
     Period,
     Person,
     Plan,
@@ -319,10 +321,24 @@ async def test_demo_tahsilat_ve_sakin(
                 paid = await session.scalar(select(func.sum(Payment.amount)))
                 allocated = await session.scalar(select(func.sum(PaymentAllocation.amount)))
                 summary = await session.scalar(select(func.sum(AccountBalance.balance)))
+                ad_hoc = await session.scalar(
+                    select(
+                        func.coalesce(func.sum(LedgerEntry.debit - LedgerEntry.credit), 0)
+                    ).where(LedgerEntry.source == "ad_hoc_charge")
+                )
         assert charged is not None
         assert paid is not None
         assert paid == allocated  # demo tahsilatı borç tutarında: avans yok
-        assert summary == charged - paid
+        assert summary == charged - paid + ad_hoc  # dönem dışı ücretler (P03a demo)
+        with site_scope(sites[spec.slug]):
+            async with session_factory() as session:
+                locked = await session.scalar(
+                    select(func.count()).select_from(Period).where(Period.status == "locked")
+                )
+                plans = await session.scalar(select(func.count()).select_from(PaymentPlan))
+                extras = await session.scalar(select(func.count()).select_from(AdHocCharge))
+        assert (locked, extras) == (1, 4)  # en eski demo ayı kilitli; dört dönem dışı ücret
+        assert plans
         rates[spec.slug] = paid / charged
     assert rates["aksu-konaklari"] > rates["yildiz-sitesi"] > rates["mimoza-apartmani"]
 

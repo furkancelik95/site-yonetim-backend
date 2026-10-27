@@ -146,6 +146,16 @@ AUDITED_TABLES = frozenset(
         "refunds",
         "charge_schedules",
         "recurring_expenses",
+        # finans Mod P (servis istekleri 27–33)
+        "period_events",
+        "cash_days",
+        "collection_actions",
+        "demand_letters",
+        "payment_plans",
+        "ad_hoc_charge_settings",
+        "ad_hoc_charges",
+        "accounting_mapping_versions",
+        "finance_parameter_versions",
         # operasyon
         "incidents",
         "lost_items",

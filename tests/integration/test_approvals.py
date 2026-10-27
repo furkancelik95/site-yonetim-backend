@@ -249,6 +249,7 @@ async def test_hazir_sablonlar(world: World, board: list[Member]) -> None:
     # tahakkuk şablonu Muhasebe ister; sitede muhasebeci yok → kurulmaz, gerekçesi döner
     assert types == [
         "charge_rule",
+        "period_unlock",
         "purchase_request",
         "purchase_request",
         "purchase_request",
