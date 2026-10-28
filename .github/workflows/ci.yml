@@ -46,7 +46,7 @@ jobs:
   test:
     name: test
     runs-on: ubuntu-latest
-    timeout-minutes: 45  # paket büyüdü (25.10.2026: ~1600 test, yerelde ~20 dk)
+    timeout-minutes: 90  # ~2500 test, CI'da ~45 dk (28.10.2026)
     services:
       postgres:
         image: postgres:16
