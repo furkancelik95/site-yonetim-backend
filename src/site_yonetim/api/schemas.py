@@ -6,8 +6,9 @@ sayısı (`1234.56`) **kabul edilmez**.
 """
 
 import re
+import uuid
 from decimal import Decimal
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, BeforeValidator, Field, PlainSerializer, WithJsonSchema
 from pydantic_core import PydanticCustomError
@@ -87,6 +88,13 @@ class PageParams(BaseModel):
     @property
     def offset(self) -> int:
         return (self.page - 1) * self.page_size
+
+
+class ApprovalPendingOut(BaseModel):
+    """Onay kuralına tabi işlem: işlem yapılmadı, talep açıldı (202)."""
+
+    status: Literal["approval_pending"] = "approval_pending"
+    approval_request_id: uuid.UUID
 
 
 class Written[T](BaseModel):

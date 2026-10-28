@@ -9,7 +9,7 @@ Tablo ve sütun adları `snake_case`, İngilizce. Kullanıcıya görünen etiket
 | Birincil anahtar | `id UUID` — **zaman sıralı UUIDv7** önerilir (indeks yerelliği için). Python 3.14+ `uuid.uuid7()`, öncesi `uuid_utils` paketi |
 | Zaman damgası | Her tabloda `created_at TIMESTAMPTZ NOT NULL DEFAULT now()`, `updated_at TIMESTAMPTZ NULL` |
 | Kiracı sütunu | **Kiracı tablolarında** `site_id UUID NOT NULL` + indeks. Aşağıda `[K]` ile işaretli |
-| Global tablolar | `[G]` ile işaretli — `site_id` yok: `plans`, `organizations`, `sites`, `users`, `organization_memberships` |
+| Global tablolar | `[G]` ile işaretli — `site_id` yok: `plans`, `organizations`, `sites`, `users`, `organization_memberships`, `index_values` (endeks, SAT-06) |
 | Para | `NUMERIC(18,2)`. Python'da `Decimal`. **Asla `float`/`REAL`/`DOUBLE`** |
 | Alan (m²) | `NUMERIC(10,2)` |
 | Ağırlık / oran | `NUMERIC(12,4)` (daire tipi ağırlığı, özel ağırlık, tüketim) |
@@ -503,6 +503,20 @@ Site içinde artan `number`; silinmez, içerik değişmez. Olay: `kind`, `locati
   `planned` · `held` · `cancelled`, `attendance_note`, `held_at`, `cancel_reason`) ve
   `meeting_agenda_items` (`order` toplantı içinde tekil, `result`, `decision`, `votes_*` ≥ 0).
   Kararlar tek seferde girilir, sonra değişmez.
+- **Genel kurul** (servis istekleri 75–77, göç 0037): `assembly_settings` (tek satır: karar türleri
+  JSON `{code, name, base: present|all, num, den, strict, person, share, abstain_in_base}`, nisap,
+  ikinci toplantı nisabı — NULL aranmaz, `proxy_limit` 1–20, `person_rule` owner_group|per_unit,
+  `notice_days`, `second_call_days`, `read_ack_proof`, B18 bayrakları `remote_voting` /
+  `digital_proxy` varsayılan kapalı + `legal_basis_document_id`); `assemblies` (toplantı başına
+  tekil: format, hukuki uyarı onayı, çağrı duyurusu ve okuma onayı süresi, `roster_frozen_at`,
+  tutanak açılışı, kesinleşme, imzalı tutanak belgesi); `assembly_items` (gündem maddesi başına:
+  karar türü kodu, `none|open|closed`, kapanış sonucu JSON — kapalıysa zorunlu, görüşme notu,
+  karar metni); `assembly_attendance` (bölüm başına: `self|proxy`, vekil adı ve Türkçe küçük harf
+  anahtarı). **Değişmez** (`forbid_history_change`): `assembly_roster` (ilk hazirun kaydında
+  sabitlenen malik listesi: malik kişi kimlikleri ve adları, kişi anahtarı, arsa payı),
+  `assembly_ballots` (oy olayları; son olay geçerli, `choice` NULL = silindi; `channel`
+  hall|app, `device`, `sms_verified` B18 için), `assembly_minutes` (kesinleşen tutanak anlık
+  görüntüsü), `decision_book_entries` (site içinde artan `number`, kabul edilen karar).
 - `polls` (`question` = başlık, `audience`, `block_ids?`, `ends_on`, erken kapanışta `closed_at`,
   K31: `is_anonymous`, `one_per_unit`), `poll_questions` (`order` anket içinde tekil, `kind`
   `single` · `multiple` · `rating` · `text`), `poll_options` (`question_id`, `order` soru içinde
@@ -512,7 +526,29 @@ Site içinde artan `number`; silinmez, içerik değişmez. Olay: `kind`, `locati
   Göç 0036 eski `poll_votes` satırlarını pusula + yanıta taşıdı. Yanıt tabloları denetim kaydına
   yazılmaz.
 - `contracts` (`end_date ≥ start_date`, `amount?` NUMERIC(18,2), `notice_days` 0–365,
-  `is_archived`). `days_left`/`state` saklanmaz, okurken hesaplanır.
+  `is_archived`). `days_left`/`state` saklanmaz, okurken hesaplanır. Göç 0035: `vendor_id?`
+  (tedarikçi kartı, FK P10 `vendors` ile), artış kuralı `escalation_kind` `none` · `tufe` · `ufe` ·
+  `avg` · `fixed`, `escalation_fixed_rate?`, `escalation_period` `yearly` · `semiannual`,
+  `escalation_cap?` (NUMERIC(6,2), %0,01–200). `amount` **en son yazılan** bedeldir.
+- **Sözleşme performansı** (göç 0035; servis istekleri 68–70, SAT-06 / 15.3):
+  - `contract_amounts` **değişmez** bedel geçmişi: `amount?`, `period?`, `effective_from`, `source`
+    `initial` · `edit` · `escalation`, `escalation_id?`. Bedel/sıklık değişince yeni satır; bir
+    günün bedeli = `effective_from ≤ gün` olan son satır (önceki hesaplar eski bedelle). Göç mevcut
+    bedelli sözleşmelere başlangıçtan geçerli ilk satırı yazar.
+  - `contract_kpis` (`source` `inspection` · `patrol` · `tasks` · `sla` · `asset_inspection` ·
+    `manual`, `target` 0–100 NUMERIC(5,2), `weight` 1–100, `request_category?`),
+    `contract_penalty_rules` (`kpi_id` → KPI **ON DELETE CASCADE**, `below_percent` 0–99,
+    `cut_kind` `percent` · `fixed`, `cut_value`). Tanımlar ayardır, kaldırılabilir.
+  - `contract_scorecards` (`contract_id × period` tekil, `status` `draft` · `finalized`,
+    `manual_values` JSONB, `comment`, kesinleşince `rows` anlık görüntü + `total`,
+    `monthly_amount`, `finalized_by/at`).
+  - `contract_penalties` (karne başına bir; `amount > 0`, `reasons`, `status` `pending` ·
+    `approved` · `rejected`, `approval_request_id?`) — finansal kayıt, silinmez.
+  - `contract_escalations` (`due_date`, `kind`, `index_period?`, `rate`, `capped_rate`,
+    `old_amount`, `new_amount`, `status` `pending` · `approved` · `rejected` · `withdrawn`,
+    `approval_request_id?`); sözleşme × tarih başına tek etkin (geri çekilen hariç) kayıt.
+  - `index_values` [G] **değişmez**: `period` (YYYY-AA), `tufe`, `ufe` (yıllık %), `entered_by`.
+    Düzeltme yeni satırdır; geçerli değer dönemin en son satırı.
 - `assets` (`sequence` site içinde tekil → `code` `DB-0001`, `status` `in_use` · `broken` ·
   `retired`, `value?`). `stock_items` (`name_key` tekil, `quantity` NUMERIC(14,3) ≥ 0 — hareketle
   aynı işlemde satır kilidiyle güncellenir, `min_quantity`). `stock_moves` (`direction`,
@@ -716,6 +752,25 @@ UPDATE/DELETE tetikleyiciyle reddedilir.
   `completed`), `reject_reason`, `checklist` JSONB, `deposit`, `deposit_entry_id` (kaynak
   `deposit`), `refund_entry_id` (ters kayıt), `approval_request_id`.
 
+### Rezervasyon (REZ-01..03, göç 0033) [K]
+- `reservation_rules` — ortak alan başına (`area_id` → `common_areas`, site içinde tekil) kural:
+  açılış/kapanış (`time`), `slot_minutes`, `capacity`, kişi/misafir sınırı, `weekly_limit`,
+  `cancel_hours`, `late_cancel_refund`, `fee_type` + `fee_amount`, `channel`, `approval`,
+  `verify`, `waitlist(_minutes)`, `noshow_*` (CHECK: no-show yalnız doğrulama varsa).
+- `reservation_settings` — tek satır, K11: `debt_block_enabled` (vars. false), `debt_min_amount`,
+  `debt_min_days`. GEÇİCİ: finans parametreleri (`finance_parameter_versions`) gelince taşınır.
+- `reservations` — `area_id`, `unit_id`, `person_id?` (sakin açtıysa), `account_id?` (ücret
+  hesabı: oturan, yoksa ilk açık hesap), `person_name`, `date`, `start_time`/`end_time`,
+  `starts_at`/`ends_at` (timestamptz, İstanbul), `seat` (1..kapasite), `people`, `guests`,
+  `status`, `check_in_code` (6 hane), `channel` (`resident` · `staff`), `created_by_*`, `fee`,
+  `charge_entry_id` (kaynak `reservation`), `refund_entry_id` (ters kayıt), `approval_request_id`,
+  karar/iptal/giriş alanları. Silinmez. Kısmi benzersiz: canlı (`pending`, `approved`,
+  `checked_in`) (site, alan, yer, başlangıç), (site, alan, bölüm, başlangıç), (site, gün, kod).
+  `btree_gist` varsa `ex_reservations_overlap` (aynı alan + yer, zaman aralığı kesişmez).
+- `reservation_waitlist` — `area_id`, `unit_id`, `person_id?`, saat, `people`, `guests`, `status`
+  (`waiting` · `offered` · `accepted` · `expired` · `left`), `offered_at/until`,
+  `reservation_id` (kabulde). Bölüm aynı saatte tek açık kayıt.
+
 ### `announcements` [K]
 | Sütun | Tip | Not |
 |---|---|---|
@@ -803,6 +858,32 @@ UPDATE/DELETE tetikleyiciyle reddedilir.
 
 `visitors.anonymized_at` eklendi. Kişisel veri (ziyaretçi adı, plaka, not) saklama süresi dolunca
 gece işiyle silinir ya da "Anonim" olur; kaydın kendisi (tarih, sayı) kalır.
+
+## 9b. Raporlar, KVKK ve denetim paketi (göç 0038 — servis istekleri 79–81, P6, K8) [K]
+
+| Tablo | Amaç | Not |
+|---|---|---|
+| `privacy_notices` | Aydınlatma metni sürümü (`version`, `text` ≥200, `summary`, yayınlayan) | site başına artan sürüm; **değişmez** |
+| `privacy_consents` | Kullanıcı × sürüm onayı (`source`: login/registration/invitation/publisher/seed, IP, tarayıcı) | `UNIQUE (site_id, user_id, notice_id)`; **değişmez**. Onay kapısı: erişilen her sitenin son sürümü |
+| `explicit_consents` | Açık rıza (amaç, `granted`, kaynak) | her değişiklik yeni satır, en sonuncusu geçerli; **değişmez** |
+| `privacy_requests` | İlgili kişi başvurusu (tür, açıklama, `due_on` = +30 gün, yanıt, sonuç, saklananlar, `warned_on`) | aynı kişinin aynı türde tek açık başvurusu (kısmi benzersiz indeks) |
+| `retention_policies` | Saklama kategorisi × süre, `auto_apply` | yalnız politika tablosundaki kategoriler; ziyaretçi süresi `security_settings`'te |
+| `retention_runs` | Silme/anonimleştirme raporu (kategori, eylem, tetikleyici, kesim tarihi, etkilenen) | **değişmez** |
+| `audit_packages` | Denetim kurulu paketi (dönem, `document_ids`, dondurulmuş `decisions` ve `snapshot`, durum, denetim raporu belgesi) | `report_document_id` → `documents` (bileşik FK) |
+## 9b. Satın alma (servis istekleri 62–67, göç 0034)
+
+| Tablo | Not |
+|---|---|
+| `vendors` [K] | tedarikçi kartı: unvan (+ `name_key` arama), `tax_number` (site içinde tekil), telefon, e-posta, IBAN (okumada maskeli; denetimde `tax_number/iban/phone/email` maskeli), kategori, `active/passive/blacklist`. Silinmez |
+| `purchase_settings` [K] | site başına bir satır: eşikler (JSONB `[{max, quotes}]`), `above_quotes`, `tolerance_percent` (NUMERIC 5,2), `link_days`; yoksa varsayılan |
+| `purchase_requests` [K] | `ST-YYYY-NNNN` (yıl + sıra, kilit altında), konu, gerekçe, gider kategorisi, tahmini toplam, **talep anındaki bütçe görüntüsü**, `over_budget`, `required_quotes`, durum, seçilen teklif, istisna/ret gerekçesi, açık onay talebi (`approval_request_id`) |
+| `purchase_request_items` [K] | kalem: açıklama, miktar (NUMERIC 14,3), birim, tahmini birim fiyat, stok kartı (isteğe bağlı) |
+| `purchase_quotes` · `purchase_quote_lines` [K] | teklif (talep × tedarikçi tekil): toplam (kalemlerden), teslim günü, ödeme koşulu, geçerlilik, `source: staff/vendor_link`, belge (`stored_file_id`) · kalem birim fiyatı |
+| `purchase_quote_links` [K] | tedarikçi linki: **yalnız `token_hash`** (SHA-256, global tekil), son geçerlilik, `used_at`, `closed_at`, oluşan teklif |
+| `purchase_decisions` [K] | istisna/satın alma/sipariş kararı (doğrudan ya da onay mekanizmasından). **Değişmez** |
+| `purchase_orders` · `purchase_order_lines` [K] | `SIP-YYYY-NNNN`, talep başına bir, seçilen teklif, tedarikçi, kategori, toplam, `sent/partial/received/closed` · kalem (birim fiyat tekliften, `received_quantity` kabulle artar) |
+| `purchase_receipts` · `purchase_receipt_lines` [K] | kabul: not, 1–5 puan, fotoğraf/irsaliye, kabul eden · kalem miktarı (**değişmez**). Stoklu kalemin stok hareketi aynı işlemde, sistem adına |
+| `vendor_invoices` · `vendor_invoice_lines` [K] | tedarikçi faturası: numara (tedarikçide tekil), tarih, vade, toplam, beklenen, farklar (JSONB), `matched/diff_pending/disputed/paid`, karar, belge, ödendi (`paid_on`, hesap, oluşan `expense_id`) · kalem (**değişmez**). Siparişte tek bekleyen fark (kısmi benzersiz indeks) |
 
 ### Operasyon ekleri ve teknik varlık [K] (göç 0032; OPS-01..06, HIZ-06/07; K28, K29)
 Hepsi kiracı tablosu (RLS), denetim kaydında; silme yok (pasifleştirme / durum).

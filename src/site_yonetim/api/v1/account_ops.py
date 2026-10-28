@@ -10,7 +10,7 @@ import uuid
 from http import HTTPStatus
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -21,7 +21,7 @@ from site_yonetim.api.deps import (
     TodayDep,
     require_permission,
 )
-from site_yonetim.api.schemas import Money, Written
+from site_yonetim.api.schemas import ApprovalPendingOut, Money, Written
 from site_yonetim.api.v1.finance_common import (
     IdempotencyDep,
     commit_with_key,
@@ -36,6 +36,7 @@ from site_yonetim.models.audit import AuditAction, record
 from site_yonetim.services import accounts as account_svc
 from site_yonetim.services import opening_balances as opening_svc
 from site_yonetim.services import refunds as refund_svc
+from site_yonetim.services.approvals import ApprovalError, Person
 from site_yonetim.services.opening_balances import OpeningDirection
 
 router = APIRouter(prefix="/sites/{slug}", tags=["tahsilat ve cari"])
@@ -134,7 +135,8 @@ class RefundOut(BaseModel):
     "/refunds",
     status_code=status.HTTP_201_CREATED,
     summary="İade (alacaklı bakiyenin sakine geri ödenmesi)",
-    response_model=Written[RefundOut],
+    response_model=Written[RefundOut] | Written[ApprovalPendingOut],
+    responses={202: {"description": "`status: approval_pending` — iade onaya gönderildi"}},
 )
 async def record_refund(
     body: RefundIn,
@@ -143,9 +145,11 @@ async def record_refund(
     idem: IdempotencyDep,
     today: TodayDep,
     now: NowDep,
-) -> Written[RefundOut] | JSONResponse:
+    response: Response,
+) -> Written[RefundOut] | Written[ApprovalPendingOut] | JSONResponse:
     """Para çıkışı: `finance.payment.record` + `finance.cash.manage`; `Idempotency-Key` zorunlu.
-    Alacak yok 409 `no_credit`; alacağı aşan tutar 422 `fields.amount`."""
+    Alacak yok 409 `no_credit`; alacağı aşan tutar 422 `fields.amount`. İade onay kuralı
+    (`refund`) tanımlıysa 202 `approval_pending`: iade onaylanınca yazılır."""
     if not ctx.access.can(Permission.FINANCE_CASH_MANAGE):
         raise ForbiddenError
     if idem.key is None:
@@ -160,6 +164,27 @@ async def record_refund(
     if row is None:  # başka sitenin hesabı da burada "yok"tur
         raise NotFoundError("Hesap bulunamadı.")
     try:
+        request = await refund_svc.request_if_ruled(
+            ctx.session,
+            ctx.site,
+            row.account,
+            amount=body.amount,
+            day=body.date,
+            cash_account_id=body.cash_account_id,
+            reason=body.reason or "",
+            requester=Person(current.user.id, current.user.full_name),
+            today=today,
+            now=now,
+        )
+        if request is not None:
+            pending = Written(
+                data=ApprovalPendingOut(approval_request_id=request.id),
+                message=f"{format_money_tr(body.amount)} iade onaya gönderildi (talep "
+                f"#{request.number}); onaylanınca kaydedilir.",
+            )
+            response.status_code = status.HTTP_202_ACCEPTED
+            await commit_with_key(ctx.session, idem, status.HTTP_202_ACCEPTED, pending)
+            return pending
         refund = await refund_svc.record(
             ctx.session,
             row.account,
@@ -172,6 +197,8 @@ async def record_refund(
         )
     except FinanceRuleError as exc:
         raise finance_error(exc) from exc
+    except ApprovalError as exc:
+        raise ApiError(exc.status, exc.code, exc.message) from exc
     written = Written(
         data=RefundOut(
             id=refund.id,

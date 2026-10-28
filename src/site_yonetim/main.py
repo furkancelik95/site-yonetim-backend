@@ -40,6 +40,14 @@ _UPLOAD_LIMITS = (
     (re.compile(rf"{API_V1_PREFIX}/sites/[^/]+/bank-imports$"), MAX_UPLOAD_BYTES + 64 * 1024),
     (re.compile(rf"{API_V1_PREFIX}/sites/[^/]+/expenses"), MAX_FILE_BYTES + 64 * 1024),
     (re.compile(rf"{API_V1_PREFIX}/sites/[^/]+/documents$"), MAX_FILE_BYTES + 64 * 1024),
+    # Satın alma belgeleri: teklif, kabul fotoğrafı/irsaliye, fatura; tedarikçi teklif belgesi
+    (
+        re.compile(
+            rf"{API_V1_PREFIX}/sites/[^/]+/(purchase-quotes|purchase-receipts|vendor-invoices)/[^/]+/file"
+        ),
+        MAX_FILE_BYTES + 64 * 1024,
+    ),
+    (re.compile(rf"{API_V1_PREFIX}/public/quote-links/[^/]+/file"), MAX_FILE_BYTES + 64 * 1024),
 )
 
 
@@ -100,7 +108,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_origins=settings.cors_origins,
         allow_credentials=True,  # yenileme jetonu httpOnly çerezde (docs/05-yetki.md §8)
         allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE"],
-        allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "X-Request-ID"],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "Idempotency-Key",
+            "X-Request-ID",
+            "X-View-As-Session",  # sakin olarak görüntüleme (PLT-12)
+        ],
         expose_headers=["X-Request-ID"],
         max_age=600,
     )

@@ -207,6 +207,7 @@ GROUP_LABELS: dict[str, str] = {
     "modules": "Ayarlar",
     "audit": "Ayarlar",
     "portfolio": "Portföy",
+    "support": "Destek",
 }
 OTHER_GROUP = "Diğer"
 
@@ -248,6 +249,7 @@ DESCRIPTIONS: dict[str, str] = {
     "documents.read": "Belge arşivi (gizli olmayan)",
     "documents.manage": "Belge yükleme ve yeni sürüm",
     "documents.confidential": "Gizli belgeler (her açılış kayda geçer)",
+    "support.view_as_resident": "Sakin olarak görüntüle (salt okunur, gerekçeli, kayda geçer)",
 }
 
 # PLT-09: "finans iadesi, rol yönetimi, dönem kilidi" — atanması onaydan geçer (P16b).
@@ -258,7 +260,7 @@ SENSITIVE: frozenset[str] = frozenset(
     {
         "finance.payment.record", "finance.cash.manage", "finance.budget.manage",
         "expenses.manage", "people.read", "people.manage", "staff.manage", "audit.read",
-        "documents.confidential",
+        "documents.confidential", "support.view_as_resident",
     }
 )  # fmt: skip
 
@@ -322,9 +324,18 @@ EXCEEDS_DEFINE = "Kendi yetkinizden fazla izin içeren rol tanımlayamazsınız.
 EXCEEDS_REMOVE = "Kendi yetkinizden fazla izin içeren rolü kaldıramazsınız."
 
 
+# Hiçbir şablonda olmayan, tesis yöneticisinin (members.manage) bilerek verdiği izinler: atayanda
+# bulunması gerekmez — yoksa kimse veremezdi (PLT-12: "ayrı izin, hiçbir rol şablonunda
+# varsayılan açık değildir").
+MANAGER_GRANTABLE: frozenset[Permission] = frozenset({Permission.SUPPORT_VIEW_AS_RESIDENT})
+
+
 def exceeding(actor: frozenset[Permission], role: Iterable[Permission]) -> frozenset[Permission]:
     """Atayanda olmayan izinler (PLT-09 adım 2) — boşsa atayabilir."""
-    return frozenset(role) - actor
+    missing = frozenset(role) - actor
+    if Permission.MEMBERS_MANAGE in actor:
+        missing -= MANAGER_GRANTABLE
+    return missing
 
 
 def check_role_fields(

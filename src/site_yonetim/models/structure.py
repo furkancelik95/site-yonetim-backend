@@ -169,6 +169,8 @@ class StructureSettings(TenantMixin, Base):
     opening_reconciled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     opening_reconciled_by: Mapped[str | None] = mapped_column(Text)
     opening_reconciled_note: Mapped[str | None] = mapped_column(Text)
+    # Sakin olarak görüntüle (PLT-12): oturum açılınca sakine bildirim (varsayılan: bildir)
+    view_as_notify_resident: Mapped[bool] = mapped_column(default=True, server_default="true")
 
 
 class ImportBatch(TenantMixin, Base):

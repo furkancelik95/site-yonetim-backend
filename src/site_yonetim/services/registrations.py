@@ -22,12 +22,16 @@ from sqlalchemy import Select, and_, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from site_yonetim.core.config import get_settings
 from site_yonetim.db.tenancy import all_sites_scope, current_scope
 from site_yonetim.domain.access import UserKind
+from site_yonetim.domain.approvals import OPEN_STATUSES, ActionType
 from site_yonetim.domain.members import Applicant, Relation
+from site_yonetim.domain.notifications import NotificationCategory, NotificationChannel
 from site_yonetim.domain.roles import RESIDENT_KEY
-from site_yonetim.domain.structure import FULL_SHARE, PartyRole
+from site_yonetim.domain.structure import FULL_SHARE, PartyRole, StructureRuleError
 from site_yonetim.models import (
+    ApprovalRequest,
     Block,
     Person,
     Registration,
@@ -38,7 +42,12 @@ from site_yonetim.models import (
     Unit,
     User,
 )
-from site_yonetim.services import structure
+from site_yonetim.models.audit import AuditAction, record
+from site_yonetim.services import approvals as approvals_svc
+from site_yonetim.services import delivery, structure
+from site_yonetim.services import privacy as privacy_svc
+from site_yonetim.services.approvals import ExecutionError
+from site_yonetim.services.approvals import Person as ApprovalPerson
 
 CODE_BYTES = 8
 _NUMBER_LOCK = text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))")
@@ -280,6 +289,8 @@ async def _login(session: AsyncSession, r: Registration, person: Person) -> str:
     if person.user_id is None:
         person.user_id = user.id
     await session.flush()
+    # Başvurudaki bilgilendirme onayı ve açık rıza hesaba bağlanır (P6).
+    await privacy_svc.link_registration(session, user.id, r)
     return login
 
 
@@ -350,3 +361,143 @@ async def reject(
     registration.decided_by_name = decided_by
     await session.flush()
     return registration
+
+
+# --- Onay kuralı (K21) --------------------------------------------------------------------
+
+
+async def open_requests(
+    session: AsyncSession, registration_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, uuid.UUID]:
+    """Başvuru → açık onay talebi (varsa)."""
+    if not registration_ids:
+        return {}
+    rows = await session.execute(
+        select(ApprovalRequest.subject_id, ApprovalRequest.id).where(
+            ApprovalRequest.action_type == ActionType.REGISTRATION.value,
+            ApprovalRequest.subject_id.in_(registration_ids),
+            ApprovalRequest.status.in_([s.value for s in OPEN_STATUSES]),
+        )
+    )
+    return {subject: request for subject, request in rows if subject is not None}
+
+
+async def ensure_not_in_approval(session: AsyncSession, registration: Registration) -> None:
+    if registration.id in await open_requests(session, [registration.id]):
+        raise RegistrationRuleError(
+            "approval_pending",
+            "Bu başvuru için onay talebi açık; talep sonuçlanana kadar işlem yapılamaz.",
+        )
+
+
+async def request_approval(
+    session: AsyncSession,
+    site: Site,
+    registration: Registration,
+    *,
+    unit_id: uuid.UUID,
+    start_date: date,
+    share_percent: Decimal | None,
+    requester: ApprovalPerson,
+    today: date,
+    now: datetime,
+) -> ApprovalRequest | None:
+    """Kayıt onayı kuralı varsa talep açar (kayıt `pending` kalır, işlem yapılmaz); yoksa None.
+    Alan denetimi onay öncesi yapılır ki hatalı talep açılmasın."""
+    version = await approvals_svc.match_rule(
+        session, ActionType.REGISTRATION, amount=None, source=None, today=today
+    )
+    if version is None:
+        return None
+    _undecided(registration)
+    await ensure_not_in_approval(session, registration)
+    if share_percent is not None and Relation(registration.relation) is not Relation.OWNER:
+        raise RegistrationRuleError(
+            "share_only_for_owner", "Hisse oranı yalnız malik başvurusunda girilir."
+        )
+    names = await unit_names(session, {unit_id})
+    if unit_id not in names:
+        raise RegistrationRuleError("unit_not_found", "Bölüm seçin.")
+    return await approvals_svc.request_approval(
+        session,
+        site,
+        approvals_svc.NewRequest(
+            action_type=ActionType.REGISTRATION,
+            title=f"Kayıt başvurusu — {reference(registration.number)}, {names[unit_id]}",
+            summary={
+                "reference": reference(registration.number),
+                "applicant": f"{registration.first_name} {registration.last_name}",
+                "relation": registration.relation,
+                "unit": names[unit_id],
+            },
+            payload={
+                "registration_id": str(registration.id),
+                "unit_id": str(unit_id),
+                "start_date": start_date.isoformat(),
+                "share_percent": str(share_percent) if share_percent is not None else None,
+            },
+            subject_type="registrations",
+            subject_id=registration.id,
+        ),
+        requester=requester,
+        today=today,
+        now=now,
+    )
+
+
+async def queue_approved_sms(
+    session: AsyncSession, approved: Approved, *, web_url: str, now: datetime
+) -> None:
+    await delivery.queue_direct(
+        session,
+        channel=NotificationChannel.SMS,
+        to=approved.phone,
+        body=f"Kayıt başvurunuz onaylandı ({approved.unit_name}). Telefon numaranızla, SMS "
+        f"koduyla giriş yapabilirsiniz: {web_url}/giris",
+        category=NotificationCategory.OPERATIONS,
+        kind="registration.approved",
+        now=now,
+    )
+
+
+async def _execute(session: AsyncSession, request: ApprovalRequest) -> None:
+    payload = request.payload or {}
+    registration = await get(session, uuid.UUID(payload["registration_id"]), lock=True)
+    if registration is None or registration.status != "pending":
+        raise ExecutionError("Başvuru artık onay beklemiyor.")
+    now = request.decided_at or datetime.now().astimezone()
+    share = Decimal(payload["share_percent"]) if payload.get("share_percent") else None
+    try:
+        approved = await approve(
+            session,
+            registration,
+            unit_id=uuid.UUID(payload["unit_id"]),
+            start_date=date.fromisoformat(payload["start_date"]),
+            decided_by=request.requested_by_name,
+            now=now,
+            share_percent=share,
+        )
+    except (RegistrationRuleError, StructureRuleError) as exc:
+        raise ExecutionError(f"Başvuru artık onaylanamıyor: {exc.message}") from exc
+    record(session, AuditAction.UPDATE, "registrations", registration.id,
+           {"reference": reference(registration.number), "status": "approved"})  # fmt: skip
+    await queue_approved_sms(session, approved, web_url=get_settings().web_url, now=now)
+
+
+async def _close(session: AsyncSession, request: ApprovalRequest) -> None:
+    """Talep reddedilirse başvuru reddedilir; geri çekilirse eski haline (bekliyor) döner."""
+    if request.status != "rejected":
+        return
+    registration = await get(
+        session, uuid.UUID((request.payload or {})["registration_id"]), lock=True
+    )
+    if registration is not None and registration.status == "pending":
+        registration.status = "rejected"
+        registration.reject_reason = f"Onay talebi reddedildi (#{request.number})."
+        registration.decided_at = request.decided_at
+        registration.decided_by_name = request.requested_by_name
+        await session.flush()
+
+
+approvals_svc.register_executor(ActionType.REGISTRATION, _execute)
+approvals_svc.register_closer(ActionType.REGISTRATION, _close)

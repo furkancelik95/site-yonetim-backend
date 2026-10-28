@@ -407,6 +407,26 @@ async def _check_assignment(
     return role, scope
 
 
+async def check_assignment(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    data: AssignmentInput,
+    actor_id: uuid.UUID | None,
+    actor_permissions: frozenset[Permission],
+    now: datetime,
+) -> RoleDef:
+    """`assign_role` denetimleri, yazmadan: kritik rol ataması onaya gönderilmeden önce."""
+    role, _scope = await _check_assignment(session, await load_catalog(session), data, now)
+    if actor_id == user_id:
+        raise RoleRuleError(
+            409, "self_change", "Kendi rolünüzü değiştiremez, kendinize rol atayamazsınız."
+        )
+    if exceeding(actor_permissions, role.permissions):
+        raise RoleRuleError(403, "exceeds_own_permissions", EXCEEDS_ASSIGN)
+    return role
+
+
 async def assign_role(
     session: AsyncSession,
     site: Site,

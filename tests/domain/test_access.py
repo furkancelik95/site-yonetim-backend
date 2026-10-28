@@ -59,7 +59,11 @@ def test_her_rolun_izin_kumesi_tanimli_ve_izinler_gecerli() -> None:
 
 
 def test_yonetici_portfoy_disinda_her_seyi_yapar() -> None:
-    assert ROLE_PERMISSIONS[SiteRole.MANAGER] == set(Permission) - {P.PORTFOLIO_READ}
+    # support.view_as_resident hiçbir şablonda varsayılan değildir (PLT-12)
+    assert ROLE_PERMISSIONS[SiteRole.MANAGER] == set(Permission) - {
+        P.PORTFOLIO_READ,
+        P.SUPPORT_VIEW_AS_RESIDENT,
+    }
 
 
 @pytest.mark.parametrize(

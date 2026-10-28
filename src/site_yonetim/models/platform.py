@@ -9,6 +9,7 @@ from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column, validates
 
 from site_yonetim.db.base import Base, enum_check
+from site_yonetim.domain.support import SupportTier
 from site_yonetim.domain.text import tr_lower
 
 
@@ -21,12 +22,19 @@ class PropertyKind(StrEnum):
 
 class Plan(Base):
     __tablename__ = "plans"
+    __table_args__ = (
+        CheckConstraint(enum_check("support_tier", SupportTier), name="support_tier"),
+    )
 
     name: Mapped[str] = mapped_column(Text, unique=True)
     max_units: Mapped[int | None]  # NULL = sınırsız
     max_storage_mb: Mapped[int | None]
     allowed_modules: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
     sort_order: Mapped[int] = mapped_column(default=0)
+    # Paket destek seviyesi (Ürün Dokümanı 3.2): bilet SLA'sı ve kritik biletin nöbet hattı
+    support_tier: Mapped[str] = mapped_column(
+        Text, default=SupportTier.BUSINESS_HOURS.value, server_default="business_hours"
+    )
 
 
 class Organization(Base):

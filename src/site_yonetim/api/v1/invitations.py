@@ -338,6 +338,9 @@ async def _limit(
 
 class PublicInvitationOut(BaseModel):
     site_name: str
+    site_slug: str = Field(
+        description="aydınlatma metni bağlantısı için (`/public/privacy-notice/{slug}`)"
+    )
     full_name: str
     unit_name: str
     relation: InvitationRelation
@@ -388,6 +391,7 @@ async def public_invitation(
             )
             out = PublicInvitationOut(
                 site_name=site.name,
+                site_slug=site.slug,
                 full_name=invitation.full_name,
                 unit_name=unit_name,
                 relation=InvitationRelation(invitation.relation),

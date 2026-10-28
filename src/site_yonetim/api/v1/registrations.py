@@ -22,9 +22,10 @@ from site_yonetim.api.deps import (
     NowDep,
     SettingsDep,
     SiteContext,
+    TodayDep,
     require_permission,
 )
-from site_yonetim.api.schemas import Page, PageParams, Written
+from site_yonetim.api.schemas import ApprovalPendingOut, Page, PageParams, Written
 from site_yonetim.api.v1.members import form_error
 from site_yonetim.core.errors import ApiError, NotFoundError
 from site_yonetim.db.tenancy import site_scope
@@ -32,12 +33,12 @@ from site_yonetim.domain.access import Permission
 from site_yonetim.domain.invitations import SiteLifecycle
 from site_yonetim.domain.masking import mask_phone
 from site_yonetim.domain.members import FormFieldError, Relation, check_applicant
-from site_yonetim.domain.notifications import NotificationCategory, NotificationChannel
 from site_yonetim.domain.structure import StructureRuleError
 from site_yonetim.models import Registration, Unit
 from site_yonetim.models.audit import AuditAction, record
-from site_yonetim.services import delivery, rate_limit
+from site_yonetim.services import rate_limit
 from site_yonetim.services import registrations as svc
+from site_yonetim.services.approvals import ApprovalError, Person
 from site_yonetim.services.vehicles import read_settings
 
 router = APIRouter(prefix="/sites/{slug}", tags=["kayıt başvuruları"])
@@ -129,10 +130,17 @@ class RegistrationOut(BaseModel):
         default=None, description="başvuranın listeden seçtiği bölüm (onayda önerilir)"
     )
     requested_unit_name: str | None = None
+    approval_request_id: uuid.UUID | None = Field(
+        default=None, description="açık onay talebi varsa (kayıt onayı kuralı); işlem beklemede"
+    )
 
     @classmethod
     def of(
-        cls, r: Registration, unit_name: str | None, requested_name: str | None = None
+        cls,
+        r: Registration,
+        unit_name: str | None,
+        requested_name: str | None = None,
+        approval_request_id: uuid.UUID | None = None,
     ) -> RegistrationOut:
         return cls(
             id=r.id,
@@ -152,6 +160,7 @@ class RegistrationOut(BaseModel):
             unit_name=unit_name,
             requested_unit_id=r.requested_unit_id,
             requested_unit_name=requested_name,
+            approval_request_id=approval_request_id,
         )
 
 
@@ -170,12 +179,14 @@ async def list_registrations(
         r.requested_unit_id for r in rows if r.requested_unit_id
     }
     names = await svc.unit_names(ctx.session, ids)
+    open_requests = await svc.open_requests(ctx.session, [r.id for r in rows])
     return Page(
         items=[
             RegistrationOut.of(
                 r,
                 names.get(r.unit_id) if r.unit_id else None,
                 names.get(r.requested_unit_id) if r.requested_unit_id else None,
+                open_requests.get(r.id),
             )
             for r in rows
         ],
@@ -221,9 +232,32 @@ async def approve(
     now: NowDep,
     response: Response,
     settings: SettingsDep,
-) -> Written[ApprovedOut]:
+    today: TodayDep,
+) -> Written[ApprovedOut] | Written[ApprovalPendingOut]:
+    """Kayıt onayı kuralı (`registration`) tanımlıysa 202 `approval_pending`: bölüme ekleme ve
+    SMS onay sonrası yapılır; ret/geri çekmede başvuru reddedilir/bekler."""
     registration = await _registration(ctx, registration_id)
     try:
+        await svc.ensure_not_in_approval(ctx.session, registration)
+        request = await svc.request_approval(
+            ctx.session,
+            ctx.site,
+            registration,
+            unit_id=body.unit_id,
+            start_date=body.start_date,
+            share_percent=body.share_percent,
+            requester=Person(current.user.id, current.user.full_name),
+            today=today,
+            now=now,
+        )
+        if request is not None:
+            await ctx.session.commit()
+            response.status_code = HTTPStatus.ACCEPTED
+            return Written(
+                data=ApprovalPendingOut(approval_request_id=request.id),
+                message=f"{svc.reference(registration.number)} numaralı başvurunun onayı "
+                f"onaya gönderildi (talep #{request.number}); onaylanınca bölüme eklenir.",
+            )
         approved = await svc.approve(
             ctx.session,
             registration,
@@ -235,20 +269,13 @@ async def approve(
         )
     except svc.RegistrationRuleError as exc:
         raise _rule(exc) from exc
+    except ApprovalError as exc:
+        raise ApiError(exc.status, exc.code, exc.message) from exc
     except StructureRuleError as exc:  # ör. malik hissesi dolu: owner_shares_exceed
         raise ApiError(HTTPStatus.CONFLICT, exc.code, exc.message) from exc
     record(ctx.session, AuditAction.UPDATE, "registrations", registration.id,
            {"reference": svc.reference(registration.number), "status": "approved"})  # fmt: skip
-    await delivery.queue_direct(
-        ctx.session,
-        channel=NotificationChannel.SMS,
-        to=approved.phone,
-        body=f"Kayıt başvurunuz onaylandı ({approved.unit_name}). Telefon numaranızla, SMS "
-        f"koduyla giriş yapabilirsiniz: {settings.web_url}/giris",
-        category=NotificationCategory.OPERATIONS,
-        kind="registration.approved",
-        now=now,
-    )
+    await svc.queue_approved_sms(ctx.session, approved, web_url=settings.web_url, now=now)
     await ctx.session.commit()
     response.headers["Cache-Control"] = "no-store"
     r = approved.registration
@@ -283,6 +310,7 @@ async def reject(
 ) -> Written[RegistrationOut]:
     registration = await _registration(ctx, registration_id)
     try:
+        await svc.ensure_not_in_approval(ctx.session, registration)
         await svc.reject(
             ctx.session,
             registration,

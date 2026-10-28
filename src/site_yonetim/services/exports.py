@@ -138,3 +138,85 @@ def report_xlsx(
     for name, budgeted, actual, difference, usage, is_over in budget:
         _write_row(plan, (name, budgeted, actual, difference, usage, is_over))
     return _bytes(workbook)
+
+
+# --- Katalog raporu ve envanter (RAP-01, RAP-04) ----------------------------------------------
+
+_SHEET_FORBIDDEN = str.maketrans(dict.fromkeys("[]:*?/\\", " "))
+
+
+def _sheet_title(title: str, used: set[str]) -> str:
+    base = title.translate(_SHEET_FORBIDDEN).strip()[:28] or "Sayfa"
+    name, n = base, 2
+    while name in used:
+        name, n = f"{base} {n}", n + 1
+    used.add(name)
+    return name
+
+
+def content_xlsx(
+    title: str,
+    period: str,
+    summary: Sequence[tuple[str, CellValue]],
+    tables: Sequence[tuple[str, Sequence[str], Sequence[Sequence[CellValue]]]],
+    metrics: Sequence[tuple[str, str]],
+) -> bytes:
+    """Katalog raporu: Özet (başlık, dönem, göstergeler, metrik tanımları) + her tablo bir sayfa.
+    Planlı rapor gönderimi de bunu kullanır."""
+    workbook = Workbook()
+    used = {"Özet"}
+    sheet = _sheet(workbook, "Özet", (title, period), first=True)
+    sheet.column_dimensions["A"].width = 40
+    sheet.column_dimensions["B"].width = 24
+    for label, value in summary:
+        _write_row(sheet, (label, value))
+    if metrics:
+        _write_row(sheet, ())
+        _write_row(sheet, ("Metrik", "Nasıl hesaplanır"), bold=True)
+        for name, definition in metrics:
+            _write_row(sheet, (name, definition))
+    for table_title, header, rows in tables:
+        page = _sheet(workbook, _sheet_title(table_title, used), header)
+        for row in rows:
+            _write_row(page, row)
+    return _bytes(workbook)
+
+
+_CSV_RISKY = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_cell(value: CellValue) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "Evet" if value else "Hayır"
+    if isinstance(value, dt.date):
+        return value.strftime("%d.%m.%Y")
+    text = str(value)
+    if isinstance(value, str) and text.startswith(_CSV_RISKY):
+        text = "'" + text  # formül enjeksiyonu
+    if any(c in text for c in ';"\n'):
+        text = '"' + text.replace('"', '""') + '"'
+    return text
+
+
+BOM = chr(0xFEFF)
+CSV_MEDIA_TYPE = "text/csv; charset=utf-8"
+
+
+def rows_csv(header: Sequence[str], rows: Sequence[Sequence[CellValue]]) -> bytes:
+    """Excel'in Türkçe ayarıyla açılan CSV: `;` ayraç, UTF-8 BOM, formül enjeksiyonuna karşı
+    `=`/`+`/`-`/`@` ile başlayan metin `'` ile başlar."""
+    lines = [";".join(_csv_cell(h) for h in header)]
+    lines += [";".join(_csv_cell(v) for v in row) for row in rows]
+    return (BOM + "\r\n".join(lines) + "\r\n").encode("utf-8")
+
+
+def rows_xlsx(
+    sheet_title: str, header: Sequence[str], rows: Sequence[Sequence[CellValue]]
+) -> bytes:
+    workbook = Workbook()
+    sheet = _sheet(workbook, sheet_title, header, first=True)
+    for row in rows:
+        _write_row(sheet, row)
+    return _bytes(workbook)

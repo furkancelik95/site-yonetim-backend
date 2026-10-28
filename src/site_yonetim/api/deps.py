@@ -4,6 +4,7 @@
     2. Site çözümleme     → yoksa 404       site_context
     3. Erişim kontrolü    → yoksa 404       site_context (403 DEĞİL: site varlığı sızmasın)
     4. Kapsamı aç         → site_scope      site_context
+    4a. Salt okunur erişim → yazma 403      site_context (destek oturumu, sakin olarak görüntüle)
     5. Modül kontrolü     → kapalıysa 404   require_module
     6. İzin kontrolü      → yoksa 403       require_permission
 
@@ -30,11 +31,30 @@ from site_yonetim.core.errors import ApiError, ForbiddenError, NotFoundError, Un
 from site_yonetim.core.logging import user_id_var
 from site_yonetim.core.security import InvalidTokenError, decode_access_token
 from site_yonetim.db.tenancy import site_scope
-from site_yonetim.domain.access import Permission, SiteAccess, UserAccess
+from site_yonetim.domain.access import LEVEL_MAX as ROLE_LEVEL_MAX
+from site_yonetim.domain.access import (
+    TEMPLATE_PERMISSIONS,
+    AccessMode,
+    Permission,
+    RoleGrant,
+    SiteAccess,
+    SiteRole,
+    UserAccess,
+)
 from site_yonetim.domain.mfa import step_up_needed
 from site_yonetim.domain.modules import ModuleKey
+from site_yonetim.domain.support import VIEW_AS_ROLE_KEY, VIEW_AS_ROLE_NAME
 from site_yonetim.models import Site, User
-from site_yonetim.models.audit import Actor, set_actor
+from site_yonetim.models.audit import (
+    Actor,
+    ActorType,
+    AuditAction,
+    current_actor,
+    record,
+    set_actor,
+)
+from site_yonetim.services import privacy as privacy_svc
+from site_yonetim.services import support as support_svc
 from site_yonetim.services.access import load_user_access
 from site_yonetim.services.auth import authenticate
 from site_yonetim.services.channels import Channels
@@ -224,13 +244,50 @@ async def password_changed(
     return current
 
 
-CurrentUserDep = Annotated[CurrentUser, Depends(password_changed)]
+# Parolası değişmiş ama aydınlatma onayı bekleyebilen oturum: yalnız onay uçları (P6).
+PasswordChangedUserDep = Annotated[CurrentUser, Depends(password_changed)]
+
+
+async def resolved_access(
+    current: PasswordChangedUserDep, factory: FactoryDep, today: TodayDep, now: NowDep
+) -> UserAccess:
+    """İstek başına bir kez çözülür (FastAPI bağımlılık önbelleği): onay kapısı ve site
+    bağlamı aynı sonucu kullanır."""
+    return await load_user_access(factory, current.user, today=today, now=now)
+
+
+class ConsentRequiredError(ApiError):
+    def __init__(self) -> None:
+        super().__init__(
+            HTTPStatus.FORBIDDEN,
+            "consent_required",
+            "Devam etmeden önce güncel aydınlatma metnini okuyup onaylayın.",
+        )
+
+
+async def consent_given(
+    current: PasswordChangedUserDep,
+    access: Annotated[UserAccess, Depends(resolved_access)],
+    factory: FactoryDep,
+) -> CurrentUser:
+    """Aydınlatma onayı kapısı (PM kararı P6, PLT-01 adım 14): kullanıcının erişebildiği bir
+    sitede onaylamadığı son sürüm varsa yalnız `/me`, `/auth/*`, `/me/consents` ve herkese açık
+    metin çalışır; diğer uçlar 403 `consent_required`. Parola kapısından sonra gelir."""
+    if access.sites and await privacy_svc.pending_notices(
+        factory, current.user.id, [s.site_id for s in access.sites]
+    ):
+        raise ConsentRequiredError
+    return current
+
+
+# Varsayılan kapı: geçici parola değişmiş ve güncel aydınlatma metni onaylanmış oturum.
+CurrentUserDep = Annotated[CurrentUser, Depends(consent_given)]
 
 
 async def user_access(
-    current: CurrentUserDep, factory: FactoryDep, today: TodayDep, now: NowDep
+    _: CurrentUserDep, access: Annotated[UserAccess, Depends(resolved_access)]
 ) -> UserAccess:
-    return await load_user_access(factory, current.user, today=today, now=now)
+    return access
 
 
 UserAccessDep = Annotated[UserAccess, Depends(user_access)]
@@ -247,10 +304,105 @@ class SiteContext:
     access: SiteAccess
     modules: frozenset[ModuleKey]
     session: AsyncSession
+    # Sakin olarak görüntülemede görüntülenen kişinin adı (bant için)
+    view_as_person_name: str | None = None
+
+
+VIEW_AS_HEADER = "X-View-As-Session"
+_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+# Salt okunur erişimde de çalışan yazma uçları: sakin olarak görüntülemeyi açmak/kapatmak
+# (destek ekibi oturum içinde kullanır — PYN-04 adım 5).
+READ_ONLY_EXEMPT_ROUTES = (
+    re.compile(r"^/api/v1/sites/[^/]+/people/[^/]+/view-as-sessions$"),  # POST: başlat
+    re.compile(r"^/api/v1/sites/[^/]+/view-as-sessions/[^/]+$"),  # DELETE: çık
+)
+
+
+class ReadOnlyAccessError(ApiError):
+    def __init__(self, mode: AccessMode) -> None:
+        message = (
+            "Destek oturumu salt okunurdur; bu işlem yapılamaz."
+            if mode is AccessMode.SUPPORT_SESSION
+            else "Sakin olarak görüntüleme salt okunurdur; bu işlem yapılamaz."
+        )
+        super().__init__(HTTPStatus.FORBIDDEN, "read_only", message)
+
+
+class ViewAsEndedError(ApiError):
+    def __init__(self) -> None:
+        super().__init__(
+            HTTPStatus.FORBIDDEN,
+            "view_as_ended",
+            "Sakin olarak görüntüleme oturumu sona erdi. Kişi kartından yeniden başlatın.",
+        )
+
+
+def _read_only_exempt(request: Request) -> bool:
+    return any(pattern.match(request.url.path) for pattern in READ_ONLY_EXEMPT_ROUTES)
+
+
+async def _view_as_access(
+    session: AsyncSession, base: SiteAccess, view_as_id: str, user: User, now: datetime
+) -> tuple[SiteAccess, str]:
+    """İstek sakin olarak görüntüleme oturumuyla geliyorsa erişim **sakinin** erişimidir
+    (PLT-12: görüntüleyenin kendi yetkileri eklenmez)."""
+    try:
+        session_id = uuid.UUID(view_as_id)
+    except ValueError:
+        raise ViewAsEndedError from None
+    if not base.can(Permission.SUPPORT_VIEW_AS_RESIDENT):
+        raise ViewAsEndedError
+    found = await support_svc.usable_view_as(session, session_id, user.id, now)
+    if found is None:
+        raise ViewAsEndedError
+    row, person = found
+    permissions = TEMPLATE_PERMISSIONS[SiteRole.RESIDENT]
+    role = RoleGrant(
+        key=VIEW_AS_ROLE_KEY,
+        name=VIEW_AS_ROLE_NAME,
+        level=ROLE_LEVEL_MAX,
+        permissions=permissions,
+        ends_at=row.ends_at,
+    )
+    access = SiteAccess(
+        site_id=base.site_id,
+        name=base.name,
+        slug=base.slug,
+        roles=(role,),
+        permissions=permissions,
+        person_id=person.id,
+        is_derived=True,
+        organization_id=base.organization_id,
+        organization_role=None,
+        mode=AccessMode.VIEW_AS,
+        session_id=row.id,
+        ends_at=row.ends_at,
+    )
+    return access, person.full_name
+
+
+async def _record_view(
+    factory: async_sessionmaker[AsyncSession], site_id: uuid.UUID, access: SiteAccess, path: str
+) -> None:
+    """Salt okunur erişimde açılan her ekran denetim kaydına (PYN-04 "tüm okumalar", PLT-12
+    "açılan ekranlar"). Ayrı transaction: uç veri yazmasa da kayıt kalır."""
+    entity = "support_sessions" if access.mode is AccessMode.SUPPORT_SESSION else "view_as_sessions"
+    with site_scope(site_id):
+        async with factory() as audit_session, audit_session.begin():
+            detail: dict[str, object] = {"path": path}
+            if access.mode is AccessMode.VIEW_AS:
+                detail["person_id"] = str(access.person_id)
+            record(audit_session, AuditAction.VIEW, entity, access.session_id, detail)
 
 
 async def site_context(
-    slug: str, session: SessionDep, access: UserAccessDep
+    slug: str,
+    request: Request,
+    session: SessionDep,
+    access: UserAccessDep,
+    current: CurrentUserDep,
+    factory: FactoryDep,
+    now: NowDep,
 ) -> AsyncIterator[SiteContext]:
     # Biçimsiz slug, olmayan site ve erişimi olmayan site aynı yanıtı alır: 404.
     site = await find_site_by_slug(session, slug) if _SLUG.match(slug) else None
@@ -258,8 +410,37 @@ async def site_context(
     if site is None or site_access is None:
         raise NotFoundError
     with site_scope(site.id):
+        person_name: str | None = None
+        if site_access.mode is AccessMode.SUPPORT_SESSION:
+            # Denetimde aktör tipi "destek oturumu" (Yazılım Dokümanı M-24, PYN-04 adım 6)
+            actor = current_actor()
+            if actor is not None:
+                set_actor(
+                    Actor(
+                        actor.user_id,
+                        f"{actor.name} (destek)",
+                        actor.ip,
+                        actor.user_agent,
+                        ActorType.SUPPORT_SESSION,
+                    )
+                )
+        view_as_id = request.headers.get(VIEW_AS_HEADER)
+        if view_as_id:
+            site_access, person_name = await _view_as_access(
+                session, site_access, view_as_id, current.user, now
+            )
+        if site_access.read_only:
+            if request.method not in _SAFE_METHODS and not _read_only_exempt(request):
+                raise ReadOnlyAccessError(site_access.mode)
+            await _record_view(factory, site.id, site_access, request.url.path)
         modules = await available_modules(session, site)
-        yield SiteContext(site=site, access=site_access, modules=modules, session=session)
+        yield SiteContext(
+            site=site,
+            access=site_access,
+            modules=modules,
+            session=session,
+            view_as_person_name=person_name,
+        )
 
 
 SiteContextDep = Annotated[SiteContext, Depends(site_context)]

@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import and_, func, select
 
 from site_yonetim.api.deps import CurrentUserDep, NowDep, SiteContext, TodayDep
-from site_yonetim.api.schemas import Money, Page, PageParams, Written
+from site_yonetim.api.schemas import ApprovalPendingOut, Money, Page, PageParams, Written
 from site_yonetim.api.v1.finance_common import (
     ChargePost,
     FinanceRead,
@@ -66,9 +66,10 @@ from site_yonetim.models import (
     Person,
     Unit,
 )
-from site_yonetim.services import charge_adjustments, charge_diff, charge_drafts
+from site_yonetim.services import charge_adjustments, charge_approvals, charge_diff, charge_drafts
 from site_yonetim.services import charging as svc
 from site_yonetim.services.approvals import ApprovalError
+from site_yonetim.services.approvals import Person as Requester
 
 router = APIRouter(prefix="/sites/{slug}/charge-runs", tags=["tahakkuk"])
 Paging = Annotated[PageParams, Depends()]
@@ -890,8 +891,11 @@ class ReverseIn(BaseModel):
 @router.post(
     "/{run_id}/reverse",
     summary="Koşuyu ters kayıtla iptal et",
-    response_model=Written[ChargeRunOut],
-    responses={409: {"description": "Zaten ters kaydedilmiş / ters kaydedilemez"}},
+    response_model=Written[ChargeRunOut] | Written[ApprovalPendingOut],
+    responses={
+        202: {"description": "`status: approval_pending` — iptal onaya gönderildi"},
+        409: {"description": "Zaten ters kaydedilmiş / ters kaydedilemez"},
+    },
 )
 async def reverse_run(
     run_id: uuid.UUID,
@@ -901,11 +905,33 @@ async def reverse_run(
     idem: IdempotencyDep,
     today: TodayDep,
     now: NowDep,
-) -> Written[ChargeRunOut] | JSONResponse:
+    response: Response,
+) -> Written[ChargeRunOut] | Written[ApprovalPendingOut] | JSONResponse:
+    """Onay kuralı (`charge_run_reversal`) tanımlıysa 202 `approval_pending`."""
     try:
         if (stored := await idem.replay(ctx.session, now)) is not None:
             return replayed(stored.status_code, stored.body)
         run = await _run(ctx, run_id)
+        [current_run] = await _runs_out(ctx, [run])
+        request = await charge_approvals.request_reversal_if_ruled(
+            ctx.session,
+            ctx.site,
+            run,
+            reason=" ".join(body.reason.split()),
+            total=current_run.total_amount,
+            requester=Requester(current.user.id, current.user.full_name),
+            today=today,
+            now=now,
+        )
+        if request is not None:
+            pending = Written(
+                data=ApprovalPendingOut(approval_request_id=request.id),
+                message=f"{current_run.period} tahakkuk iptali onaya gönderildi (talep "
+                f"#{request.number}); onaylanınca ters kayıt yazılır.",
+            )
+            response.status_code = status.HTTP_202_ACCEPTED
+            await commit_with_key(ctx.session, idem, status.HTTP_202_ACCEPTED, pending)
+            return pending
         reversal = await svc.reverse(
             ctx.session,
             run,
@@ -916,6 +942,8 @@ async def reverse_run(
         )
     except FinanceRuleError as exc:
         raise finance_error(exc) from exc
+    except ApprovalError as exc:
+        raise ApiError(exc.status, exc.code, exc.message) from exc
     [out] = await _runs_out(ctx, [reversal])
     result = Written(
         data=out,

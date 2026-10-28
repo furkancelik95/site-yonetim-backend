@@ -81,6 +81,17 @@ Toplam **84 bağımsız bölüm**. Oranlar bilinçli farklı: panoda sağlıklı
   raporu, süresi dolmuş asansör etiketi (ilk blok), temizlik sözleşmesi, mali tablolar, bir gizli
   belge; demo sakinin bölümüne özel "Tadilat izin belgesi". İçerik küçük geçerli PDF (`demo_pdf`),
   `FILE_STORAGE_ROOT` altına yazılır.
+- **Satın alma** (yalnız Aksu Konakları; servis istekleri 62–67): 4 tedarikçi (biri pasif), açık
+  talep (teklifsiz), teklifli talep (personel teklifi + açık tedarikçi linki), sipariş + tam kabul
+  ("LED ampul 9W" stoğuna 40 adet girer) + **eşleşen fatura** (ödenecekler listesinde), kısmi kabul
+  + **fark çıkan fatura** (fark onayı bekliyor, muhasebe girdi — yönetici karar verebilir). Talebi
+  teknik görevli açar, yönetici onaylar, siparişi ve faturayı muhasebe girer.
+
+- **Rezervasyon** (Aksu, servis istekleri 59–61): Spor salonu (kapasite 3, QR, no-show kuralı),
+  Toplantı salonu (sabit ücret, yönetici onayı), Mangal alanı (misafir başı ücret, görevli
+  onayı), Açık havuz (sezon dışı, kapalı). Geçen haftadan gelen/gelmeyen kayıtlar, bugünkü
+  liste, sakinin yarınki rezervasyonu, onay bekleyen salon rezervasyonu ve sakinin o saat için
+  bekleme listesi kaydı.
 
 ## 2. Demo hesapları
 
@@ -128,3 +139,12 @@ Sonraki adım (kullanıcıya söylenir): daire listesini Excel'den aktarmak.
 - Demo: `src/SiteYonetimi.Infrastructure/Persistence/DemoDataSeeder.cs`, `DemoUserSeeder.cs`
 - Site kurulumu: `src/SiteYonetimi.Infrastructure/Provisioning/SiteProvisioningService.cs`
 - Müşteri kurulumu: `src/SiteYonetimi.Infrastructure/Provisioning/CustomerProvisioningService.cs`
+
+## Sözleşme performansı (servis istekleri 68–70)
+
+Aksu Konakları: **Parlak Temizlik** (20.000 TL/ay; denetim + görev KPI'ları, "denetim hedefin
+%10'undan fazla altındaysa %5" kuralı; geçen ayın karnesi kesinleşmiş, 1.000,00 TL kesinti onay
+bekliyor — Kerem kesinleştirdi, Selin Arı onaylayabilir; TÜFE'ye bağlı artışın tarihi 20 gün
+sonra, "Fiyat artışı" sekmesinde karar bekler) ve **Kale Güvenlik** (85.000 TL/ay; devriye + elle
+memnuniyet, sabit 2.500 TL kesinti kuralı; bir ay önce onaylanmış TÜFE artışı ve bedel geçmişi,
+cezasız geçen ay karnesi). Platform: son 13 ayın TÜFE/ÜFE değerleri.
