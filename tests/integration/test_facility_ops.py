@@ -726,6 +726,15 @@ async def test_sayac_okuma_kurallari(ops: World) -> None:
         await w.post("/meters", {"kind": "common", "serial": "OS-1", "area": "Bahçe"})
     ).json()["data"]
     assert common["unit_label"] == "m³"
+    # PATCH kısmidir: gönderilmeyen `status` korunur (ekleme gövdesindeki varsayılan uygulanmaz)
+    faulty = (await patch(w, f"/meters/{common['id']}", {"status": "faulty"})).json()["data"]
+    renamed = (await patch(w, f"/meters/{common['id']}", {"area": "Ön bahçe"})).json()["data"]
+    assert (faulty["status"], renamed["status"], renamed["area"]) == (
+        "faulty",
+        "faulty",
+        "Ön bahçe",
+    )
+    assert (await patch(w, f"/meters/{common['id']}", {"status": "active"})).status_code == 200
     m = meter["id"]
     assert fields(await _read(w, m, "2026-13", "1")) == {"period": "Dönem seçin."}
     assert (await _read(w, m, "2026-03", "1000")).json()["data"]["consumption"] is None

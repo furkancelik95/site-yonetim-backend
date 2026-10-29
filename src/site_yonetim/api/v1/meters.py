@@ -54,6 +54,14 @@ class MeterIn(BaseModel):
     )
 
 
+class MeterPatch(MeterIn):
+    """Kısmi düzenleme: yalnız gönderilen alanlar değişir; gönderilmeyen alan olduğu gibi kalır
+    (ör. `status` gönderilmezse sayaç durumu korunur). Bölüm verilip `area` verilmezse ortak alan
+    adı temizlenir."""
+
+    status: str | None = Field(default=None, max_length=20, description="active · faulty")
+
+
 class MeterOut(BaseModel):
     id: uuid.UUID
     kind: MeterKind
@@ -161,7 +169,7 @@ async def create_meter(body: MeterIn, ctx: Manager) -> Written[MeterOut]:
 
 
 @router.patch("/meters/{meter_id}", summary="Sayacı düzenle (kısmi)")
-async def update_meter(meter_id: uuid.UUID, body: MeterIn, ctx: Manager) -> Written[MeterOut]:
+async def update_meter(meter_id: uuid.UUID, body: MeterPatch, ctx: Manager) -> Written[MeterOut]:
     meter = await svc.get_meter(ctx.session, meter_id, lock=True)
     if meter is None:
         raise NotFoundError("Sayaç bulunamadı.")
