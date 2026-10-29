@@ -13,7 +13,7 @@ servise "şu kişilere şu olay" der.
 """
 
 import uuid
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -96,14 +96,16 @@ async def notify(
 
 
 def list_query(
-    user_id: uuid.UUID,
+    user_ids: Collection[uuid.UUID],
     *,
     now: datetime,
     unread: bool = False,
     category: NotificationCategory | None = None,
 ) -> Select[Notification]:
+    """Kişinin bildirimleri. Normalde tek hesap; sakin olarak görüntülemede sakinin hesapları
+    (`api.deps.subject_users`). Boş küme → boş liste."""
     query = select(Notification).where(
-        Notification.user_id == user_id, Notification.created_at >= now - LIST_WINDOW
+        Notification.user_id.in_(user_ids), Notification.created_at >= now - LIST_WINDOW
     )
     if unread:
         query = query.where(Notification.read_at.is_(None))
@@ -112,9 +114,11 @@ def list_query(
     return query.order_by(Notification.created_at.desc(), Notification.id.desc())
 
 
-async def unread_count(session: AsyncSession, user_id: uuid.UUID, *, now: datetime) -> int:
+async def unread_count(
+    session: AsyncSession, user_ids: Collection[uuid.UUID], *, now: datetime
+) -> int:
     count = await session.scalar(
-        select(func.count()).select_from(list_query(user_id, now=now, unread=True).subquery())
+        select(func.count()).select_from(list_query(user_ids, now=now, unread=True).subquery())
     )
     return count or 0
 

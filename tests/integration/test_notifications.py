@@ -118,7 +118,7 @@ async def test_kategori_suzgeci_ve_90_gun(world: World) -> None:
     old = datetime.now(UTC) + timedelta(days=91)
     with site_scope(w.site_id):
         async with w.factory() as session:
-            assert await svc.unread_count(session, kerem, now=old) == 0
+            assert await svc.unread_count(session, {kerem}, now=old) == 0
 
 
 async def test_tercihler_kilitli_kanal_ve_en_az_bir(world: World) -> None:

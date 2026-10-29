@@ -44,7 +44,7 @@ from site_yonetim.domain.access import (
 from site_yonetim.domain.mfa import step_up_needed
 from site_yonetim.domain.modules import ModuleKey
 from site_yonetim.domain.support import VIEW_AS_ROLE_KEY, VIEW_AS_ROLE_NAME
-from site_yonetim.models import Site, User
+from site_yonetim.models import Person, Site, User
 from site_yonetim.models.audit import (
     Actor,
     ActorType,
@@ -444,6 +444,29 @@ async def site_context(
 
 
 SiteContextDep = Annotated[SiteContext, Depends(site_context)]
+
+
+async def subject_users(ctx: SiteContextDep, current: CurrentUserDep) -> frozenset[uuid.UUID]:
+    """Kişiye ait ekranların "ben"i (bildirimlerim, KVKK onaylarım ve başvurularım).
+
+    Normalde oturumdaki kullanıcıdır. Sakin olarak görüntülemede **görüntülenen sakinin**
+    hesaplarıdır — kişi kartındaki kullanıcı ve kişiye bağlı etkin site üyelikleri; görüntüleme
+    bildirimi de bu hesaplara gider (PLT-12: ekran sakinin gözünden, görüntüleyenin verisi
+    karışmaz). Sakinin hesabı yoksa boş küme: ekranlar boş gelir.
+    """
+    if ctx.access.mode is not AccessMode.VIEW_AS:
+        return frozenset({current.user.id})
+    person = (
+        await ctx.session.get(Person, ctx.access.person_id)
+        if ctx.access.person_id is not None
+        else None
+    )
+    if person is None:  # pragma: no cover - oturum kişiye bileşik yabancı anahtarla bağlı
+        return frozenset()
+    return frozenset(await support_svc.resident_users(ctx.session, person))
+
+
+SubjectUsersDep = Annotated[frozenset[uuid.UUID], Depends(subject_users)]
 
 
 # --- 5–6. Modül ve izin -------------------------------------------------------
