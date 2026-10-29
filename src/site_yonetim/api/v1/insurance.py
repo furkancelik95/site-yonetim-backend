@@ -47,6 +47,11 @@ class PolicyIn(BaseModel):
     note: str | None = Field(default=None, max_length=2000)
 
 
+class PolicyPatch(PolicyIn):
+    """Kısmi düzenleme: yalnız gönderilen alanlar değişir; gönderilmeyen alan olduğu gibi kalır.
+    Alan `null` gönderilirse temizlenir (zorunlu alanda 422)."""
+
+
 class InsurancePolicyOut(BaseModel):
     id: uuid.UUID
     kind: PolicyKind
@@ -121,7 +126,7 @@ async def create_policy(
 
 @router.patch("/insurance-policies/{policy_id}", summary="Poliçeyi düzenle (kısmi)")
 async def update_policy(
-    policy_id: uuid.UUID, body: PolicyIn, ctx: Manager, today: TodayDep
+    policy_id: uuid.UUID, body: PolicyPatch, ctx: Manager, today: TodayDep
 ) -> Written[InsurancePolicyOut]:
     policy = await svc.get_policy(ctx.session, policy_id)
     if policy is None:

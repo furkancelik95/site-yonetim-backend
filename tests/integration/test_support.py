@@ -14,8 +14,17 @@ from sqlalchemy import select
 
 from site_yonetim.api.deps import get_now
 from site_yonetim.db.tenancy import all_sites_scope, site_scope
-from site_yonetim.models import AuditLog, Notification, Plan, Site, SupportTicketMessage
+from site_yonetim.domain.notifications import NotificationCategory
+from site_yonetim.models import (
+    AuditLog,
+    Notification,
+    Plan,
+    Site,
+    SupportTicketMessage,
+    User,
+)
 from site_yonetim.services import support as svc
+from site_yonetim.services.notifications import Message, notify
 from tests.integration.finance_world import World
 from tests.integration.helpers import add_site_membership, create_user, login_headers
 
@@ -530,6 +539,117 @@ async def test_sakin_olarak_goruntule_cikis_ve_bildirim_ayari(
     assert out.json()["data"]["status"] == "ended"
     after = await w.api.get(w.url("/resident/home"), headers=view)
     assert after.status_code == 403
+
+
+async def test_sakin_olarak_goruntulemede_kisisel_ekranlar_sakinin(
+    destek: tuple[World, dict[str, str], Clock],
+) -> None:
+    """Bildirimler, KVKK onayları ve başvuruları görüntüleyenin değil görüntülenen sakinin
+    hesabından gelir (PLT-12: ekran sakinin gözünden); okundu işaretleme ve veri paketi 403."""
+    w, _, _ = destek
+    resident = await create_user(
+        w.factory, "ayse@test.local", full_name="Ayşe YILMAZ", kind="resident"
+    )
+    await add_site_membership(
+        w.factory, w.site_id, resident.id, "Sakin", person_id=uuid.UUID(w.person_id)
+    )
+    ayse = await login(w, "ayse@test.local")
+    consent = await w.api.put(
+        w.url("/my-privacy/explicit-consents/communications"),
+        json={"granted": True},
+        headers=ayse,
+    )
+    assert consent.status_code == 200, consent.text
+    asked = await w.api.post(
+        w.url("/resident/privacy-requests"), json={"kind": "access"}, headers=ayse
+    )
+    assert asked.status_code == 201, asked.text
+
+    viewer = await _viewer(w)
+    async with w.factory() as db:
+        viewer_id = await db.scalar(
+            select(User.id).where(User.email == "destek.sorumlusu@test.local")
+        )
+    assert viewer_id is not None
+    with site_scope(w.site_id):
+        async with w.factory() as db, db.begin():
+            await notify(
+                db,
+                [viewer_id],
+                Message(NotificationCategory.OPERATIONS, "test.viewer", "Görüntüleyenin bildirimi"),
+                dedupe_key="test:viewer",
+            )
+    own = (await w.api.get(w.url("/notifications"), headers=viewer)).json()
+    assert [n["title"] for n in own["items"]] == ["Görüntüleyenin bildirimi"]
+
+    started = await w.api.post(
+        w.url(f"/people/{w.person_id}/view-as-sessions"),
+        json={"reason": "Bildirimler görünmüyor diyor"},
+        headers=viewer,
+    )
+    assert started.status_code == 201, started.text
+    view = {**viewer, "X-View-As-Session": started.json()["data"]["id"]}
+
+    listed = await w.api.get(w.url("/notifications"), headers=view)
+    assert listed.status_code == 200, listed.text
+    body = listed.json()
+    titles = [n["title"] for n in body["items"]]
+    assert "Görüntüleyenin bildirimi" not in titles
+    assert "Site yönetiminiz destek amacıyla hesabınızı görüntüledi" in titles
+    assert body["total"] == len(titles)
+    assert body["unread_count"] == body["total"]
+    count = await w.api.get(w.url("/notifications/unread-count"), headers=view)
+    assert count.json() == body["unread_count"]
+    read = await w.api.post(w.url("/notifications/read"), json={"ids": None}, headers=view)
+    assert (read.status_code, read.json()["error"]["code"]) == (403, "read_only")
+    again = await w.api.get(w.url("/notifications/unread-count"), headers=view)
+    assert again.json() == body["unread_count"]  # sakinin okunmamışları değişmedi
+    # Görüntüleyenin kendi bildirimi başlıksız istekte yine kendisine görünür
+    mine = await w.api.get(w.url("/notifications/unread-count"), headers=viewer)
+    assert mine.json() == 1
+
+    privacy = await w.api.get(w.url("/my-privacy"), headers=view)
+    assert privacy.status_code == 200, privacy.text
+    assert privacy.json()["explicit"][0]["granted"] is True
+    requests = await w.api.get(w.url("/resident/privacy-requests"), headers=view)
+    assert requests.status_code == 200, requests.text
+    assert [r["kind"] for r in requests.json()["items"]] == ["access"]
+    export = await w.api.get(w.url("/my-privacy/data-export"), headers=view)
+    assert (export.status_code, export.json()["error"]["code"]) == (403, "read_only")
+
+
+async def test_sakin_olarak_goruntulemede_hesabi_olmayan_kisinin_bildirimi_yok(
+    destek: tuple[World, dict[str, str], Clock],
+) -> None:
+    """Sisteme giriş yapmayan kişi: görüntüleyenin bildirimleri yerine boş liste."""
+    w, _, _ = destek
+    viewer = await _viewer(w)
+    async with w.factory() as db:
+        viewer_id = await db.scalar(
+            select(User.id).where(User.email == "destek.sorumlusu@test.local")
+        )
+    assert viewer_id is not None
+    with site_scope(w.site_id):
+        async with w.factory() as db, db.begin():
+            await notify(
+                db,
+                [viewer_id],
+                Message(NotificationCategory.OPERATIONS, "test.viewer", "Görüntüleyenin bildirimi"),
+                dedupe_key="test:viewer",
+            )
+    started = await w.api.post(
+        w.url(f"/people/{w.person_id}/view-as-sessions"),
+        json={"reason": "Hesabı yok, ekranına bakılıyor"},
+        headers=viewer,
+    )
+    assert started.status_code == 201, started.text
+    assert started.json()["data"]["resident_notified"] is False
+    view = {**viewer, "X-View-As-Session": started.json()["data"]["id"]}
+    listed = (await w.api.get(w.url("/notifications"), headers=view)).json()
+    assert (listed["items"], listed["total"], listed["unread_count"]) == ([], 0, 0)
+    assert (await w.api.get(w.url("/notifications/unread-count"), headers=view)).json() == 0
+    privacy = (await w.api.get(w.url("/my-privacy"), headers=view)).json()
+    assert (privacy["accepted"], privacy["explicit"][0]["granted"]) == ([], False)
 
 
 async def test_destek_ekibi_oturumda_sakin_olarak_goruntuleyebilir(

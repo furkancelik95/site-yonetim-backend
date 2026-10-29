@@ -29,6 +29,7 @@ from site_yonetim.api.deps import (
     PasswordChangedUserDep,
     SiteContext,
     SiteContextDep,
+    SubjectUsersDep,
     TodayDep,
     client_ip,
     require_permission,
@@ -38,7 +39,7 @@ from site_yonetim.api.deps import (
 from site_yonetim.api.schemas import Page, PageParams, Written
 from site_yonetim.api.v1.resident import resident
 from site_yonetim.core.errors import ApiError, NotFoundError
-from site_yonetim.domain.access import Permission, UserAccess
+from site_yonetim.domain.access import AccessMode, Permission, UserAccess
 from site_yonetim.domain.members import FORM_ERROR
 from site_yonetim.domain.privacy import (
     KIND_LABELS,
@@ -234,7 +235,7 @@ async def _state(factory: FactoryDep, user_id: uuid.UUID, access: UserAccess) ->
     sites = {s.site_id: s for s in access.sites}
     ids = list(sites)
     pending = await svc.pending_notices(factory, user_id, ids)
-    given = await svc.given_consents(factory, user_id, ids)
+    given = await svc.given_consents(factory, {user_id}, ids)
     return ConsentStateOut(
         consent_required=bool(pending),
         pending=[
@@ -317,10 +318,12 @@ class MyPrivacyOut(BaseModel):
     explicit: list[ExplicitConsentOut]
 
 
-async def _my_privacy(ctx: SiteContext, user_id: uuid.UUID, factory: FactoryDep) -> MyPrivacyOut:
+async def _my_privacy(
+    ctx: SiteContext, user_ids: frozenset[uuid.UUID], factory: FactoryDep
+) -> MyPrivacyOut:
     notice = await svc.latest_notice(ctx.session)
-    state = await svc.explicit_state(ctx.session, user_id)
-    given = await svc.given_consents(factory, user_id, [ctx.site.id])
+    state = await svc.explicit_state(ctx.session, user_ids)
+    given = await svc.given_consents(factory, user_ids, [ctx.site.id])
     return MyPrivacyOut(
         notice=PrivacyNoticeOut.of(notice) if notice else None,
         accepted=[
@@ -347,9 +350,10 @@ async def _my_privacy(ctx: SiteContext, user_id: uuid.UUID, factory: FactoryDep)
 
 @router.get("/my-privacy", summary="Bu sitedeki onaylarım ve açık rızam")
 async def my_privacy(
-    ctx: SiteContextDep, current: CurrentUserDep, factory: FactoryDep
+    ctx: SiteContextDep, users: SubjectUsersDep, factory: FactoryDep
 ) -> MyPrivacyOut:
-    return await _my_privacy(ctx, current.user.id, factory)
+    """Sakin olarak görüntülemede görüntülenen sakinin onayları (PLT-12)."""
+    return await _my_privacy(ctx, users, factory)
 
 
 class ExplicitIn(BaseModel):
@@ -372,7 +376,7 @@ async def set_explicit(
         ctx.session, current.user.id, purpose, granted=body.granted, ip=client_ip(request)
     )
     await ctx.session.commit()
-    out = await _my_privacy(ctx, current.user.id, factory)
+    out = await _my_privacy(ctx, frozenset({current.user.id}), factory)
     return Written(
         data=out,
         message="Açık rızanız kaydedildi."
@@ -387,6 +391,15 @@ async def set_explicit(
     response_model=dict[str, Any],
 )
 async def my_data_export(ctx: SiteContextDep, current: CurrentUserDep, now: NowDep) -> Response:
+    """Sakin olarak görüntülemede 403 `read_only`: paket bir ekran değil, sakinin kişisel verisinin
+    dışa aktarımıdır (KVKK m.11 hakkı ilgili kişinindir); personel paketi başvuru üzerinden
+    `privacy-requests/{id}/data-package` ile `privacy.manage` izniyle alır."""
+    if ctx.access.mode is AccessMode.VIEW_AS:
+        raise ApiError(
+            HTTPStatus.FORBIDDEN,
+            "read_only",
+            "Sakin olarak görüntülemede kişisel veri paketi indirilemez.",
+        )
     package = await svc.data_package(
         ctx.session, ctx.site, user_id=current.user.id, person_id=ctx.access.person_id, now=now
     )
@@ -501,9 +514,9 @@ async def create_privacy_request(
 
 @router.get("/resident/privacy-requests", summary="KVKK başvurularım (sayfalı)")
 async def my_privacy_requests(
-    ctx: Resident, current: CurrentUserDep, paging: Paging
+    ctx: Resident, users: SubjectUsersDep, paging: Paging
 ) -> Page[MyPrivacyRequestOut]:
-    query = svc.requests_query(current.user.id)
+    query = svc.requests_query(users)
     rows, total = await _page(ctx, query, paging)
     return Page(
         items=[MyPrivacyRequestOut(**_mine(r)) for r in rows],

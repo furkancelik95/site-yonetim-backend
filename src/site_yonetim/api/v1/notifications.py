@@ -2,6 +2,8 @@
 
 - Bildirimler siteye aittir: `/sites/{slug}/notifications` yalnız oturumdaki kişinin o sitedeki
   bildirimleridir (başkasınınki "yok"tur). Siteye erişimi olan her üye (sakin dahil) kullanır.
+  Sakin olarak görüntülemede (PLT-12) görüntülenen sakinin bildirimleri salt okunur döner;
+  okundu işaretleme diğer yazmalar gibi 403 `read_only`.
 - Tercihler ve push jetonları kişiye aittir: `/me/…`.
 - Dış gönderim (push/SMS/e-posta) açık karar K5'e kadar yok; tercih şimdiden saklanır.
 """
@@ -21,6 +23,7 @@ from site_yonetim.api.deps import (
     NowDep,
     SessionDep,
     SiteContextDep,
+    SubjectUsersDep,
     UserAccessDep,
 )
 from site_yonetim.api.schemas import Page, PageParams, Written
@@ -86,13 +89,13 @@ class NotificationReadOut(BaseModel):
 @router.get("", summary="Bildirimlerim (son 90 gün, yeni üstte)")
 async def list_notifications(
     ctx: SiteContextDep,
-    current: CurrentUserDep,
+    users: SubjectUsersDep,
     paging: Paging,
     now: NowDep,
     unread: Annotated[bool, Query(description="true → yalnız okunmamış")] = False,
     category: NotificationCategory | None = None,
 ) -> NotificationPage:
-    query = svc.list_query(current.user.id, now=now, unread=unread, category=category)
+    query = svc.list_query(users, now=now, unread=unread, category=category)
     total = await ctx.session.scalar(select(func.count()).select_from(query.subquery())) or 0
     rows = await ctx.session.scalars(query.offset(paging.offset).limit(paging.page_size))
     return NotificationPage(
@@ -100,13 +103,13 @@ async def list_notifications(
         page=paging.page,
         page_size=paging.page_size,
         total=total,
-        unread_count=await svc.unread_count(ctx.session, current.user.id, now=now),
+        unread_count=await svc.unread_count(ctx.session, users, now=now),
     )
 
 
 @router.get("/unread-count", summary="Okunmamış sayısı (zil rozeti)")
-async def unread_count(ctx: SiteContextDep, current: CurrentUserDep, now: NowDep) -> int:
-    return await svc.unread_count(ctx.session, current.user.id, now=now)
+async def unread_count(ctx: SiteContextDep, users: SubjectUsersDep, now: NowDep) -> int:
+    return await svc.unread_count(ctx.session, users, now=now)
 
 
 @router.post("/read", summary="Okundu işaretle (seçilenler ya da tümü)")
@@ -115,7 +118,7 @@ async def mark_read(
 ) -> Written[NotificationReadOut]:
     marked = await svc.mark_read(ctx.session, current.user.id, now=now, ids=body.ids)
     await ctx.session.commit()
-    remaining = await svc.unread_count(ctx.session, current.user.id, now=now)
+    remaining = await svc.unread_count(ctx.session, {current.user.id}, now=now)
     message = (
         "Tüm bildirimler okundu olarak işaretlendi."
         if body.ids is None

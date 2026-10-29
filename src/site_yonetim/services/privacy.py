@@ -7,7 +7,7 @@ yalnız o kullanıcının satırlarıyla sınırlıdır (services/access.py ile 
 """
 
 import uuid
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
@@ -246,15 +246,18 @@ class GivenConsent:
 
 
 async def given_consents(
-    factory: async_sessionmaker[AsyncSession], user_id: uuid.UUID, site_ids: Sequence[uuid.UUID]
+    factory: async_sessionmaker[AsyncSession],
+    user_ids: Collection[uuid.UUID],
+    site_ids: Sequence[uuid.UUID],
 ) -> list[GivenConsent]:
-    if not site_ids:
+    """Hesap(lar)ın onay geçmişi, yeni üstte. Sakin olarak görüntülemede sakinin hesapları."""
+    if not site_ids or not user_ids:
         return []
     with all_sites_scope():
         async with factory() as session:
             rows = await session.scalars(
                 select(PrivacyConsent)
-                .where(PrivacyConsent.user_id == user_id, PrivacyConsent.site_id.in_(site_ids))
+                .where(PrivacyConsent.user_id.in_(user_ids), PrivacyConsent.site_id.in_(site_ids))
                 .order_by(PrivacyConsent.created_at.desc())
             )
             return [GivenConsent(c.site_id, c.version, c.source, c.created_at) for c in rows]
@@ -294,7 +297,7 @@ async def link_registration(session: AsyncSession, user_id: uuid.UUID, r: Regist
     )
     if notice is not None:
         await record_consent(session, user_id, notice, ConsentSource.REGISTRATION, ip=r.ip)
-    if r.explicit_consent_at is not None and await explicit_state(session, user_id) == {}:
+    if r.explicit_consent_at is not None and await explicit_state(session, {user_id}) == {}:
         session.add(
             ExplicitConsent(
                 user_id=user_id,
@@ -325,11 +328,12 @@ class ExplicitState:
 
 
 async def explicit_state(
-    session: AsyncSession, user_id: uuid.UUID
+    session: AsyncSession, user_ids: Collection[uuid.UUID]
 ) -> dict[ExplicitPurpose, ExplicitState]:
+    """Amaç başına son karar (birden çok hesapta en yenisi geçerli)."""
     rows = await session.scalars(
         select(ExplicitConsent)
-        .where(ExplicitConsent.user_id == user_id)
+        .where(ExplicitConsent.user_id.in_(user_ids))
         .order_by(ExplicitConsent.created_at, ExplicitConsent.id)
     )
     state: dict[ExplicitPurpose, ExplicitState] = {}
@@ -348,7 +352,7 @@ async def set_explicit(
     ip: str | None,
 ) -> bool:
     """Değişiklik yoksa yazmaz (False)."""
-    current = (await explicit_state(session, user_id)).get(purpose)
+    current = (await explicit_state(session, {user_id})).get(purpose)
     if current is not None and current.granted == granted:
         return False
     if current is None and not granted:
@@ -442,11 +446,12 @@ async def create_request(
     return request
 
 
-def requests_query(user_id: uuid.UUID | None = None) -> Select[PrivacyRequest]:
-    """Açıklar önce, son güne göre; yanıtlananlar en yeni önce."""
+def requests_query(user_ids: Collection[uuid.UUID] | None = None) -> Select[PrivacyRequest]:
+    """Açıklar önce, son güne göre; yanıtlananlar en yeni önce. `user_ids`: başvuranın
+    hesap(lar)ı (sakin ekranı); verilmezse tümü (KVKK sorumlusu)."""
     query = select(PrivacyRequest)
-    if user_id is not None:
-        query = query.where(PrivacyRequest.user_id == user_id)
+    if user_ids is not None:
+        query = query.where(PrivacyRequest.user_id.in_(user_ids))
     return query.order_by(
         (PrivacyRequest.status == PrivacyRequestStatus.OPEN.value).desc(),
         PrivacyRequest.due_on,
