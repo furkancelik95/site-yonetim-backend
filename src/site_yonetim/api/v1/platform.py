@@ -16,15 +16,22 @@ from site_yonetim.api.deps import FactoryDep, PlatformAdminDep, SessionDep
 from site_yonetim.api.schemas import Page, PageParams, Written
 from site_yonetim.core.errors import ApiError, NotFoundError
 from site_yonetim.db.tenancy import site_scope
+from site_yonetim.domain.text import tr_lower
 from site_yonetim.domain.validation import (
     normalize_email_address,
     normalize_iban,
     normalize_tax_number,
 )
 from site_yonetim.models import Organization, Plan, PropertyKind, Site
+from site_yonetim.models.platform import site_name_key
 from site_yonetim.services import portfolio
 from site_yonetim.services.platform import PlatformRuleError, create_customer, require_plan
-from site_yonetim.services.provisioning import ProvisioningError, provision_site
+from site_yonetim.services.provisioning import (
+    SITE_NAME_MAX,
+    SITE_NAME_MIN,
+    ProvisioningError,
+    provision_site,
+)
 from site_yonetim.services.sites import available_modules
 
 router = APIRouter(prefix="/platform", tags=["platform"])
@@ -231,6 +238,41 @@ async def create_customer_endpoint(
     )
 
 
+class CustomerPatch(BaseModel):
+    """Yalnız müşteri (yönetim şirketi) adı; vergi no ve plan buradan değişmez. Müşteride
+    iletişim/adres alanı yok (yetkilinin iletişimi kullanıcı hesabındadır)."""
+
+    name: str = Field(min_length=3, max_length=150)
+
+    @field_validator("name")
+    @classmethod
+    def _collapse(cls, value: str) -> str:
+        return " ".join(value.split())
+
+
+class CustomerSummaryOut(BaseModel):
+    organization_id: uuid.UUID
+    name: str
+    tax_number: str | None
+    plan_id: uuid.UUID | None
+
+
+@router.patch("/customers/{organization_id}", summary="Müşteri adını düzenle")
+async def update_customer(
+    organization_id: uuid.UUID, body: CustomerPatch, _: PlatformAdminDep, session: SessionDep
+) -> Written[CustomerSummaryOut]:
+    org = await session.get(Organization, organization_id, with_for_update=True)
+    if org is None:
+        raise NotFoundError("Müşteri bulunamadı.")
+    org.name = body.name
+    await session.flush()
+    out = CustomerSummaryOut(
+        organization_id=org.id, name=org.name, tax_number=org.tax_number, plan_id=org.plan_id
+    )
+    await session.commit()
+    return Written(data=out, message=f"{org.name} müşterisinin bilgileri güncellendi.")
+
+
 # --- Site ---------------------------------------------------------------------
 
 
@@ -266,6 +308,23 @@ class SiteOut(BaseModel):
     modules: list[str]
 
 
+class SiteCreatedOut(SiteOut):
+    requested_slug: str | None = Field(
+        description="istekte gönderilen adres eki (gönderilmediyse null; ad'dan üretildi)"
+    )
+    slug_adjusted: bool = Field(
+        description="gönderilen adres eki kurala göre düzeltildi (küçük harf, Türkçe harf "
+        "eşleme, boşluk → tire); kullanılan ek `slug`"
+    )
+
+
+def site_label(name: str) -> str:
+    """Mesajda site adı: ad zaten "… Sitesi" / "… Site" ile bitiyorsa "sitesi" eklenmez
+    ("Yıldız Sitesi sitesi" olmasın). Karşılaştırma tr-TR küçük harfle."""
+    words = tr_lower(name).split()
+    return name if words and words[-1] in ("sitesi", "site") else f"{name} sitesi"
+
+
 async def _site_out(session: SessionDep, site: Site) -> SiteOut:
     with site_scope(site.id):
         modules = await available_modules(session, site)
@@ -287,7 +346,9 @@ async def _site_out(session: SessionDep, site: Site) -> SiteOut:
 @router.post("/sites", status_code=status.HTTP_201_CREATED, summary="Site aç")
 async def create_site_endpoint(
     body: SiteCreate, _: PlatformAdminDep, session: SessionDep
-) -> Written[SiteOut]:
+) -> Written[SiteCreatedOut]:
+    """Adres eki (`slug`) kurala göre düzeltilir (docs/04 §11); düzeltildiyse yanıtta
+    `slug_adjusted` ve mesajda kullanılan ek bildirilir."""
     try:
         await require_plan(session, body.plan_id)
         if (
@@ -313,15 +374,71 @@ async def create_site_endpoint(
         )
     except (PlatformRuleError, ProvisioningError) as exc:
         raise _rule_error(exc) from None
-    out = await _site_out(session, site)
+    requested = body.slug.strip() if body.slug and body.slug.strip() else None
+    adjusted = requested is not None and requested != site.slug
+    out = SiteCreatedOut(
+        **(await _site_out(session, site)).model_dump(),
+        requested_slug=requested,
+        slug_adjusted=adjusted,
+    )
     await session.commit()
+    slug_note = (
+        f"Girdiğiniz adres eki '{requested}' kurala göre '{site.slug}' olarak düzeltildi. "
+        if adjusted
+        else f"Adres eki: '{site.slug}'. "
+    )
     return Written(
         data=out,
         message=(
-            f"{site.name} sitesi kurulum durumunda açıldı. Sıradaki adım: daire listesini "
-            "Excel'den aktarın; kontrol listesi tamamlanınca site yöneticisi canlıya alır."
+            f"{site_label(site.name)} kurulum durumunda açıldı. {slug_note}Sıradaki adım: daire "
+            "listesini Excel'den aktarın; kontrol listesi tamamlanınca site yöneticisi canlıya "
+            "alır."
         ),
     )
+
+
+class SitePatch(BaseModel):
+    """Yalnız ad, adres ve konum; adres eki (`slug`) ve plan buradan değişmez."""
+
+    name: str | None = Field(default=None, min_length=SITE_NAME_MIN, max_length=SITE_NAME_MAX)
+    address: str | None = Field(default=None, max_length=300)
+    city: str | None = Field(default=None, max_length=80)
+    district: str | None = Field(default=None, max_length=80)
+
+    @field_validator("name", "address", "city", "district")
+    @classmethod
+    def _collapse(cls, value: str | None) -> str | None:
+        return " ".join(value.split()) if value is not None else None
+
+
+@router.patch("/sites/{site_id}", summary="Site adı ve adresini düzenle")
+async def update_site(
+    site_id: uuid.UUID, body: SitePatch, _: PlatformAdminDep, session: SessionDep
+) -> Written[SiteOut]:
+    """Gönderilen alanlar değişir; boş metin adres/il/ilçeyi temizler. Aynı ad (Türkçe büyük/
+    küçük harf duyarsız) başka sitede varsa 409 `site_already_exists`."""
+    site = await session.get(Site, site_id, with_for_update=True)
+    if site is None:
+        raise NotFoundError("Site bulunamadı.")
+    sent = body.model_fields_set
+    if "name" in sent and body.name is not None and body.name != site.name:
+        clash = await session.scalar(
+            select(Site.id).where(Site.name_key == site_name_key(body.name), Site.id != site.id)
+        )
+        if clash is not None:
+            raise ApiError(
+                HTTPStatus.CONFLICT,
+                "site_already_exists",
+                "Bu adla bir site zaten var. Farklı bir ad girin.",
+            )
+        site.name = body.name
+    for field in ("address", "city", "district"):
+        if field in sent:
+            setattr(site, field, getattr(body, field) or None)
+    await session.flush()
+    out = await _site_out(session, site)
+    await session.commit()
+    return Written(data=out, message=f"{site_label(site.name)} bilgileri güncellendi.")
 
 
 class SitePlanUpdate(BaseModel):

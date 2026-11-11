@@ -4,6 +4,8 @@ from site_yonetim.domain.validation import (
     normalize_email_address,
     normalize_iban,
     normalize_tax_number,
+    tckn_valid,
+    vkn_valid,
 )
 
 
@@ -49,8 +51,29 @@ def test_eposta_deseni_geri_izlemede_patlamaz() -> None:
     assert validation._EMAIL.match(hostile) is None
 
 
-def test_vkn_10_hane() -> None:
+def test_vergi_no_hane_sayisi() -> None:
     assert normalize_tax_number(" 1234567890 ") == "1234567890"
-    for bad in ("123456789", "12345678901", "12345abcde"):
+    for bad in ("123456789", "123456789012", "12345abcde", ""):
         with pytest.raises(ValueError, match="10 haneli"):
+            normalize_tax_number(bad)
+
+
+def test_vkn_saglama_basamagi() -> None:
+    """Test raporu #5: yalnız hane sayısına bakılıyordu."""
+    for good in ("1234567890", "4840847211", "3230512384"):
+        assert vkn_valid(good), good
+        assert normalize_tax_number(good) == good
+    for bad in ("1234567891", "9999999999", "1111111111", "4840847210"):
+        assert not vkn_valid(bad), bad
+        with pytest.raises(ValueError, match="Vergi kimlik numarası geçersiz"):
+            normalize_tax_number(bad)
+
+
+def test_tckn_saglama_basamagi() -> None:
+    for good in ("10000000146", "11111111110"):
+        assert tckn_valid(good), good
+        assert normalize_tax_number(f" {good[:3]} {good[3:]} ") == good
+    for bad in ("12345678901", "01234567890", "10000000147", "11111111111"):
+        assert not tckn_valid(bad), bad
+        with pytest.raises(ValueError, match=r"T\.C\. kimlik numarası geçersiz"):
             normalize_tax_number(bad)

@@ -113,6 +113,8 @@ async def test_ayni_eposta_ile_ikinci_musteri_409(
     [
         ({"admin_email": "gecersiz"}, "admin_email", "Geçerli bir e-posta"),
         ({"tax_number": "123"}, "tax_number", "10 haneli"),
+        ({"tax_number": "1234567891"}, "tax_number", "Vergi kimlik numarası geçersiz"),
+        ({"tax_number": "12345678901"}, "tax_number", "T.C. kimlik numarası geçersiz"),
         ({"name": "AB"}, "name", "En az 3"),
     ],
 )
@@ -262,3 +264,110 @@ async def test_olmayan_plana_gecilemez(
     )
 
     assert response.status_code == 422
+
+
+# --- Test raporu: site adı, adres eki, düzenleme ------------------------------------------
+
+
+def test_site_etiketi_sitesi_tekrarlamaz() -> None:
+    from site_yonetim.api.v1.platform import site_label
+
+    assert site_label("Çamlıca Konutları") == "Çamlıca Konutları sitesi"
+    assert site_label("Yıldız Sitesi") == "Yıldız Sitesi"
+    assert site_label("YILDIZ SİTESİ") == "YILDIZ SİTESİ"  # tr-TR küçük harf: "sitesi"
+    assert site_label("Gül Site") == "Gül Site"
+    assert site_label("Sitem Apartmanı") == "Sitem Apartmanı sitesi"
+
+
+async def test_site_acilisinda_adres_eki_duzeltilirse_bildirilir(
+    api: httpx2.AsyncClient, admin: dict[str, str], plans: dict[str, str]
+) -> None:
+    named = await api.post(
+        "/api/v1/platform/sites",
+        headers=admin,
+        json={"name": "Yıldız Sitesi", "slug": "Yıldız Evleri_2", "plan_id": plans["Standart"]},
+    )
+    assert named.status_code == 201, named.text
+    data = named.json()["data"]
+    assert (data["slug"], data["requested_slug"], data["slug_adjusted"]) == (
+        "yildiz-evleri-2",
+        "Yıldız Evleri_2",
+        True,
+    )
+    message = named.json()["message"]
+    assert message.startswith("Yıldız Sitesi kurulum durumunda açıldı.")  # "sitesi sitesi" yok
+    assert "'Yıldız Evleri_2' kurala göre 'yildiz-evleri-2' olarak düzeltildi" in message
+
+    plain = await api.post(
+        "/api/v1/platform/sites",
+        headers=admin,
+        json={"name": "Gül Konutları", "plan_id": plans["Standart"]},
+    )
+    body = plain.json()
+    assert (body["data"]["requested_slug"], body["data"]["slug_adjusted"]) == (None, False)
+    assert "Adres eki: 'gul-konutlari'." in body["message"]
+    assert body["message"].startswith("Gül Konutları sitesi kurulum")
+
+
+async def test_site_ve_musteri_bilgisi_duzenlenir(
+    api: httpx2.AsyncClient,
+    admin: dict[str, str],
+    plans: dict[str, str],
+    session_factory: Factory,
+) -> None:
+    customer = (await _customer(api, admin, plans["Standart"])).json()["data"]
+    renamed = await api.patch(
+        f"/api/v1/platform/customers/{customer['organization_id']}",
+        headers=admin,
+        json={"name": "  Kent   Yönetim Hizmetleri A.Ş. "},
+    )
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["data"]["name"] == "Kent Yönetim Hizmetleri A.Ş."
+    assert renamed.json()["data"]["tax_number"] == "1234567890"
+    short = await api.patch(
+        f"/api/v1/platform/customers/{customer['organization_id']}",
+        headers=admin,
+        json={"name": "A"},
+    )
+    assert short.status_code == 422
+
+    sites = []
+    for name in ("Aksu Konakları", "Mimoza Apartmanı"):
+        created = await api.post(
+            "/api/v1/platform/sites",
+            headers=admin,
+            json={"name": name, "plan_id": plans["Standart"], "city": "Ankara"},
+        )
+        sites.append(created.json()["data"])
+    url = f"/api/v1/platform/sites/{sites[0]['id']}"
+    patched = await api.patch(
+        url,
+        headers=admin,
+        json={"name": "Aksu Evleri", "address": "Gül Sk. 5", "district": "Çankaya", "city": ""},
+    )
+    assert patched.status_code == 200, patched.text
+    data = patched.json()["data"]
+    assert (data["name"], data["slug"], data["district"], data["city"]) == (
+        "Aksu Evleri", "aksu-konaklari", "Çankaya", None,
+    )  # fmt: skip
+    assert patched.json()["message"] == "Aksu Evleri sitesi bilgileri güncellendi."
+    # Adres eki ve plan bu uçtan değişmez (alan yok sayılmaz değil: şemada yok)
+    ignored = await api.patch(
+        url, headers=admin, json={"slug": "baska", "plan_id": plans["Başlangıç"]}
+    )
+    assert ignored.status_code == 200
+    assert (ignored.json()["data"]["slug"], ignored.json()["data"]["plan_id"]) == (
+        "aksu-konaklari", plans["Standart"],
+    )  # fmt: skip
+    clash = await api.patch(url, headers=admin, json={"name": "MİMOZA APARTMANI"})
+    assert (clash.status_code, clash.json()["error"]["code"]) == (409, "site_already_exists")
+    missing = await api.patch(
+        "/api/v1/platform/sites/0199a3b2-7c4e-7000-8000-000000000000", headers=admin, json={}
+    )
+    assert missing.status_code == 404
+
+    await create_user(session_factory, "baskasi@test.local")
+    other = await login_headers(api, "baskasi@test.local")
+    for path in (url, f"/api/v1/platform/customers/{customer['organization_id']}"):
+        denied = await api.patch(path, headers=other, json={"name": "Benim Sitem"})
+        assert denied.status_code == 404  # platform ucu: platform yöneticisi değilse 404

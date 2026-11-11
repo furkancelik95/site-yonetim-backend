@@ -469,3 +469,72 @@ async def test_permissions(kasa: Kasa) -> None:
     guard_headers = await login_headers(kasa.api, "guvenlik@test.local")
     assert (await kasa.get("/cash-accounts", guard_headers)).status_code == 403
     assert (await kasa.get("/expenses", guard_headers)).status_code == 403
+
+
+# --- Test raporu #10: kasa → banka virmanı -----------------------------------------------
+
+
+async def test_kasadan_bankaya_virman_ve_birlikte_geri_alma(kasa: Kasa) -> None:
+    """docs/04 §10.3: iki hareket, `source = transfer`, birbirinin kimliği; toplam değişmez.
+    Bir bacağı geri almak ikisini birlikte geri alır (§10.4 + "toplam değişmez")."""
+    await kasa.post(
+        "/cash-transfers",
+        {"from_id": kasa.bank, "to_id": kasa.cash, "date": "2026-09-30", "amount": "3000.00"},
+    )
+    key = {**kasa.headers, "Idempotency-Key": str(uuid.uuid4())}
+    body = {"from_id": kasa.cash, "to_id": kasa.bank, "date": "2026-10-01", "amount": "1200.00",
+            "note": "Kasa fazlası bankaya"}  # fmt: skip
+    first = await kasa.post("/cash-transfers", body, key)
+    assert first.status_code == 201, first.text
+    again = await kasa.post("/cash-transfers", body, key)  # tekrar gönderim: tek kayıt
+    assert again.json() == first.json()
+    data = first.json()["data"]
+    out, incoming = data["outgoing"], data["incoming"]
+    assert (out["cash_account_id"], incoming["cash_account_id"]) == (kasa.cash, kasa.bank)
+    assert (out["source"], out["source_id"], incoming["source_id"]) == (
+        "transfer", incoming["id"], out["id"],
+    )  # fmt: skip
+    assert incoming["description"] == "Kasa fazlası bankaya ← Kasa"
+    assert await kasa.balances() == {
+        "Banka Hesabı": "8200.00", "Kasa": "1800.00", "_total": "10000.00",
+    }  # fmt: skip
+
+    reversed_ = await kasa.post(f"/cash-movements/{incoming['id']}/reverse", {"reason": "Yanlış"})
+    assert reversed_.status_code == 200, reversed_.text
+    assert reversed_.json()["message"] == "Aktarımın iki hareketi de ters kayıtla geri alındı."
+    assert reversed_.json()["data"]["reversal_of_id"] == incoming["id"]
+    assert await kasa.balances() == {
+        "Banka Hesabı": "7000.00", "Kasa": "3000.00", "_total": "10000.00",
+    }  # fmt: skip
+    statement = (await kasa.get(f"/cash-accounts/{kasa.cash}/statement")).json()
+    flags = {m["id"]: m["is_reversed"] for m in statement["movements"]["items"]}
+    assert flags[out["id"]] is True  # karşı bacak da geri alındı
+    twice = await kasa.post(f"/cash-movements/{out['id']}/reverse", {"reason": "Yanlış"})
+    assert twice.json()["error"]["code"] == "movement_already_reversed"
+
+
+async def test_virman_hatalari_form_alanina_baglanir(kasa: Kasa) -> None:
+    missing = await kasa.post(
+        "/cash-transfers",
+        {"from_id": kasa.cash, "to_id": str(uuid.uuid4()), "date": "2026-10-01", "amount": "1.00"},
+    )
+    assert missing.status_code == 422
+    assert set(missing.json()["error"]["fields"]) == {"to_id"}
+    # Başka sitenin hesabı da "yok"tur
+    with site_scope(kasa.other_site_id):
+        async with kasa.factory() as session:
+            foreign = await session.scalar(select(CashAccount.id))
+    cross = await kasa.post(
+        "/cash-transfers",
+        {"from_id": str(foreign), "to_id": kasa.bank, "date": "2026-10-01", "amount": "1.00"},
+    )
+    assert set(cross.json()["error"]["fields"]) == {"from_id"}
+    board = await create_user(kasa.factory, "kurul2@test.local")
+    await add_site_membership(kasa.factory, kasa.site_id, board.id, "Yönetim Kurulu Üyesi")
+    headers = await login_headers(kasa.api, "kurul2@test.local")
+    denied = await kasa.post(
+        "/cash-transfers",
+        {"from_id": kasa.cash, "to_id": kasa.bank, "date": "2026-10-01", "amount": "1.00"},
+        headers,
+    )
+    assert denied.status_code == 403
