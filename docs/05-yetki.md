@@ -29,6 +29,7 @@ kümesi tanımlanmalı.
 | `people.read` / `people.manage` | Kişi görüntüleme / yönetimi |
 | `people.contact` | İletişim bilgisi (telefon, e-posta): **maskeli** görür, "göster" ile açar — açma denetim kaydına `contact_view` yazar (YAP-03 S1–S2). Yalnız Yönetici; YK ve diğer roller iletişim alanını hiç almaz (null) |
 | `requests.read` / `requests.create` / `requests.assign` | Talep görüntüleme / oluşturma / atama ve durum değiştirme (iç not, ana olay, teklif, tadilat kararı dahil) |
+| `requests.assigned` | **Yalnız kendine atanan ve kendi açtığı talepler** (Ürün Dokümanı 5.2 Teknik: "Kısıtlı: atananlar"): listede ve ayrıntıda yalnız bunlar (başkası 404); bunlarda durum, yorum, iç not, ücretli hizmet teklifi ve teklif tamamlama; hazır yanıt ve hizmet tarifesi okuma; denetim listesi (şablon listesi, denetim kaydı ve geçmişi, fotoğrafı). **Atama, departman değiştirme, birleştirme önerisi, ana olay, tadilat kararı, rezervasyon yok** — bunlar `requests.assign`. Kapsam atanan kullanıcının kimliğine (`requests.assignee_user_id`) bakar; serbest metinle atanmış eski talepler kimsenin kapsamına girmez. `requests.read` de varsa kapsam uygulanmaz |
 | Rezervasyon (servis istekleri 59–61; yeni izin yok) | Günlük liste, saat durumu, giriş (kod / "geldi"): `requests.assign` ya da `security.visitors`; sakin adına rezervasyon, onay, ret, iptal, kullanım raporu: `requests.assign`; alan kuralları ve K11 ayarı: `modules.manage`; sakin uçları kendi bölümü — hane üyesi yalnız "Rezervasyon" yetkisiyle |
 | `requests.settings` | Talep ayarları: kategori, SLA ve çalışma takvimi, hazır yanıt, hizmet tarifesi, tadilat kuralları (servis istekleri 47–52) |
 | `announcements.read` / `announcements.publish` | Duyuru görüntüleme / yayınlama |
@@ -81,15 +82,33 @@ giren farkını onaylayamaz. Tedarikçi teklif linki oturumsuz (`/public/quote-l
 
 | Rol | İzinler |
 |---|---|
-| **Yönetici** | `finance.read`, `finance.charge.post`, `finance.payment.record`, `finance.budget.manage`, `finance.cash.read`, `finance.cash.manage`, `finance.reports.read`, `units.read`, `units.manage`, `people.read`, `people.manage`, `requests.read`, `requests.create`, `requests.assign`, `announcements.read`, `announcements.publish`, `expenses.read`, `expenses.manage`, `security.visitors`, `security.packages`, `modules.manage`, `members.manage`, `audit.read`, `security.incidents`, `meetings.read`, `meetings.manage`, `polls.manage`, `contracts.manage`, `inventory.read`, `inventory.manage`, `staff.manage`, `approvals.rules.read`, `approvals.rules.manage`, `documents.read`, `documents.manage`, `documents.confidential`, `people.contact`, `requests.settings`, `privacy.manage` |
+| **Yönetici** | `finance.read`, `finance.charge.post`, `finance.payment.record`, `finance.budget.manage`, `finance.cash.read`, `finance.cash.manage`, `finance.reports.read`, `units.read`, `units.manage`, `people.read`, `people.manage`, `requests.read`, `requests.create`, `requests.assign`, `announcements.read`, `announcements.publish`, `expenses.read`, `expenses.manage`, `security.visitors`, `security.packages`, `modules.manage`, `members.manage`, `audit.read`, `security.incidents`, `meetings.read`, `meetings.manage`, `polls.manage`, `contracts.manage`, `inventory.read`, `inventory.manage`, `staff.manage`, `approvals.rules.read`, `approvals.rules.manage`, `documents.read`, `documents.manage`, `documents.confidential`, `people.contact`, `requests.settings`, `requests.assigned`, `privacy.manage` |
 | **Yönetim Kurulu Üyesi** — her şeyi görür, hiçbirini değiştirmez | `finance.read`, `units.read`, `people.read`, `requests.read`, `announcements.read`, `expenses.read`, `finance.cash.read`, `finance.reports.read`, `meetings.read`, `inventory.read`, `approvals.rules.read`, `documents.read` |
 | **Denetçi** (KMK m.41) — salt okunur finans, **kişisel veri görmez** | `finance.read`, `expenses.read`, `audit.read`, `finance.cash.read`, `finance.reports.read`, `meetings.read`, `documents.read`, `documents.confidential` |
 | **Muhasebe** | `finance.read`, `finance.charge.post`, `finance.payment.record`, `finance.budget.manage`, `expenses.read`, `expenses.manage`, `finance.cash.read`, `finance.cash.manage`, `finance.reports.read`, `units.read`, `people.read`, `contracts.manage`, `inventory.read`, `documents.read` |
 | **Güvenlik** — yalnızca kapıdaki işi. Borç, kişi listesi, muhasebe **yok** | `security.visitors`, `security.packages`, `security.incidents`, `requests.create`, `announcements.read` |
-| **Teknik Personel** | `requests.read`, `requests.assign`, `requests.create`, `announcements.read`, `inventory.read`, `inventory.manage` (stok çıkışı) |
+| **Teknik Personel** — Ürün Dokümanı 5.1–5.2: atanan iş emirleri, stok çıkışı, denetim formları; rezervasyon yok | `requests.assigned`, `requests.create`, `announcements.read`, `inventory.read`, `inventory.manage` (stok çıkışı) |
 | **İK Sorumlusu** (P18 ile eklendi; Ürün Dokümanı 5.1) | `staff.manage`, `people.read`, `announcements.read`, `requests.create` |
 | **Görevli** (kapıcı; P18 ile eklendi) | `security.packages`, `requests.create`, `announcements.read` |
 | **Sakin** | `announcements.read`, `requests.create` + kendi dairesine ait okuma (§6) |
+
+Yönetici şablonu `requests.assigned`'ı da taşır (kendinde olmayan izni içeren özel rolü
+tanımlayamayacağı için); `requests.read` olduğundan kapsam ona uygulanmaz.
+
+**Teknik personel değişikliği (11.11.2026, test raporu #8):** önceki şablon `requests.read` +
+`requests.assign` veriyordu — teknik personel sitedeki bütün talepleri görüp atayabiliyordu;
+PM dokümanı (5.2) "Kısıtlı: atananlar" der, doküman kazanır. Şablon izinleri koddan okunduğu için
+(`site_roles.is_system` satırı izin saklamaz) değişiklik bütün sitelerde hemen geçerlidir; veri
+göçü gerekmez. Teknik şablondan **kopyalanmış siteye özel roller** sitenin kendi kararıdır,
+değiştirilmez. Bu değişiklikle teknik personel rezervasyon, tadilat izni kararı, anahtar teslimi,
+rutin görev listesi (`/tasks`; kendi görevleri `/me/tasks` sürer), departman listesi ve pano talep
+kartını da kaybeder (hepsi `requests.read`/`requests.assign` ile korunuyordu; matriste Teknik için
+"—").
+
+**Denetçinin kişisel veri görmemesi** `people.read` yokluğuyla uygulanır: listelerde ve "Bugün"de
+adlar `null`; **denetim kaydı** yanıtında (`GET …/audit`) kişi aktörün adı, IP ve tarayıcı bilgisi
+ile ayrıntıdaki ad/plaka alanları `***` (test raporu #14, 11.11.2026). Sistem aktörünün adı (gece
+işi) açıktır; kayıt kendisi değişmez.
 
 Hazır şablonların izinleri kodda **tek yerdedir**: `domain/access.py` `ROLE_PERMISSIONS`
 (`TEMPLATE_PERMISSIONS`). Yeni izin eklenince ilgili şablona oradan eklenir. API'de şablon anahtarı
