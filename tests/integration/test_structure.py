@@ -464,7 +464,8 @@ async def test_bakiyeli_malik_oturan_hesabi_acik_kalir(
     data = tenant.json()["data"]
     assert data["closed_accounts"] == []
     assert [a["reference_code"] for a in data["kept_open_accounts"]] == ["A12-O"]
-    assert "bakiyesi olduğu için açık bırakıldı (A12-O)" in tenant.json()["message"]
+    assert "A12-O bakiyesi sıfırlanınca kapanacak" in tenant.json()["message"]
+    assert data["kept_open_accounts"][0]["has_balance"] is True
 
 
 async def test_kiraci_varken_eklenen_malige_oturan_hesabi_acilmaz(

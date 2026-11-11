@@ -15,6 +15,7 @@ from typing import Any
 
 from sqlalchemy import Select, and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from site_yonetim.domain.finance import PeriodStatus
 from site_yonetim.domain.structure import (
@@ -28,7 +29,10 @@ from site_yonetim.domain.structure import (
     check_owner_share,
     check_party_end,
     earliest_effective_date,
+    month_start,
     most_common_count,
+    owner_occupant_closable,
+    owner_occupant_close_from,
     reference_base,
     reference_code,
 )
@@ -199,13 +203,22 @@ async def require_person(session: AsyncSession, person_id: uuid.UUID) -> Person:
 
 
 @dataclass(frozen=True, slots=True)
+class PendingOccupantClose:
+    """Kiracı eklendi ama malikin `-O` hesabı henüz kapanmadı; günlük yapı işi kapatacak."""
+
+    account: LedgerAccount
+    close_from: date  # en erken kapanış: kiracı başlangıç ayının ertesi ayının 1'i
+    has_balance: bool  # bakiye sıfır değil: sıfırlanana kadar açık kalır
+
+
+@dataclass(frozen=True, slots=True)
 class AddedParty:
     party: UnitParty
     opened_accounts: list[LedgerAccount]
-    # Kiracı eklenince sonlandırılan malik oturan (`-O`) hesapları (docs/03 §5)
+    # Kiracı eklenince hemen sonlandırılan malik oturan (`-O`) hesapları (docs/03 §5)
     closed_accounts: list[LedgerAccount] = field(default_factory=list)
-    # Bakiyesi sıfır olmadığı için açık bırakılan malik oturan hesapları (borç tahsil edilebilsin)
-    kept_open_accounts: list[LedgerAccount] = field(default_factory=list)
+    # Şimdilik açık kalan, günlük yapı işinin kapatacağı malik oturan hesapları
+    kept_open_accounts: list[PendingOccupantClose] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -216,7 +229,9 @@ class EndedParty:
 
 
 ZERO_BALANCE = Decimal(0)
-OCCUPANT_CLOSED_REASON = "Bölüme kiracı (oturan) eklendi; malikin oturan hesabı sonlandırıldı."
+OCCUPANT_CLOSED_REASON = (
+    "Bölümde kiracı (oturan) var ve başlangıç ayı geçti; malikin oturan hesabı sonlandırıldı."
+)
 OCCUPANT_REOPENED_REASON = "Bölümde etkin kiracı kalmadı; malik yeniden oturan, hesabı açıldı."
 
 
@@ -243,8 +258,13 @@ async def add_party(
     role: PartyRole,
     start_date: date,
     share_percent: Decimal = FULL_SHARE,
+    today: date | None = None,
 ) -> AddedParty:
-    """Bölüme malik/kiracı/oturan/vekil ekler ve gereken cari hesapları açar (docs/03 §5)."""
+    """Bölüme malik/kiracı/oturan/vekil ekler ve gereken cari hesapları açar (docs/03 §5).
+
+    `today`: kiracı başlangıcı geçmiş bir aydaysa malikin bakiyesiz `-O` hesabını hemen
+    kapatmak için. Verilmezse kapanışı günlük yapı işi yapar.
+    """
     if role is PartyRole.OWNER:
         owners = await _active_parties(session, unit.id, PartyRole.OWNER, start_date)
         if any(p.person_id == person.id for p in owners):
@@ -277,9 +297,9 @@ async def add_party(
         accounts=accounts_to_open(role, unit_has_active_tenant=has_tenant),
     )
     closed: list[LedgerAccount] = []
-    kept: list[LedgerAccount] = []
+    kept: list[PendingOccupantClose] = []
     if role is PartyRole.TENANT:
-        closed, kept = await _close_owner_occupant_accounts(session, unit.id, person.id, start_date)
+        closed, kept = await _review_owner_occupants(session, unit.id, person.id, start_date, today)
     await session.flush()
     return AddedParty(party, opened, closed, kept)
 
@@ -366,22 +386,27 @@ async def _open_accounts(
     return opened, reopened
 
 
-async def _close_owner_occupant_accounts(
-    session: AsyncSession, unit_id: uuid.UUID, tenant_person_id: uuid.UUID, day: date
-) -> tuple[list[LedgerAccount], list[LedgerAccount]]:
-    """Kiracı (oturan) eklendi: malikin açık oturan (`-O`) hesabı sonlandırılır (docs/03 §5).
+async def _review_owner_occupants(
+    session: AsyncSession,
+    unit_id: uuid.UUID,
+    tenant_person_id: uuid.UUID,
+    tenant_start: date,
+    today: date | None,
+) -> tuple[list[LedgerAccount], list[PendingOccupantClose]]:
+    """Kiracı (oturan) eklendi: malikin açık oturan (`-O`) hesabının kapanışı (docs/03 §5).
 
-    Sonlandırma mevcut hesap kapatma alanıyla (`is_closed`) yapılır: kapalı hesaba tahakkuk,
-    tahsilat, devir ve belge yazılmaz (docs/04 §4.5 "kapalı olmayan hesap"). Bakiyesi sıfır
-    olmayan hesap **açık bırakılır** — kapatılırsa borç tahsil edilemez, avans iade edilemez;
-    yönetici bakiyeyi kapatınca hesap bir sonraki kiracı değişiminde kapanır.
-    → (kapatılanlar, bakiyesi olduğu için açık kalanlar)
+    Hesap hemen kapanmaz: kiracının başlangıç ayı bitene kadar kıst (K9, docs/04 §4.5) malik
+    payı bu hesaba yazılabilmeli. Başlangıç geçmiş bir aydaysa ve bakiye sıfırsa hemen kapanır
+    (`today` verildiyse); değilse günlük yapı işi (`close_due_owner_occupants`) kapatır.
+    Sonlandırma mevcut hesap kapatma alanıyla (`is_closed`): kapalı hesaba tahakkuk, tahsilat,
+    devir ve belge yazılmaz. Bakiyesi sıfır olmayan hesap açık kalır (borç tahsil edilebilsin).
+    → (hemen kapatılanlar, kapanacaklar)
     """
     owners = select(UnitParty.person_id).where(
         UnitParty.unit_id == unit_id,
         UnitParty.role == PartyRole.OWNER.value,
-        UnitParty.start_date <= day,
-        or_(UnitParty.end_date.is_(None), UnitParty.end_date >= day),
+        UnitParty.start_date <= tenant_start,
+        or_(UnitParty.end_date.is_(None), UnitParty.end_date >= tenant_start),
     )
     accounts = list(
         await session.scalars(
@@ -408,15 +433,96 @@ async def _close_owner_occupant_accounts(
         ).all()
     )
     closed: list[LedgerAccount] = []
-    kept: list[LedgerAccount] = []
+    pending: list[PendingOccupantClose] = []
     for account in accounts:
-        if balances.get(account.id, ZERO_BALANCE) != ZERO_BALANCE:
-            kept.append(account)
-            continue
-        account.is_closed = True
-        _audit_account(session, account, closed=True)
-        closed.append(account)
-    return closed, kept
+        zero = balances.get(account.id, ZERO_BALANCE) == ZERO_BALANCE
+        if (
+            today is not None
+            and tenant_start <= today
+            and owner_occupant_closable(
+                today=today, tenant_start=tenant_start, balance_is_zero=zero
+            )
+        ):
+            _close_account(session, account)
+            closed.append(account)
+        else:
+            pending.append(
+                PendingOccupantClose(
+                    account, owner_occupant_close_from(tenant_start), has_balance=not zero
+                )
+            )
+    return closed, pending
+
+
+async def close_due_owner_occupants(session: AsyncSession, today: date) -> list[LedgerAccount]:
+    """Günlük yapı işi (`run-structure-jobs`): kapanma günü gelen malik `-O` hesaplarını kapatır.
+
+    Koşullar (docs/03 §5): bölümde bugün etkin bir kiracı var ve başlangıç ayı geçti
+    (`start_date` < bu ayın 1'i), hesabın sahibi bugün etkin malik, bakiye sıfır. Bakiyesi olan
+    hesap açık kalır; iş her gün yeniden dener. Site kapsamında çağrılır.
+    """
+    accounts = list(
+        await session.scalars(
+            due_owner_occupants_query(today).order_by(LedgerAccount.reference_code)
+        )
+    )
+    for account in accounts:
+        _close_account(session, account)
+    await session.flush()
+    return accounts
+
+
+def due_owner_occupants_query(today: date) -> Select[LedgerAccount]:
+    """Kapanma koşulu sağlanan malik `-O` hesapları (bkz. `close_due_owner_occupants`)."""
+    tenant = aliased(UnitParty)
+    owner = aliased(UnitParty)
+    tenant_due = (
+        select(tenant.id)
+        .where(
+            tenant.site_id == LedgerAccount.site_id,
+            tenant.unit_id == LedgerAccount.unit_id,
+            tenant.role == PartyRole.TENANT.value,
+            tenant.person_id != LedgerAccount.person_id,
+            tenant.start_date < month_start(today),
+            or_(tenant.end_date.is_(None), tenant.end_date >= today),
+        )
+        .correlate(LedgerAccount)
+        .exists()
+    )
+    owner_now = (
+        select(owner.id)
+        .where(
+            owner.site_id == LedgerAccount.site_id,
+            owner.unit_id == LedgerAccount.unit_id,
+            owner.person_id == LedgerAccount.person_id,
+            owner.role == PartyRole.OWNER.value,
+            owner.start_date <= today,
+            or_(owner.end_date.is_(None), owner.end_date >= today),
+        )
+        .correlate(LedgerAccount)
+        .exists()
+    )
+    balance = (
+        select(func.coalesce(func.sum(LedgerEntry.debit - LedgerEntry.credit), ZERO_BALANCE))
+        .where(
+            LedgerEntry.site_id == LedgerAccount.site_id,
+            LedgerEntry.account_id == LedgerAccount.id,
+        )
+        .correlate(LedgerAccount)
+        .scalar_subquery()
+    )
+    return select(LedgerAccount).where(
+        LedgerAccount.kind == AccountKind.OCCUPANT.value,
+        LedgerAccount.is_closed.is_(False),
+        tenant_due,
+        owner_now,
+        balance == ZERO_BALANCE,
+    )
+
+
+def _close_account(session: AsyncSession, account: LedgerAccount) -> None:
+    account.is_closed = True
+    _audit_account(session, account, closed=True)
 
 
 def _audit_account(session: AsyncSession, account: LedgerAccount, *, closed: bool) -> None:

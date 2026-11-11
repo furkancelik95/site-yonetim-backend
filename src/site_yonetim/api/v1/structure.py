@@ -587,6 +587,26 @@ class PartyCreate(BaseModel):
         return self
 
 
+class PendingCloseAccountOut(AccountOut):
+    pending_close: bool = Field(
+        description="true: günlük yapı işi (`run-structure-jobs`) koşullar sağlanınca kapatacak"
+    )
+    close_from: date = Field(
+        description="en erken kapanış: kiracı başlangıç ayının ertesi ayının 1'i (kıst malik payı "
+        "bu tarihe kadar bu hesaba yazılır)"
+    )
+    has_balance: bool = Field(description="true: bakiye sıfırlanana kadar açık kalır")
+
+    @classmethod
+    def of_pending(cls, item: svc.PendingOccupantClose) -> PendingCloseAccountOut:
+        return cls(
+            **AccountOut.of(item.account).model_dump(),
+            pending_close=True,
+            close_from=item.close_from,
+            has_balance=item.has_balance,
+        )
+
+
 class PartyAdded(BaseModel):
     party: PartyOut
     opened_accounts: list[AccountOut]
@@ -594,9 +614,9 @@ class PartyAdded(BaseModel):
         default_factory=list,
         description="kiracı eklenince sonlandırılan malik oturan (`-O`) hesapları",
     )
-    kept_open_accounts: list[AccountOut] = Field(
+    kept_open_accounts: list[PendingCloseAccountOut] = Field(
         default_factory=list,
-        description="bakiyesi sıfır olmadığı için açık bırakılan malik oturan hesapları",
+        description="şimdilik açık kalan, günlük yapı işinin kapatacağı malik oturan hesapları",
     )
 
 
@@ -615,7 +635,8 @@ async def add_party(
     ctx: PeopleManage, unit_id: uuid.UUID, body: PartyCreate, today: TodayDep
 ) -> Written[PartyAdded]:
     """Gerekli cari hesapları da açar: malik `-M` (kiracı yoksa `-O`), kiracı `-K`; kiracı
-    eklenince malikin bakiyesiz `-O` hesabı kapanır (docs/03 §5)."""
+    eklenince malikin `-O` hesabı başlangıç ayı geçince ve bakiyesi sıfırsa kapanır (hemen ya da
+    günlük yapı işiyle; docs/03 §5)."""
     unit, block, _ = await _load_unit(ctx, unit_id)
     try:
         if body.person_id is not None:
@@ -634,6 +655,7 @@ async def add_party(
             role=body.role,
             start_date=body.start_date,
             share_percent=body.share_percent,
+            today=today,
         )
     except StructureRuleError as exc:
         raise _rule_error(exc) from None
@@ -644,11 +666,14 @@ async def add_party(
     if added.closed_accounts:
         closed = ", ".join(a.reference_code for a in added.closed_accounts)
         accounts_text += f"; malikin oturan hesabı kapatıldı ({closed})"
-    if added.kept_open_accounts:
-        kept = ", ".join(a.reference_code for a in added.kept_open_accounts)
-        accounts_text += (
-            f"; malikin oturan hesabı bakiyesi olduğu için açık bırakıldı ({kept}), "
-            "yeni aidat kiracıya yazılır"
+    for item in added.kept_open_accounts:
+        when = item.close_from.strftime("%d.%m.%Y")
+        accounts_text += f"; malikin oturan hesabı {item.account.reference_code} " + (
+            "bakiyesi sıfırlanınca kapanacak"
+            if item.has_balance and item.close_from <= today
+            else f"{when} tarihinden itibaren"
+            + (" bakiyesi sıfırlanınca" if item.has_balance else "")
+            + " kapanacak (o güne kadar kıst malik payı bu hesaba yazılır)"
         )
     return Written(
         data=PartyAdded(
@@ -663,7 +688,9 @@ async def add_party(
             ),
             opened_accounts=[AccountOut.of(a) for a in added.opened_accounts],
             closed_accounts=[AccountOut.of(a) for a in added.closed_accounts],
-            kept_open_accounts=[AccountOut.of(a) for a in added.kept_open_accounts],
+            kept_open_accounts=[
+                PendingCloseAccountOut.of_pending(a) for a in added.kept_open_accounts
+            ],
         ),
         message=(
             f"{unit.display_name(block.name)} — {person.full_name} "

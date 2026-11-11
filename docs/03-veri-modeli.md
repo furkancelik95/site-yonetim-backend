@@ -232,15 +232,25 @@ yeni satırla eklenir. Tahakkuk motoru hangi tarihte kimin oturduğuna bu tablod
 Kod: blok adı + numara, yalnız harf/rakam, büyük harf. Çakışırsa sonuna sayı eklenir: `A12-M`, `A12-M2`, `A12-M3`.
 Kiracı yoksa malike oturan hesabı açılmasının sebebi: aidatın yazılacağı bir hesap her zaman bulunsun.
 
-**Kiracı değişince malikin oturan hesabı (test raporu, 11.11.2026):** bölümde aynı anda tek
-etkin oturan hesabı olur.
-- Kiracı eklenince, kiracının başlangıç gününde etkin maliklerin açık `-O` hesabı **kapatılır**
-  (`is_closed = true`; silinmez, geçmişi yerinde). Kapalı hesaba tahakkuk, tahsilat, devir ve
-  borçsuzluk belgesi yazılmaz. Denetim kaydına `ledger_accounts` güncellemesi gerekçesiyle yazılır.
-- **Bakiyesi sıfır olmayan `-O` kapatılmaz** (kapalı hesaba tahsilat yazılamaz; borç/avans takılı
-  kalmasın) — yanıtta `kept_open_accounts`. Yeni aidat yine kiracıya yazılır (`04` §4.5).
+**Kiracı değişince malikin oturan hesabı (test raporu, 11.11.2026; K9 kararı Furkan):**
+kiracının başlangıç ayı bittikten sonra bölümde tek açık oturan hesabı kalır.
+- Kiracı eklenince maliklerin (kiracı başlangıç gününde etkin) açık `-O` hesabı **hemen
+  kapanmaz**: başlangıç ayının kıst malik payı (K9, `04` §4.5 — 15'inde gelen kiracıda ilk 14
+  gün) bu hesaba yazılabilmeli.
+- **Kapanış koşulları:** bugün ≥ kiracı başlangıç ayının ertesi ayının 1'i, kiracı hâlâ etkin,
+  hesabın sahibi hâlâ etkin malik, `-O` bakiyesi sıfır. Kapatma mevcut alanla (`is_closed =
+  true`; silinmez, geçmişi yerinde): kapalı hesaba tahakkuk, tahsilat, devir ve borçsuzluk belgesi
+  yazılmaz. Denetim kaydına `ledger_accounts` güncellemesi gerekçesiyle yazılır.
+- Kapatmayı günlük yapı işi (`cli run-structure-jobs`) yapar. Kiracının başlangıcı geçmiş bir
+  aydaysa ve koşullar zaten sağlanıyorsa kiracı eklenirken hemen kapanır (demo verisindeki eski
+  kiracılar da böyle).
+- **Bakiyesi sıfır olmayan `-O` açık kalır** (kapalı hesaba tahsilat yazılamaz; borç/avans takılı
+  kalmasın); iş her gün yeniden dener, bakiye sıfırlanınca kapatır. Kiracı ekleme yanıtında
+  kapanmayı bekleyenler `kept_open_accounts[]`: `pending_close`, `close_from` (en erken kapanış
+  günü), `has_balance`.
 - Kiracı çıkınca (`end_date`) ertesi gün etkin kiracı kalmıyorsa etkin malikin `-O` hesabı aynı
-  kodla **yeniden açılır**; hiç yoksa yukarıdaki kuralla açılır.
+  kodla **yeniden açılır**; hiç yoksa yukarıdaki kuralla açılır. Kiracı kapanıştan önce çıkarsa
+  hesap hiç kapanmaz.
 - Excel aktarımı kiracıyı baştan bildiği için kiracılı bölümde `-O` hiç açmaz.
 
 ### `ledger_entries` [K] — borç/alacak hareketi, **değişmez**

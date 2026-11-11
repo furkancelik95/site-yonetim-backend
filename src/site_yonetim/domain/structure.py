@@ -142,6 +142,19 @@ def next_month(day: date) -> date:
     return date(day.year + (day.month == 12), day.month % 12 + 1, 1)
 
 
+def owner_occupant_close_from(tenant_start: date) -> date:
+    """Kiracı eklenince malikin oturan (`-O`) hesabının en erken kapanabileceği gün: kiracı
+    başlangıç ayının ertesi ayının 1'i (docs/03 §5). O güne kadar kıst (K9, docs/04 §4.5)
+    malik payı bu hesaba yazılabilsin."""
+    return next_month(tenant_start)
+
+
+def owner_occupant_closable(*, today: date, tenant_start: date, balance_is_zero: bool) -> bool:
+    """Kapatma koşulları: başlangıç ayı geçti ve bakiye sıfır (kiracının hâlâ etkin olduğunu
+    çağıran sağlar). Bakiye sıfır değilse hesap açık kalır; günlük iş yeniden dener."""
+    return balance_is_zero and today >= owner_occupant_close_from(tenant_start)
+
+
 def earliest_effective_date(today: date, closed_months: Iterable[tuple[int, int]]) -> date:
     """Yürürlük/devir tarihinin en erkeni: içinde bulunulan ayın başı; o ay (ve sonrakiler)
     kapatılmışsa ilk açık ayın başı. Geçmiş tahakkuklar değişmesin (YAP-02 S2: PERIOD_LOCKED)."""
