@@ -164,6 +164,17 @@ async def create_invite(
     return invite, code
 
 
+def resident_visitors_query(unit_ids: set[uuid.UUID], today: date) -> Select[Visitor]:
+    """Sakinin ziyaretçi geçmişi: bölümlerine son 30 günde gelen (ya da beklenen) ziyaretçiler —
+    davetle, onayla ya da güvenliğin doğrudan kaydıyla girenler dahil (yeni üstte)."""
+    return (
+        select(Visitor)
+        .where(Visitor.unit_id.in_(unit_ids), Visitor.visit_date >= today - timedelta(days=30))
+        .order_by(Visitor.visit_date.desc(), Visitor.created_at.desc(), Visitor.id.desc())
+        .limit(RESIDENT_LIST_LIMIT)
+    )
+
+
 def resident_invites_query(unit_ids: set[uuid.UUID], today: date) -> Select[VisitorInvite]:
     """Etkin davetler ve son 30 günün geçmişi (yeni üstte)."""
     return (
