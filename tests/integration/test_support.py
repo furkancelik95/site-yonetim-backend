@@ -741,3 +741,59 @@ async def test_sla_ozeti_iki_ekranda_ayni_tanim(
     assert late.json()["data"]["sla"]["breached"] is True
     after = (await w.get("/support-tickets")).json()["summary"]
     assert (after["sla_breached"], after["first_response_overdue"]) == (1, 0)
+
+
+async def test_bilgi_bankasi_yayindan_kaldirma(
+    destek: tuple[World, dict[str, str], Clock],
+) -> None:
+    """Test raporu (platform): makale yayından kaldırılabilir; arşivdeki makale yardımda ve
+    aramada çıkmaz, geri bildirim alamaz; geri alınabilir. Kalıcı silme yok."""
+    w, platform, _ = destek
+    body = {
+        "title": "Aidat nasıl ödenir",
+        "body": "Ödeme ekranında IBAN ve referans kodunu kullanarak havale yapabilirsiniz.",
+        "audience": "resident",
+        "screens": ["odeme"],
+    }
+    article = (
+        await w.api.post("/api/v1/platform/knowledge-articles", json=body, headers=platform)
+    ).json()["data"]
+    assert article["archived_at"] is None
+    url = f"/api/v1/platform/knowledge-articles/{article['id']}"
+
+    denied = await w.api.post(f"{url}/archive", headers=w.headers)
+    assert denied.status_code == 404  # platform yöneticisi değil
+    archived = await w.api.post(f"{url}/archive", headers=platform)
+    assert archived.status_code == 200, archived.text
+    assert archived.json()["data"]["archived_at"] is not None
+    assert "yayından kaldırıldı" in archived.json()["message"]
+    again = await w.api.post(f"{url}/archive", headers=platform)
+    assert (again.status_code, again.json()["error"]["code"]) == (409, "already_archived")
+
+    for params in ({"q": "havale"}, {"screen": "odeme"}, {}):
+        found = await w.api.get("/api/v1/knowledge-articles", params=params, headers=w.headers)
+        assert found.json()["total"] == 0, params
+    feedback = await w.api.post(
+        f"/api/v1/knowledge-articles/{article['id']}/feedback",
+        json={"helpful": True},
+        headers=w.headers,
+    )
+    assert feedback.status_code == 404
+    managed = await w.api.get(
+        "/api/v1/platform/knowledge-articles", params={"archived": "true"}, headers=platform
+    )
+    assert [a["id"] for a in managed.json()["items"]] == [article["id"]]
+    live = await w.api.get("/api/v1/platform/knowledge-articles", headers=platform)
+    assert live.json()["total"] == 0
+    assert (
+        await w.api.get("/api/v1/platform/knowledge-articles", headers=w.headers)
+    ).status_code == 404
+    assert (await w.api.delete(url, headers=platform)).status_code == 405  # kalıcı silme yok
+
+    restored = await w.api.post(f"{url}/restore", headers=platform)
+    assert restored.status_code == 200
+    assert restored.json()["data"]["archived_at"] is None
+    found = await w.api.get("/api/v1/knowledge-articles", params={"q": "havale"}, headers=w.headers)
+    assert found.json()["total"] == 1
+    twice = await w.api.post(f"{url}/restore", headers=platform)
+    assert twice.json()["error"]["code"] == "not_archived"
