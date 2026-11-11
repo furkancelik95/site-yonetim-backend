@@ -5,7 +5,8 @@ fotoğrafları.
   modülünden: sigorta → `expenses.manage`, teknik varlık → `inventory.manage`.
 - `GET /subject-documents?subject_type=&subject_id=` ve `…/{id}/download`: kaydın okuma izni
   (`expenses.read` / `inventory.read`) — belge modülü kapalı olsa da.
-- `GET /operation-photos/{id}`: sayaç okuması (`units.manage`), denetim (`requests.assign`) ya da
+- `GET /operation-photos/{id}`: sayaç okuması (`units.manage`), denetim (`requests.assign` ya da
+  `requests.assigned`) ya da
   görev kapanışı (`requests.read`) fotoğrafı; bağlı olmadığı kayıttan indirilemez.
 """
 
@@ -208,6 +209,7 @@ async def download_subject_document(
 async def download_photo(photo_id: uuid.UUID, ctx: SiteContextDep, store: StoreDep) -> Response:
     session = ctx.session
     needed: Permission | None = None
+    either: Permission | None = None  # denetim fotoğrafı: teknik personel de açar
     if await session.scalar(select(MeterReading.id).where(MeterReading.photo_file_id == photo_id)):
         needed = Permission.UNITS_MANAGE
     elif await session.scalar(
@@ -219,10 +221,10 @@ async def download_photo(photo_id: uuid.UUID, ctx: SiteContextDep, store: StoreD
             ChecklistInspection.answers.contains(cast([{"photo_id": str(photo_id)}], JSONB))
         )
     ):
-        needed = Permission.REQUESTS_ASSIGN
+        needed, either = Permission.REQUESTS_ASSIGN, Permission.REQUESTS_ASSIGNED
     row = await stored_file(session, photo_id) if needed is not None else None
     if row is None or needed is None:
         raise NotFoundError("Fotoğraf bulunamadı.")
-    if not ctx.access.can(needed):
+    if not ctx.access.can(needed) and not (either is not None and ctx.access.can(either)):
         raise ForbiddenError
     return send_document(row, store)

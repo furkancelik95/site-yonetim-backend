@@ -13,6 +13,7 @@ from sqlalchemy import (
     CheckConstraint,
     Date,
     DateTime,
+    ForeignKey,
     ForeignKeyConstraint,
     Index,
     Text,
@@ -29,6 +30,7 @@ from site_yonetim.domain.operations import (
     Audience,
     Channel,
     Importance,
+    RequestChannel,
     RequestEventKind,
     RequestPriority,
     RequestStatus,
@@ -57,6 +59,7 @@ class Request(TenantMixin, Base):
         ),
         CheckConstraint(enum_check("priority", RequestPriority), name="priority"),
         CheckConstraint(enum_check("status", RequestStatus), name="status"),
+        CheckConstraint(enum_check("channel", RequestChannel), name="channel"),
         CheckConstraint(
             "status NOT IN ('resolved', 'closed') OR resolution IS NOT NULL",
             name="resolution_required",
@@ -64,6 +67,8 @@ class Request(TenantMixin, Base):
         Index("ix_requests_site_status", "site_id", "status"),
         Index("ix_requests_reporter", "site_id", "reported_by_person_id"),
         Index("ix_requests_outage", "site_id", "outage_id"),
+        Index("ix_requests_assignee", "site_id", "assignee_user_id"),
+        Index("ix_requests_creator", "site_id", "created_by_user_id"),
     )
 
     number: Mapped[int]
@@ -76,11 +81,17 @@ class Request(TenantMixin, Base):
     unit_id: Mapped[uuid.UUID | None]  # ortak alan talebinde boş
     department_id: Mapped[uuid.UUID | None]  # servis isteği 11
     location: Mapped[str | None] = mapped_column(Text)
-    assigned_to: Mapped[str | None] = mapped_column(Text)
+    assigned_to: Mapped[str | None] = mapped_column(Text)  # görünen ad (eski kayıtta serbest metin)
+    # Atanan personelin kullanıcı hesabı; `requests.assigned` kapsamı buna bakar. Serbest metinle
+    # atanmış eski kayıtta boş — kimsenin "atananlar" listesine düşmez.
+    assignee_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
+    # Açılış kanalı (K18): yalnız `resident` talep sakin onayıyla kapanır.
+    channel: Mapped[str] = mapped_column(Text, default=RequestChannel.STAFF.value)
     due_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     resolved_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     resolution: Mapped[str | None] = mapped_column(Text)
     created_by_name: Mapped[str | None] = mapped_column(Text)  # talebi açan kullanıcı
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
     closed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))  # kapandı/iptal
     # Çözüldü talebe sakin yanıt vermezse bu anda kendiliğinden kapanır (§12.3, K18).
     auto_close_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))

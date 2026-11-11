@@ -104,9 +104,10 @@ async def test_yetki_ve_site_izolasyonu(requests_on: World) -> None:
     tech = await create_user(w.factory, "teknik@test.local")
     await add_site_membership(w.factory, w.site_id, tech.id, "Teknik Personel")
     technician = await login_headers(w.api, "teknik@test.local")
+    # Teknik personel yalnız atananlar (Ürün Dokümanı 5.2): departman yönetimi requests.assign
     assert (
         await w.api.post(w.url("/departments"), json={"name": "Havuz"}, headers=technician)
-    ).status_code == 201
+    ).status_code == 403
 
     # Yıldız'ın departmanı Aksu'nun talebine atanamaz
     yildiz = await w.api.get(w.url("/departments", "yildiz-sitesi"), headers=w.headers)

@@ -226,6 +226,7 @@ DESCRIPTIONS: dict[str, str] = {
     "requests.read": "Talepleri görüntüleme",
     "requests.create": "Talep açma",
     "requests.assign": "Talep atama ve durum değiştirme",
+    "requests.assigned": "Yalnız kendine atanan ve kendi açtığı talepler (durum, yorum, iç not)",
     "announcements.read": "Duyuruları görüntüleme",
     "announcements.publish": "Duyuru yayınlama",
     "expenses.read": "Giderleri görüntüleme",

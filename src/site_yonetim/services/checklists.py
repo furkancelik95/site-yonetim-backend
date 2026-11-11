@@ -253,6 +253,7 @@ async def inspect(
                     unit_id=None,
                     location=place,
                     reported_by_person_id=None,
+                    created_by_user_id=by.user_id,  # denetimi yapan teknik personel görür
                 ),
                 actor=by.name,
                 now=datetime.now(UTC),

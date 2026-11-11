@@ -34,6 +34,9 @@ class Permission(StrEnum):
     REQUESTS_READ = "requests.read"
     REQUESTS_CREATE = "requests.create"
     REQUESTS_ASSIGN = "requests.assign"
+    # Yalnız kendine atanan ve kendi açtığı talepler: görür; durum, yorum, iç not ve teklif işler.
+    # Atama ve departman değiştirmez (Ürün Dokümanı 5.2 Teknik: "Kısıtlı: atananlar").
+    REQUESTS_ASSIGNED = "requests.assigned"
     # Talep ayarları: kategori, SLA, takvim, hazır yanıt, tarife, tadilat kuralları (SR 47–52)
     REQUESTS_SETTINGS = "requests.settings"
     ANNOUNCEMENTS_READ = "announcements.read"
@@ -110,7 +113,7 @@ ROLE_PERMISSIONS: dict[SiteRole, frozenset[Permission]] = {
             P.FINANCE_BUDGET_MANAGE, P.FINANCE_CASH_READ, P.FINANCE_CASH_MANAGE,
             P.FINANCE_REPORTS_READ, P.UNITS_READ, P.UNITS_MANAGE, P.PEOPLE_READ,
             P.PEOPLE_MANAGE, P.REQUESTS_READ, P.REQUESTS_CREATE, P.REQUESTS_ASSIGN,
-            P.REQUESTS_SETTINGS,
+            P.REQUESTS_SETTINGS, P.REQUESTS_ASSIGNED,
             P.ANNOUNCEMENTS_READ, P.ANNOUNCEMENTS_PUBLISH, P.EXPENSES_READ, P.EXPENSES_MANAGE,
             P.SECURITY_VISITORS, P.SECURITY_PACKAGES, P.MODULES_MANAGE, P.MEMBERS_MANAGE,
             P.AUDIT_READ, P.SECURITY_INCIDENTS, P.MEETINGS_READ, P.MEETINGS_MANAGE,
@@ -151,9 +154,10 @@ ROLE_PERMISSIONS: dict[SiteRole, frozenset[Permission]] = {
             P.ANNOUNCEMENTS_READ,
         }
     ),
+    # Ürün Dokümanı 5.1–5.2: atanan iş emirleri, stok çıkışı, denetim formları; rezervasyon yok
     SiteRole.TECHNICIAN: frozenset(
         {
-            P.REQUESTS_READ, P.REQUESTS_ASSIGN, P.REQUESTS_CREATE, P.ANNOUNCEMENTS_READ,
+            P.REQUESTS_ASSIGNED, P.REQUESTS_CREATE, P.ANNOUNCEMENTS_READ,
             P.INVENTORY_READ, P.INVENTORY_MANAGE,
         }
     ),

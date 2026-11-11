@@ -36,6 +36,7 @@ from site_yonetim.domain.money import distribute, round_money
 from site_yonetim.domain.operations import (
     Audience,
     Importance,
+    RequestChannel,
     RequestPriority,
     RequestStatus,
 )
@@ -616,9 +617,12 @@ async def _seed_requests(session: AsyncSession, site: Site, today: date) -> None
                 priority=RequestPriority(demand.priority),
                 unit_id=None if common else unit_id,
                 location=demand.location,
-                reported_by_person_id=person_id,
+                # Ortak alan talebini yönetim açar (sakin onayı beklemez, K18); bölüm talebini
+                # sakin kendi ucundan açar.
+                reported_by_person_id=None if common else person_id,
+                channel=RequestChannel.STAFF if common else RequestChannel.RESIDENT,
             ),
-            actor="Demo verisi",
+            actor="Site Yönetimi" if common else "Demo verisi",
             now=opened,
         )
         created[demand.title] = request
@@ -626,7 +630,7 @@ async def _seed_requests(session: AsyncSession, site: Site, today: date) -> None
         if target is RequestStatus.OPEN:
             continue
         await requests.assign(
-            session, request, demand.assignee or "Teknik ekip", actor="Site Yönetimi",
+            session, site, request, demand.assignee or "Teknik ekip", actor="Site Yönetimi",
             now=opened + timedelta(hours=1),
         )  # fmt: skip
         steps = flow[1 : flow.index(target) + 1]
@@ -640,7 +644,7 @@ async def _seed_requests(session: AsyncSession, site: Site, today: date) -> None
             at = opened + timedelta(hours=1 + 3 * step)
             if status is RequestStatus.RESOLVED and target is RequestStatus.RESOLVED:
                 at = max(at, datetime.combine(today - timedelta(days=1), time(15), BUSINESS_TZ))
-            if status is RequestStatus.CLOSED:
+            if status is RequestStatus.CLOSED and not common:  # sakin onayıyla kapanır
                 await service_desk.confirm(
                     session, site, request, solved=True, score=4, comment="Hızlı çözüldü.",
                     person_id=person_id, actor="Sakin", now=at,
