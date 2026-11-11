@@ -684,3 +684,40 @@ async def test_demo_genel_kurul(
     assert coming["invitation"]["recipients"] > 0
     assert 0 < coming["invitation"]["read"] < coming["invitation"]["recipients"]
     assert coming["attendance"] == []
+
+
+async def test_demo_arsa_paylari_toplami_paydaya_esit(
+    dev_settings: Settings, session_factory: Factory, admin_engine: object
+) -> None:
+    """Test raporu: her sitede bölümlerin arsa payı toplamı paydaya eşit, payda tek (docs/10 §1.4).
+
+    Payda tohumdan türetilir; değişirse demo tahakkukundaki "Arsa payı a / b" açıklamaları da
+    değişir — bilinçli olsun diye değerler sabit.
+    """
+    await seed_demo(dev_settings, session_factory, today=SEED_DAY)
+    async with session_factory() as session:
+        sites = {s.slug: s.id for s in await session.scalars(select(Site))}
+    totals = {}
+    for slug, site_id in sites.items():
+        with site_scope(site_id):
+            async with session_factory() as session:
+                row = (
+                    await session.execute(
+                        select(
+                            func.sum(Unit.land_share_numerator),
+                            func.min(Unit.land_share_denominator),
+                            func.max(Unit.land_share_denominator),
+                            func.count().filter(Unit.land_share_numerator.is_(None)),
+                        )
+                    )
+                ).one()
+        numerator_sum, low, high, missing = row
+        assert missing == 0, slug
+        assert low == high, slug  # sitede tek payda
+        assert numerator_sum == low, slug
+        totals[slug] = numerator_sum
+    assert totals == {
+        "aksu-konaklari": 51253,
+        "yildiz-sitesi": 27159,
+        "mimoza-apartmani": 13654,
+    }
