@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # --- Derleme aşaması: bağımlılıkları kilit dosyasından kur -------------------
-FROM python:3.14-slim AS builder
+FROM python:3.15-slim AS builder
 
 COPY --from=ghcr.io/astral-sh/uv:0.12.21 /uv /usr/local/bin/uv
 
@@ -23,7 +23,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-editable
 
 # --- Çalışma aşaması: derleme araçları yok, root değil ----------------------
-FROM python:3.14-slim AS runtime
+FROM python:3.15-slim AS runtime
 
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
