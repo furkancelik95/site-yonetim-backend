@@ -11,6 +11,9 @@ katmanı bağlanınca gönderilecek).
 - **Okuma onayı:** son onay = yayın + `ack_hours`. Onay yalnız teslim kaydı olan (hedef
   kitledeki) kişiden; onay "okundu" da sayılır; bir kez. Süre dolunca onaylamayanlara **bir kez**
   SMS yedeği (`services/outbound` — sağlayıcı P16c ile bağlanacak; şimdilik sayı kayda geçer).
+  Yayın anında hedef sakinlere bildirim merkezi kaydı (`announcement.ack_required`; dış kanal
+  teslimi `notify` → P16c; K5 yalnız gerçek sağlayıcıdır).
+- Her yayın denetim kaydına yazılır (hedef sayısı, kanallar; metin değil).
 """
 
 import logging
@@ -32,6 +35,7 @@ from site_yonetim.domain.communication import (
     shift_out_of_quiet,
 )
 from site_yonetim.domain.money import EPSILON
+from site_yonetim.domain.notifications import NotificationCategory
 from site_yonetim.domain.operations import (
     Audience,
     Channel,
@@ -54,7 +58,8 @@ from site_yonetim.models import (
     Unit,
     UnitParty,
 )
-from site_yonetim.models.audit import Actor, set_actor
+from site_yonetim.models.audit import Actor, AuditAction, record, set_actor
+from site_yonetim.services import notifications as notify_svc
 from site_yonetim.services import outbound
 from site_yonetim.services.charging import BUSINESS_TZ
 
@@ -207,7 +212,54 @@ async def _deliver(
     ]
     for start in range(0, len(rows), 2000):  # parametre sınırı: parça parça toplu ekleme
         await session.execute(insert(AnnouncementDelivery), rows[start : start + 2000])
+    record(
+        session,
+        AuditAction.CREATE,
+        "announcements",
+        announcement.id,
+        {
+            "event": "published",
+            "importance": announcement.importance,
+            "audience": announcement.audience,
+            "channels": announcement.channels,
+            "requires_ack": announcement.requires_ack,
+            "recipients": len(people),
+        },
+    )
+    if announcement.requires_ack:
+        await _notify_ack_required(session, announcement, sorted(people))
     return Published(announcement, len(people), channels)
+
+
+NOTIFY_CHUNK = 2000  # tek INSERT'te parametre sınırı (kişi başına ~10 değer)
+
+
+async def _notify_ack_required(
+    session: AsyncSession, announcement: Announcement, person_ids: list[uuid.UUID]
+) -> None:
+    """Okuma onaylı duyuru (ILT-01): hedef sakinlere uygulama içi bildirim — P16c teslim kaydı
+    (push/SMS/e-posta tercihine göre) `notify` içinde üretilir."""
+    users = await user_ids_of(session, person_ids)
+    deadline = announcement.ack_deadline
+    body = (
+        f"Son onay: {deadline.astimezone(BUSINESS_TZ):%d.%m.%Y %H:%M}. "
+        if deadline is not None
+        else ""
+    ) + "Duyuruyu açıp “Okudum, anladım”a basın."
+    for start in range(0, len(users), NOTIFY_CHUNK):
+        await notify_svc.notify(
+            session,
+            users[start : start + NOTIFY_CHUNK],
+            notify_svc.Message(
+                category=NotificationCategory.ANNOUNCEMENT,
+                kind="announcement.ack_required",
+                title=f"Okuma onayı bekleniyor: {announcement.title}",
+                body=body,
+                link_entity="announcements",
+                link_id=announcement.id,
+            ),
+            dedupe_key=f"announcement:{announcement.id}:ack_required",
+        )
 
 
 async def publish(
