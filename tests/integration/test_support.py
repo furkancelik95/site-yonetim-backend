@@ -677,3 +677,67 @@ async def test_destek_ekibi_oturumda_sakin_olarak_goruntuleyebilir(
                 )
             )
     assert "support_session" in types
+
+
+async def test_sla_ozeti_iki_ekranda_ayni_tanim(
+    destek: tuple[World, dict[str, str], Clock],
+) -> None:
+    """Test raporu #9: site ve platform ekranı SLA aşımını farklı sayıyordu. Tek tanım
+    (`ticket_sla`) ve veritabanında sayılan `summary` — sayfa ve süzgeçten bağımsız."""
+    w, platform, clock = destek
+    critical = (await w.post("/support-tickets", ticket_body(priority="critical"))).json()["data"]
+    normal = (await w.post("/support-tickets", ticket_body(priority="normal"))).json()["data"]
+    done = (await w.post("/support-tickets", ticket_body(priority="critical"))).json()["data"]
+    other = await w.api.post(
+        w.url("/support-tickets", YILDIZ), json=ticket_body(priority="high"), headers=w.headers
+    )
+    assert other.status_code == 201
+
+    clock.now = T0 + timedelta(minutes=30)
+    for tid, status_ in ((normal["id"], "answered"), (done["id"], "resolved")):
+        replied = await w.api.post(
+            f"/api/v1/platform/support-tickets/{tid}/messages",
+            json={"body": "İnceledik.", "status": status_},
+            headers=platform,
+        )
+        assert replied.status_code == 200, replied.text
+
+    clock.now = T0 + timedelta(hours=5)
+    site = (await w.get("/support-tickets", params={"page_size": 1})).json()
+    assert site["summary"] == {
+        "open": 2,
+        "sla_breached": 1,
+        "first_response_overdue": 1,
+        "critical": 1,
+    }
+    by_id = {t["id"]: t["sla"] for t in (await w.get("/support-tickets")).json()["items"]}
+    assert by_id[critical["id"]]["breached"] is True
+    assert by_id[critical["id"]]["first_response_overdue"] is True
+    assert by_id[normal["id"]]["breached"] is False
+    assert by_id[done["id"]]["first_response_overdue"] is False
+
+    # Süzgeç özeti değiştirmez; platform tüm tesisleri sayar (Yıldız'ın yüksek bileti de aşımda)
+    filtered = (await w.get("/support-tickets", params={"status": "closed"})).json()
+    assert filtered["total"] == 0
+    assert filtered["summary"] == site["summary"]
+    listed = (await w.api.get("/api/v1/platform/support-tickets", headers=platform)).json()
+    assert listed["summary"] == {
+        "open": 3,
+        "sla_breached": 2,
+        "first_response_overdue": 2,
+        "critical": 1,
+    }
+    assert sum(t["sla"]["breached"] for t in listed["items"] if t["status"] not in (
+        "resolved", "closed"
+    )) == listed["summary"]["sla_breached"]  # fmt: skip
+
+    # Geç gelen ilk yanıt: aşım kalır, "yanıt bekliyor" düşer
+    late = await w.api.post(
+        f"/api/v1/platform/support-tickets/{critical['id']}/messages",
+        json={"body": "Geç de olsa bakıyoruz."},
+        headers=platform,
+    )
+    assert late.json()["data"]["sla"]["first_response_overdue"] is False
+    assert late.json()["data"]["sla"]["breached"] is True
+    after = (await w.get("/support-tickets")).json()["summary"]
+    assert (after["sla_breached"], after["first_response_overdue"]) == (1, 0)

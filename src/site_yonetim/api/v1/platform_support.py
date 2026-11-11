@@ -23,7 +23,9 @@ from site_yonetim.api.schemas import MAX_PAGE_SIZE, Page, PageParams, Written
 from site_yonetim.api.v1.support import (
     SupportSessionOut,
     SupportTicketOut,
+    SupportTicketPage,
     TicketMessageIn,
+    TicketSummaryOut,
     rule_error,
     session_out,
     ticket_out,
@@ -72,8 +74,9 @@ async def platform_tickets(
     paging: Paging,
     now: NowDep,
     status_: Annotated[TicketStatus | None, Query(alias="status")] = None,
-) -> Page[SupportTicketOut]:
-    """Öncelik (kritik önce), sonra en yeni. SLA aşımı yanıtta hesaplanır."""
+) -> SupportTicketPage:
+    """Öncelik (kritik önce), sonra en yeni. SLA aşımı yanıtta hesaplanır; `summary` tüm
+    tesislerin açık biletlerini veritabanında sayar (sayfa ve süzgeçten bağımsız)."""
     query = select(SupportTicket, Site).join(Site, Site.id == SupportTicket.site_id)
     if status_ is not None:
         query = query.where(SupportTicket.status == status_.value)
@@ -87,11 +90,13 @@ async def platform_tickets(
             )
         ).all()
         messages = await svc.messages_of(session, [t.id for t, _ in rows])
-    return Page(
+        summary = await svc.sla_summary(session, now)
+    return SupportTicketPage(
         items=[ticket_out(t, s, messages[t.id], now) for t, s in rows],
         page=paging.page,
         page_size=paging.page_size,
         total=total or 0,
+        summary=TicketSummaryOut.of(summary),
     )
 
 

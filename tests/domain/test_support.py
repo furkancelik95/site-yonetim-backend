@@ -30,6 +30,7 @@ from site_yonetim.domain.support import (
     session_effective_status,
     sla_due,
     ticket_number,
+    ticket_sla,
     view_as_effective_status,
 )
 
@@ -140,3 +141,30 @@ def test_sakin_olarak_goruntule_iznini_yonetici_verir() -> None:
     assert exceeding(other, [Permission.SUPPORT_VIEW_AS_RESIDENT]) == frozenset(
         {Permission.SUPPORT_VIEW_AS_RESIDENT}
     )
+
+
+def test_ticket_sla_tek_tanim() -> None:
+    due = sla_due(SupportTier.BUSINESS_HOURS, TicketPriority.CRITICAL, T0)
+    late = T0 + timedelta(hours=2)
+    waiting = ticket_sla(
+        status=TicketStatus.OPEN, first_due=due.first_due, resolve_due=due.resolve_due,
+        first_response_at=None, resolved_at=None, now=late,
+    )  # fmt: skip
+    assert (waiting.first_breached, waiting.first_response_overdue, waiting.breached) == (
+        True, True, True,
+    )  # fmt: skip
+    answered_late = ticket_sla(
+        status=TicketStatus.ANSWERED, first_due=due.first_due, resolve_due=due.resolve_due,
+        first_response_at=late, resolved_at=None, now=late,
+    )  # fmt: skip
+    assert (answered_late.first_response_overdue, answered_late.breached) == (False, True)
+    resolved = ticket_sla(
+        status=TicketStatus.RESOLVED, first_due=due.first_due, resolve_due=due.resolve_due,
+        first_response_at=None, resolved_at=T0 + timedelta(minutes=30), now=late,
+    )  # fmt: skip
+    assert resolved.first_response_overdue is False  # çözülen bilet "yanıt bekliyor" sayılmaz
+    in_time = ticket_sla(
+        status=TicketStatus.OPEN, first_due=due.first_due, resolve_due=due.resolve_due,
+        first_response_at=None, resolved_at=None, now=T0 + timedelta(minutes=10),
+    )  # fmt: skip
+    assert in_time.breached is False
