@@ -138,12 +138,13 @@ async def add_movement(
     reversal_of_id: uuid.UUID | None = None,
     created_by: str | None = None,
     lock: bool = True,
+    movement_id: uuid.UUID | None = None,
 ) -> CashMovement:
     if lock:
         await lock_accounts(session, [account.id])
     await ensure_day_writable(session, account.id, day)
     movement = CashMovement(
-        id=uuid.uuid7(),
+        id=movement_id or uuid.uuid7(),
         cash_account_id=account.id,
         date=day,
         inflow=inflow,
@@ -305,6 +306,16 @@ async def manual_movement(
     )  # fmt: skip
 
 
+async def _transfer_account(
+    session: AsyncSession, account_id: uuid.UUID, field: str
+) -> CashAccount:
+    """Aktarımda hata, formdaki alana (gönderen/alan) bağlanır — `cash_account_id` alanı yok."""
+    try:
+        return await active_account(session, account_id)
+    except FinanceRuleError as exc:
+        raise FinanceRuleError(exc.code, exc.message, field=field) from exc
+
+
 async def transfer(
     session: AsyncSession,
     *,
@@ -321,8 +332,8 @@ async def transfer(
         raise FinanceRuleError("same_account", "Gönderen ve alan hesap aynı olamaz.", field="to_id")
     check_positive(amount)
     check_not_future(day, today)
-    source = await active_account(session, from_id)
-    target = await active_account(session, to_id)
+    source = await _transfer_account(session, from_id, "from_id")
+    target = await _transfer_account(session, to_id, "to_id")
     label = clip(note, 200) or "Hesaplar arası aktarım"
     await lock_accounts(session, [source.id, target.id])
     for account_id in (source.id, target.id):
@@ -356,32 +367,67 @@ async def get_movement(session: AsyncSession, movement_id: uuid.UUID) -> CashMov
     return movement
 
 
+async def _counterpart(session: AsyncSession, movement: CashMovement) -> CashMovement:
+    """Aktarımın karşı bacağı: iki hareket birbirinin `source_id`'sini taşır (§10.3)."""
+    other = await get_movement(session, movement.source_id) if movement.source_id else None
+    if other is None or other.source != CashSource.TRANSFER.value:  # pragma: no cover - veri
+        raise FinanceRuleError(
+            "transfer_pair_missing", "Aktarımın karşı hareketi bulunamadı.", conflict=True
+        )
+    return other
+
+
 async def reverse_movement(
     session: AsyncSession, movement: CashMovement, *, reason: str, today: date, created_by: str
 ) -> CashMovement:
-    """Giriş/çıkış yer değiştirmiş hareket (§10.4). Kaynak kayıtlı hareket burada geri alınamaz."""
-    account = await get_account(session, movement.cash_account_id)
-    if account is None:  # pragma: no cover - FK
-        raise FinanceRuleError("cash_account_not_found", "Kasa/banka hesabı bulunamadı.")
-    await lock_accounts(session, [account.id])
-    already = await session.scalar(
-        select(exists().where(CashMovement.reversal_of_id == movement.id))
-    )
-    text_reason = check_movement_reversible(
-        MovementState(
-            CashSource(movement.source), movement.reversal_of_id is not None, bool(already)
-        ),
-        reason,
-    )
-    if not account.is_active:
-        raise inactive_account_error()
-    await period_lock.ensure_writable(session, movement.date, original=True)
-    return await add_movement(
-        session, account, day=today, inflow=movement.outflow, outflow=movement.inflow,
-        description=f"DÜZELTME — {movement.description}", source=CashSource(movement.source),
-        source_id=movement.source_id, reference=text_reason, reversal_of_id=movement.id,
-        created_by=created_by, lock=False,
-    )  # fmt: skip
+    """Giriş/çıkış yer değiştirmiş hareket (§10.4). Kaynak kayıtlı hareket burada geri alınamaz.
+
+    Aktarım (§10.3) iki bacaklıdır ve toplam bakiyeyi değiştirmez: bir bacağı geri almak
+    ikisini birlikte geri alır (iki ters hareket birbirinin kimliğini taşır); yalnız birini geri
+    almak toplamı bozardı. Döner: istenen hareketin ters kaydı."""
+    legs = [movement]
+    if movement.source == CashSource.TRANSFER.value and movement.reversal_of_id is None:
+        legs.append(await _counterpart(session, movement))
+    await lock_accounts(session, sorted({leg.cash_account_id for leg in legs}))
+    text_reason = reason
+    checked: list[tuple[CashMovement, CashAccount]] = []
+    for leg in legs:
+        already = await session.scalar(
+            select(exists().where(CashMovement.reversal_of_id == leg.id))
+        )
+        text_reason = check_movement_reversible(
+            MovementState(CashSource(leg.source), leg.reversal_of_id is not None, bool(already)),
+            reason,
+        )
+        account = await get_account(session, leg.cash_account_id)
+        if account is None:  # pragma: no cover - FK
+            raise FinanceRuleError("cash_account_not_found", "Kasa/banka hesabı bulunamadı.")
+        if not account.is_active:
+            raise inactive_account_error()
+        await period_lock.ensure_writable(session, leg.date, original=True)
+        checked.append((leg, account))
+    ids = {leg.id: uuid.uuid7() for leg in legs}
+    reversals: list[CashMovement] = []
+    for leg, account in checked:
+        pair = next((ids[o.id] for o in legs if o.id != leg.id), None)
+        reversals.append(
+            await add_movement(
+                session,
+                account,
+                day=today,
+                inflow=leg.outflow,
+                outflow=leg.inflow,
+                description=f"DÜZELTME — {leg.description}",
+                source=CashSource(leg.source),
+                source_id=pair or leg.source_id,
+                reference=text_reason,
+                reversal_of_id=leg.id,
+                created_by=created_by,
+                lock=False,
+                movement_id=ids[leg.id],
+            )
+        )
+    return reversals[0]
 
 
 # --- Ekstre (§10.5) ---------------------------------------------------------------
