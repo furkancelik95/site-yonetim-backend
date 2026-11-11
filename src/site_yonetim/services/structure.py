@@ -9,7 +9,7 @@ import uuid
 from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -21,6 +21,7 @@ from site_yonetim.domain.structure import (
     FULL_SHARE,
     SHARE_TOLERANCE,
     VERSIONED_FIELDS,
+    AccountKind,
     PartyRole,
     StructureRuleError,
     accounts_to_open,
@@ -36,6 +37,7 @@ from site_yonetim.models import (
     Block,
     CommonArea,
     LedgerAccount,
+    LedgerEntry,
     Period,
     Person,
     Unit,
@@ -43,6 +45,7 @@ from site_yonetim.models import (
     UnitParty,
     UnitType,
 )
+from site_yonetim.models.audit import AuditAction, record
 
 
 def _like(text: str) -> str:
@@ -199,6 +202,22 @@ async def require_person(session: AsyncSession, person_id: uuid.UUID) -> Person:
 class AddedParty:
     party: UnitParty
     opened_accounts: list[LedgerAccount]
+    # Kiracı eklenince sonlandırılan malik oturan (`-O`) hesapları (docs/03 §5)
+    closed_accounts: list[LedgerAccount] = field(default_factory=list)
+    # Bakiyesi sıfır olmadığı için açık bırakılan malik oturan hesapları (borç tahsil edilebilsin)
+    kept_open_accounts: list[LedgerAccount] = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
+class EndedParty:
+    party: UnitParty
+    # Kiracı çıkınca maliğe yeniden açılan (ya da ilk kez açılan) oturan hesapları
+    reopened_accounts: list[LedgerAccount] = field(default_factory=list)
+
+
+ZERO_BALANCE = Decimal(0)
+OCCUPANT_CLOSED_REASON = "Bölüme kiracı (oturan) eklendi; malikin oturan hesabı sonlandırıldı."
+OCCUPANT_REOPENED_REASON = "Bölümde etkin kiracı kalmadı; malik yeniden oturan, hesabı açıldı."
 
 
 async def _active_parties(
@@ -250,6 +269,67 @@ async def add_party(
     session.add(party)
 
     has_tenant = bool(await _active_parties(session, unit.id, PartyRole.TENANT, start_date))
+    opened, _ = await _open_accounts(
+        session,
+        unit=unit,
+        block=block,
+        person_id=person.id,
+        accounts=accounts_to_open(role, unit_has_active_tenant=has_tenant),
+    )
+    closed: list[LedgerAccount] = []
+    kept: list[LedgerAccount] = []
+    if role is PartyRole.TENANT:
+        closed, kept = await _close_owner_occupant_accounts(session, unit.id, person.id, start_date)
+    await session.flush()
+    return AddedParty(party, opened, closed, kept)
+
+
+async def end_party(session: AsyncSession, party: UnitParty, end_date: date) -> EndedParty:
+    """Kiracı çıkışı vb.: kayıt silinmez, bitiş tarihi girilir (docs/03 §4).
+
+    Çıkan kiracıysa ve ertesi gün bölümde etkin kiracı kalmıyorsa malik yeniden oturandır:
+    malikin oturan (`-O`) hesabı mevcut kuralla açılır — kapatılmışsa yeniden açılır, hiç
+    yoksa yeni kodla açılır (docs/03 §5, docs/04 §4.5 "kiracı çıktıysa malikin oturan hesabı").
+    """
+    check_party_end(party.start_date, party.end_date, end_date)
+    party.end_date = end_date
+    await session.flush()
+    reopened: list[LedgerAccount] = []
+    if party.role == PartyRole.TENANT.value:
+        day = end_date + timedelta(days=1)
+        if not await _active_parties(session, party.unit_id, PartyRole.TENANT, day):
+            unit = await session.get(Unit, party.unit_id)
+            block = await session.get(Block, unit.block_id) if unit is not None else None
+            if unit is not None and block is not None:
+                for owner in await _active_parties(session, unit.id, PartyRole.OWNER, day):
+                    opened, again = await _open_accounts(
+                        session,
+                        unit=unit,
+                        block=block,
+                        person_id=owner.person_id,
+                        accounts=accounts_to_open(PartyRole.OWNER, unit_has_active_tenant=False),
+                    )
+                    reopened.extend(
+                        a for a in [*opened, *again] if a.kind == AccountKind.OCCUPANT.value
+                    )
+                await session.flush()
+    return EndedParty(party, reopened)
+
+
+async def _open_accounts(
+    session: AsyncSession,
+    *,
+    unit: Unit,
+    block: Block,
+    person_id: uuid.UUID,
+    accounts: Iterable[tuple[AccountKind, str]],
+) -> tuple[list[LedgerAccount], list[LedgerAccount]]:
+    """Gereken cari hesapları açar → (yeni açılanlar, yeniden açılan kapalı oturan hesaplar).
+
+    Kişinin aynı türde hesabı varsa yenisi açılmaz (aynı kişi yeniden eklendi). Kiracı
+    eklenince kapatılmış malik oturan hesabı, malik yeniden oturan olunca aynı hesapla
+    (aynı referans koduyla) yeniden açılır; borç geçmişi tek hesapta kalır.
+    """
     base = reference_base(block.name, unit.number)
     taken = set(
         await session.scalars(
@@ -258,34 +338,102 @@ async def add_party(
             )
         )
     )
-    existing = set(
-        await session.scalars(
-            select(LedgerAccount.kind).where(
-                LedgerAccount.unit_id == unit.id, LedgerAccount.person_id == person.id
+    existing = {
+        a.kind: a
+        for a in await session.scalars(
+            select(LedgerAccount).where(
+                LedgerAccount.unit_id == unit.id, LedgerAccount.person_id == person_id
             )
         )
-    )
+    }
     opened: list[LedgerAccount] = []
-    for kind, letter in accounts_to_open(role, unit_has_active_tenant=has_tenant):
-        if kind.value in existing:  # aynı kişi yeniden eklendiyse hesabı zaten var
+    reopened: list[LedgerAccount] = []
+    for kind, letter in accounts:
+        current = existing.get(kind.value)
+        if current is not None:
+            if kind is AccountKind.OCCUPANT and current.is_closed:
+                current.is_closed = False
+                _audit_account(session, current, closed=False)
+                reopened.append(current)
             continue
         code = reference_code(base, letter, taken)
         taken.add(code)
         account = LedgerAccount(
-            unit_id=unit.id, person_id=person.id, kind=kind.value, reference_code=code
+            unit_id=unit.id, person_id=person_id, kind=kind.value, reference_code=code
         )
         session.add(account)
         opened.append(account)
-    await session.flush()
-    return AddedParty(party, opened)
+    return opened, reopened
 
 
-async def end_party(session: AsyncSession, party: UnitParty, end_date: date) -> UnitParty:
-    """Kiracı çıkışı vb.: kayıt silinmez, bitiş tarihi girilir (docs/03 §4)."""
-    check_party_end(party.start_date, party.end_date, end_date)
-    party.end_date = end_date
-    await session.flush()
-    return party
+async def _close_owner_occupant_accounts(
+    session: AsyncSession, unit_id: uuid.UUID, tenant_person_id: uuid.UUID, day: date
+) -> tuple[list[LedgerAccount], list[LedgerAccount]]:
+    """Kiracı (oturan) eklendi: malikin açık oturan (`-O`) hesabı sonlandırılır (docs/03 §5).
+
+    Sonlandırma mevcut hesap kapatma alanıyla (`is_closed`) yapılır: kapalı hesaba tahakkuk,
+    tahsilat, devir ve belge yazılmaz (docs/04 §4.5 "kapalı olmayan hesap"). Bakiyesi sıfır
+    olmayan hesap **açık bırakılır** — kapatılırsa borç tahsil edilemez, avans iade edilemez;
+    yönetici bakiyeyi kapatınca hesap bir sonraki kiracı değişiminde kapanır.
+    → (kapatılanlar, bakiyesi olduğu için açık kalanlar)
+    """
+    owners = select(UnitParty.person_id).where(
+        UnitParty.unit_id == unit_id,
+        UnitParty.role == PartyRole.OWNER.value,
+        UnitParty.start_date <= day,
+        or_(UnitParty.end_date.is_(None), UnitParty.end_date >= day),
+    )
+    accounts = list(
+        await session.scalars(
+            select(LedgerAccount)
+            .where(
+                LedgerAccount.unit_id == unit_id,
+                LedgerAccount.kind == AccountKind.OCCUPANT.value,
+                LedgerAccount.is_closed.is_(False),
+                LedgerAccount.person_id != tenant_person_id,
+                LedgerAccount.person_id.in_(owners),
+            )
+            .order_by(LedgerAccount.reference_code)
+        )
+    )
+    if not accounts:
+        return [], []
+    balances = dict(
+        (
+            await session.execute(
+                select(LedgerEntry.account_id, func.sum(LedgerEntry.debit - LedgerEntry.credit))
+                .where(LedgerEntry.account_id.in_([a.id for a in accounts]))
+                .group_by(LedgerEntry.account_id)
+            )
+        ).all()
+    )
+    closed: list[LedgerAccount] = []
+    kept: list[LedgerAccount] = []
+    for account in accounts:
+        if balances.get(account.id, ZERO_BALANCE) != ZERO_BALANCE:
+            kept.append(account)
+            continue
+        account.is_closed = True
+        _audit_account(session, account, closed=True)
+        closed.append(account)
+    return closed, kept
+
+
+def _audit_account(session: AsyncSession, account: LedgerAccount, *, closed: bool) -> None:
+    """Hesap kapama/açma denetim kaydı (`ledger_accounts` otomatik denetlenen tablo değil;
+    model değişikliği olmayan olay gibi `record()` ile, aynı transaction'da)."""
+    record(
+        session,
+        AuditAction.UPDATE,
+        "ledger_accounts",
+        account.id,
+        {
+            "reference_code": account.reference_code,
+            "kind": account.kind,
+            "is_closed": closed,
+        },
+        reason=OCCUPANT_CLOSED_REASON if closed else OCCUPANT_REOPENED_REASON,
+    )
 
 
 async def unit_accounts(session: AsyncSession, unit_id: uuid.UUID) -> list[LedgerAccount]:

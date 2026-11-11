@@ -590,6 +590,14 @@ class PartyCreate(BaseModel):
 class PartyAdded(BaseModel):
     party: PartyOut
     opened_accounts: list[AccountOut]
+    closed_accounts: list[AccountOut] = Field(
+        default_factory=list,
+        description="kiracı eklenince sonlandırılan malik oturan (`-O`) hesapları",
+    )
+    kept_open_accounts: list[AccountOut] = Field(
+        default_factory=list,
+        description="bakiyesi sıfır olmadığı için açık bırakılan malik oturan hesapları",
+    )
 
 
 _ROLE_LABEL = {
@@ -606,7 +614,8 @@ _ROLE_LABEL = {
 async def add_party(
     ctx: PeopleManage, unit_id: uuid.UUID, body: PartyCreate, today: TodayDep
 ) -> Written[PartyAdded]:
-    """Gerekli cari hesapları da açar: malik `-M` (kiracı yoksa `-O`), kiracı `-K` (docs/03 §5)."""
+    """Gerekli cari hesapları da açar: malik `-M` (kiracı yoksa `-O`), kiracı `-K`; kiracı
+    eklenince malikin bakiyesiz `-O` hesabı kapanır (docs/03 §5)."""
     unit, block, _ = await _load_unit(ctx, unit_id)
     try:
         if body.person_id is not None:
@@ -632,6 +641,15 @@ async def add_party(
     party = added.party
     codes = ", ".join(a.reference_code for a in added.opened_accounts)
     accounts_text = f"; {len(added.opened_accounts)} cari hesap açıldı ({codes})" if codes else ""
+    if added.closed_accounts:
+        closed = ", ".join(a.reference_code for a in added.closed_accounts)
+        accounts_text += f"; malikin oturan hesabı kapatıldı ({closed})"
+    if added.kept_open_accounts:
+        kept = ", ".join(a.reference_code for a in added.kept_open_accounts)
+        accounts_text += (
+            f"; malikin oturan hesabı bakiyesi olduğu için açık bırakıldı ({kept}), "
+            "yeni aidat kiracıya yazılır"
+        )
     return Written(
         data=PartyAdded(
             party=PartyOut(
@@ -644,6 +662,8 @@ async def add_party(
                 person=PersonOut.of(person, contact=can_contact(ctx)),
             ),
             opened_accounts=[AccountOut.of(a) for a in added.opened_accounts],
+            closed_accounts=[AccountOut.of(a) for a in added.closed_accounts],
+            kept_open_accounts=[AccountOut.of(a) for a in added.kept_open_accounts],
         ),
         message=(
             f"{unit.display_name(block.name)} — {person.full_name} "
@@ -671,7 +691,7 @@ async def end_party(
         raise NotFoundError
     party, person = row
     try:
-        await svc.end_party(ctx.session, party, body.end_date)
+        ended = await svc.end_party(ctx.session, party, body.end_date)
     except StructureRuleError as exc:
         raise _rule_error(exc) from None
     await ctx.session.commit()
@@ -685,5 +705,13 @@ async def end_party(
             is_current=party.start_date <= today and (party.end_date or today) >= today,
             person=PersonOut.of(person, contact=can_contact(ctx)),
         ),
-        message=f"{person.full_name} için bitiş tarihi kaydedildi; geçmiş kayıt korunur.",
+        message=(
+            f"{person.full_name} için bitiş tarihi kaydedildi; geçmiş kayıt korunur"
+            + (
+                f"; malikin oturan hesabı açıldı ({codes})"
+                if (codes := ", ".join(a.reference_code for a in ended.reopened_accounts))
+                else ""
+            )
+            + "."
+        ),
     )

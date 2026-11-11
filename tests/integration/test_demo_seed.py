@@ -107,9 +107,27 @@ async def test_demo_verisi_yuklenir(
         assert await _count(session_factory, Unit) == 84
         tenants = sum(1 for spec in SITES for o in occupancy_for(spec) if o.tenant)
         assert await _count(session_factory, Person) == 84 + tenants
-        # her malik: -M ve (kiracı eklenmeden önce) -O; her kiracı: -K
+        # her malik: -M ve (kiracı eklenmeden önce) -O; her kiracı: -K. Kiracı gelince malikin
+        # -O'su kapanır (docs/03 §5): her bölümde tek açık oturan hesabı.
         assert await _count(session_factory, LedgerAccount) == 84 * 2 + tenants
         assert tenants > 0
+        async with session_factory() as session:
+            closed = list(
+                await session.scalars(select(LedgerAccount).where(LedgerAccount.is_closed))
+            )
+            open_occupants = dict(
+                (
+                    await session.execute(
+                        select(LedgerAccount.unit_id, func.count())
+                        .where(LedgerAccount.kind == "occupant", ~LedgerAccount.is_closed)
+                        .group_by(LedgerAccount.unit_id)
+                    )
+                ).all()
+            )
+        assert len(closed) == tenants
+        assert all(a.kind == "occupant" and a.reference_code.endswith("-O") for a in closed)
+        assert len(open_occupants) == 84
+        assert set(open_occupants.values()) == {1}
         assert await _count(session_factory, Block) == 6
         assert await _count(session_factory, UnitType) == 9  # site başına 3
 

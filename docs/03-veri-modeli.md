@@ -232,6 +232,17 @@ yeni satırla eklenir. Tahakkuk motoru hangi tarihte kimin oturduğuna bu tablod
 Kod: blok adı + numara, yalnız harf/rakam, büyük harf. Çakışırsa sonuna sayı eklenir: `A12-M`, `A12-M2`, `A12-M3`.
 Kiracı yoksa malike oturan hesabı açılmasının sebebi: aidatın yazılacağı bir hesap her zaman bulunsun.
 
+**Kiracı değişince malikin oturan hesabı (test raporu, 11.11.2026):** bölümde aynı anda tek
+etkin oturan hesabı olur.
+- Kiracı eklenince, kiracının başlangıç gününde etkin maliklerin açık `-O` hesabı **kapatılır**
+  (`is_closed = true`; silinmez, geçmişi yerinde). Kapalı hesaba tahakkuk, tahsilat, devir ve
+  borçsuzluk belgesi yazılmaz. Denetim kaydına `ledger_accounts` güncellemesi gerekçesiyle yazılır.
+- **Bakiyesi sıfır olmayan `-O` kapatılmaz** (kapalı hesaba tahsilat yazılamaz; borç/avans takılı
+  kalmasın) — yanıtta `kept_open_accounts`. Yeni aidat yine kiracıya yazılır (`04` §4.5).
+- Kiracı çıkınca (`end_date`) ertesi gün etkin kiracı kalmıyorsa etkin malikin `-O` hesabı aynı
+  kodla **yeniden açılır**; hiç yoksa yukarıdaki kuralla açılır.
+- Excel aktarımı kiracıyı baştan bildiği için kiracılı bölümde `-O` hiç açmaz.
+
 ### `ledger_entries` [K] — borç/alacak hareketi, **değişmez**
 | Sütun | Tip | Not |
 |---|---|---|

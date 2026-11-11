@@ -68,7 +68,8 @@ def accounts_to_open(
 
     - Malik → malik hesabı (`-M`); kiracı yoksa malike oturan hesabı da (`-O`): aidatın
       yazılacağı bir hesap her zaman bulunsun.
-    - Kiracı → kiracıya oturan hesabı (`-K`).
+    - Kiracı → kiracıya oturan hesabı (`-K`); malikin bakiyesiz `-O` hesabı kapanır, kiracı
+      çıkınca yeniden açılır (`services/structure.add_party` / `end_party`).
     - Oturan / vekil → hesap açılmaz.
     """
     if role is PartyRole.OWNER:
