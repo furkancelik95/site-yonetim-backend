@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 
 from site_yonetim.api.v1.finance_common import finance_error
 from site_yonetim.api.v1.router import API_V1_PREFIX, api_router
-from site_yonetim.core.config import Settings, get_settings
+from site_yonetim.core.config import Environment, Settings, get_settings
 from site_yonetim.core.errors import api_error_response, install_error_handlers
 from site_yonetim.core.logging import configure_logging
 from site_yonetim.core.middleware import (
@@ -51,10 +51,35 @@ _UPLOAD_LIMITS = (
 )
 
 
+def warm_routes(app: FastAPI) -> int:
+    """Yönlendirme bağlamını açılışta kurar; kurulan alt yönlendirici sayısını döner.
+
+    FastAPI (0.14x) iç içe yönlendiricilerin uç bağımlılık ağacını ilk eşleşen istekte tembel
+    kurar; 360+ uçta bu, her sürecin ilk site isteğine ~1 sn (yavaş makinede 2–3 sn) ekliyordu
+    (test raporu #6: raporlar ilk açılışta 3+ sn). Sonuç FastAPI'nin kendi alanlarında kalır —
+    yeni önbellek yok. İç API'dir: yöntemler yoksa (sürüm değişti) sessizce hiçbir şey yapmaz.
+    """
+    count = 0
+    stack: list[object] = list(app.router.routes)
+    while stack:
+        route = stack.pop()
+        candidates = getattr(route, "effective_candidates", None)
+        if not callable(candidates):
+            continue
+        stack.extend(candidates())
+        low_priority = getattr(route, "effective_low_priority_routes", None)
+        if callable(low_priority):
+            low_priority()
+        count += 1
+    return count
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Veritabanı tanımlıysa motor açılışta kurulur, kapanışta bırakılır."""
     settings: Settings = app.state.settings
+    if settings.environment is not Environment.TEST:  # testler her seferinde uygulama kurar
+        warm_routes(app)
     if settings.database_url is not None:
         engine = create_engine_from_settings(settings)
         app.state.engine = engine
