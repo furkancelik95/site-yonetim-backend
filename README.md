@@ -46,7 +46,9 @@ Değişkenler yoksa entegrasyon testleri yerelde atlanır; CI'da atlanmaz.
 
 `ENVIRONMENT=development` ve `SEED_DEMO_DATA=true` iken uygulama açılışta demo verisini yükler
 (idempotent; veri varsa dokunmaz). Elle: `uv run python -m site_yonetim.cli seed-demo`.
-Üretimde ve testte **reddedilir**.
+Üretimde ve testte **reddedilir**. SMS/e-posta kodlarını ekranda ve platformun test gelen
+kutusunda görmek için `TEST_INBOX_ENABLED=true` verin — boşsa kapalıdır, üretimde açılamaz
+(`env.example`).
 
 | E-posta (parola `Demo1234!`) | Rol | Görür |
 |---|---|---|

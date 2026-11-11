@@ -142,10 +142,10 @@ Her hata aynı gövdeyi döner:
 | Yöntem | Yol | Durum | Not |
 |---|---|---|---|
 | GET | `/platform/overview` | R | müşteri sayısı, site sayısı, bölüm sayısı, tavanı aşan siteler, müşteri ve site listeleri (sayfalı: `customers`, `sites`). Yalnız kullanım ölçüsü — borç/sakin verisi yok (`05` §5) |
-| GET | `/platform/plans` | R | sayfalı |
+| GET | `/platform/plans?scope=site\|organization` | R | sayfalı; her planda `scope` (`site` · `organization`). `scope` boşsa hepsi (geriye uyumlu); **site formu `scope=site` kullanır**. Şirket planı = `portfolio` modülünü içeren plan (Yönetim Şirketi). Geçersiz `scope` 422 |
 | POST | `/platform/customers` | R | `{name, tax_number?, plan_id, admin_full_name, admin_email}` → organizasyon + ilk yetkili (Sahip) + **bir kez gösterilen geçici parola** (`Cache-Control: no-store`). Tek transaction. Aynı e-posta 409 `email_already_exists`, olmayan plan 422. `tax_number`: 10 hane VKN ya da 11 hane T.C. kimlik no, sağlama basamağıyla doğrulanır (422 `fields.tax_number`) |
-| POST | `/platform/sites` | R | `{name, slug?, plan_id, organization_id?, property_kind, city?, district?, iban?, bank_name?}` → site + varsayılan kurulum (`10-demo-veri.md` §3). IBAN TR + mod-97 doğrulanır. Aynı ad (Türkçe büyük/küçük harf duyarsız) ya da slug 409 `site_already_exists`. Yanıtta ayrıca `requested_slug` (gönderilmediyse null) ve `slug_adjusted` (gönderilen ek `04` §11 kuralıyla düzeltildi); mesaj kullanılan eki söyler. Ad "… Sitesi/Site" ile bitiyorsa mesaja "sitesi" eklenmez |
-| PATCH | `/platform/sites/{id}/plan` | R | `{plan_id}` |
+| POST | `/platform/sites` | R | `{name, slug?, plan_id, organization_id?, property_kind, city?, district?, iban?, bank_name?}` → site + varsayılan kurulum (`10-demo-veri.md` §3). IBAN TR + mod-97 doğrulanır. Aynı ad (Türkçe büyük/küçük harf duyarsız) ya da slug 409 `site_already_exists`. Yanıtta ayrıca `requested_slug` (gönderilmediyse null) ve `slug_adjusted` (gönderilen ek `04` §11 kuralıyla düzeltildi); mesaj kullanılan eki söyler. Ad "… Sitesi/Site" ile bitiyorsa mesaja "sitesi" eklenmez. Şirket planı (`scope: organization`) 422 `organization_plan` (`fields.plan_id`) |
+| PATCH | `/platform/sites/{id}/plan` | R | `{plan_id}` — şirket planı 422 `organization_plan` (`fields.plan_id`) |
 | PATCH | `/platform/sites/{id}` | R | `{name?, address?, city?, district?}` — yalnız gönderilen alanlar; boş metin adres/il/ilçeyi temizler. Adres eki ve plan buradan değişmez. Aynı ad 409 `site_already_exists`, olmayan site 404 |
 | PATCH | `/platform/customers/{id}` | R | `{name}` (3–150) → `{organization_id, name, tax_number, plan_id}`. Vergi no ve plan değişmez; müşteride iletişim/adres alanı yok |
 
@@ -174,8 +174,8 @@ Her hata aynı gövdeyi döner:
 | GET | `/sites/{slug}/units/{id}` | `units.read` | Y | bölüm ayrıntısı + taraflar (geçmiş dahil) + hesaplar |
 | POST | `/sites/{slug}/units` | `units.manage` | Y | elle bölüm ekleme |
 | PATCH | `/sites/{slug}/units/{id}` | `units.manage` | Y | m², arsa payı, tip değişirse **bugünden geçerli** öznitelik geçmişi satırı yazılır (üzerine yazılmaz, YAP-02 S3); ileri tarih için `…/attributes` |
-| POST | `/sites/{slug}/units/{id}/parties` | `people.manage` | Y | `{role, start_date, share_percent?, person_id \| person}` — gerekli cari hesapları da açar (`03` §5); malik hisseleri toplamı ≤ 100 (409) |
-| POST | `/sites/{slug}/units/{id}/parties/{party_id}/end` | `people.manage` | Y | `{end_date}` — kiracı çıkışı. **Silme değil, bitiş tarihi** |
+| POST | `/sites/{slug}/units/{id}/parties` | `people.manage` | Y | `{role, start_date, share_percent?, person_id \| person}` — gerekli cari hesapları da açar (`03` §5); malik hisseleri toplamı ≤ 100 (409). Yanıt `{party, opened_accounts[], closed_accounts[], kept_open_accounts[]}`. Kiracı eklenince malikin oturan (`-O`) hesabı başlangıç ayı geçince ve bakiyesi sıfırsa kapanır (K9 kıst malik payı o aya yazılsın): koşullar zaten sağlanıyorsa hemen (`closed_accounts`, `is_closed: true`), değilse günlük `run-structure-jobs` kapatır — `kept_open_accounts[]` = hesap alanları + `pending_close: true`, `close_from` (en erken kapanış günü), `has_balance` |
+| POST | `/sites/{slug}/units/{id}/parties/{party_id}/end` | `people.manage` | Y | `{end_date}` — kiracı çıkışı. **Silme değil, bitiş tarihi**. Ertesi gün etkin kiracı kalmıyorsa malikin `-O` hesabı aynı kodla yeniden açılır (yoksa açılır); mesajda kod yazar |
 | POST · PATCH | `/sites/{slug}/blocks`, `/blocks/{id}` | `units.manage` | Y | blok ekle/güncelle; ad sitede benzersiz (Türkçe harf duyarsız) |
 | GET | `/sites/{slug}/people` | `people.read` | Y | sayfalı; `q` ad soyad içinde (Türkçe harf duyarsız). Birleştirilmiş kişi listelenmez. `phone`/`email` **maskeli** (`+90 532 *** ** 33`, `a***@ornek.com`) ve yalnız `people.contact` ile; aksi halde null (bölüm ayrıntısındaki taraflarda da aynı) |
 | POST · PATCH | `/sites/{slug}/people`, `/people/{id}` | `people.manage` | Y | ad baş harf büyük, soyad tamamı büyük; telefon E.164 (cep); e-posta küçük harf |
@@ -419,7 +419,7 @@ Okuma onayı (16.3): son onay = yayın + `ack_hours`; yalnız teslim kaydı olan
 | PUT | `/sites/{slug}/notification-templates/{code}` | `announcements.publish` | Y | `{variants[]}` → yeni sürüm (değişmez tablo). Türkçe zorunlu (422 `fields.variants`), zorunlu/tanımsız değişken ve SMS 3 parça sınırı 422 `fields.variants.{lang}` |
 | POST | `/sites/{slug}/notification-templates/{code}/reset` | `announcements.publish` | Y | sistem metnine dön (yeni sürüm) |
 | GET | `/sites/{slug}/emergency-info-card` · `/resident/emergency-info-card` | personel · sakin | Y | `{muster_points[{id, name, directions, map}], phones[{label, number}], instructions{earthquake, fire, flood, gas}, block_notes[{block_id, block_name, note}], version, updated_at, updated_by}`; `ETag` + `If-None-Match` → 304 (çevrimdışı önbellek) |
-| PUT | `/sites/{slug}/emergency-info-card` | `announcements.publish` | Y | yeni sürüm; ≥1 toplanma alanı, telefon 3–13 hane, kroki PNG/JPEG/WEBP data URL (≤ ~300 KB) |
+| PUT | `/sites/{slug}/emergency-info-card` | `announcements.publish` | Y | yeni sürüm; ≥1 toplanma alanı; telefon: beyaz listedeki kısa acil kod (110, 112, 114, 122, 155, 156, 158, 177, 183–187) olduğu gibi, değilse sabit/cep TR numarası 10 hane → E.164 (`0212 555 00 00` → `+902125550000`); yanlışsa 422 `fields.phones.{i}.number`; kroki PNG/JPEG/WEBP data URL (≤ ~300 KB) |
 | POST | `/sites/{slug}/emergencies` | `announcements.publish` ya da `security.incidents` | Y | `{kind, scope: all\|blocks, block_ids, message}`; tek aktif (409 `already_active`); kapsam sabitlenir; onay gerekmez, denetime yazılır; kapsamdakilere `urgent` bildirim |
 | GET | `/sites/{slug}/emergencies/active` | + `security.visitors` | Y | pano: `rows[{unit_id, unit_name, block_id, block_name, status: safe\|muster\|help\|none, note, muster_point, by, method, at}]` (yardım isteyen üstte), `totals` · yoksa `null` |
 | GET | `/sites/{slug}/emergencies` | + `security.visitors` | Y | geçmiş: özet, `purge_on`, `purged` |
@@ -751,7 +751,7 @@ dışarı gitmez; `test_provider: true`).
 | PUT · DELETE | `/sites/{slug}/scheduled-reports/{id}` | `reports.schedule` | Y | güncelle / pasifleştir (204; geçmiş korunur) |
 | POST | `/sites/{slug}/scheduled-reports/{id}/run` | `reports.schedule` | Y | "Şimdi gönder" → `Written[{run_at, period_label, status: sent\|skipped\|failed, recipient_count}]` |
 | GET | `/sites/{slug}/scheduled-reports/{id}/runs` | `reports.schedule` | Y | çalışma geçmişi (sayfalı) |
-| GET | `/platform/test-inbox?to=` | platform yöneticisi | Y | test sağlayıcısının son 100 mesajı (kodlar ve davet bağlantıları dahil, süreç belleği). **Yalnız geliştirme/demo**; üretimde ya da `TEST_INBOX_ENABLED=false` iken 404 |
+| GET | `/platform/test-inbox?to=` | platform yöneticisi | Y | test sağlayıcısının son 100 mesajı (kodlar ve davet bağlantıları dahil, süreç belleği). **Yalnız geliştirme/demo**, `TEST_INBOX_ENABLED=true` iken; üretimde ya da değişken boş/`false` iken 404 (11.11.2026'dan beri boşsa kapalı — demo kurulumu `true` yazar). Giriş kodu yanıtındaki `test_code` ve davet `preview_url` de aynı ayara bağlı |
 
 Zamanlanmış işler: `run-notification-jobs` (dakikalık: kritik SMS yedeği + sessiz saat kuyruğu +
 yeniden deneme), `run-scheduled-reports` (dakikalık). Rapor içerikleri sonra bağlanır; e-posta
@@ -921,7 +921,7 @@ Modül kapısı yok (finans çekirdeği; `docs/12` K-SAT). Okuma `expenses.read`
 | Yöntem | Yol | İzin | Durum | Not |
 |---|---|---|---|---|
 | GET | `/sites/{slug}/vendors?q=&status=` | `expenses.read` | R | sayfalı `{id, name, tax_no, phone, email, iban_masked ("TR33 •••• •••• 1326"), category, status: active\|passive\|blacklist, note, rating_avg ("4.5"), rating_count, order_count}`; IBAN hiçbir okumada açık dönmez |
-| POST · PATCH | `/sites/{slug}/vendors[/{id}]` | `expenses.manage` | R | `{name 2–120, tax_no (10 VKN / 11 TCKN, site içinde tekil → 422 fields.tax_no), phone?, email?, iban? (TR + mod-97), category?, status, note?}`; düzenlemede boş IBAN mevcut olanı korur |
+| POST · PATCH | `/sites/{slug}/vendors[/{id}]` | `expenses.manage` | R | `{name 2–120, tax_no (10 VKN / 11 TCKN, site içinde tekil → 422 fields.tax_no), phone? (sabit/cep TR, 10 hane → E.164; 422 `fields.phone`), email?, iban? (TR + mod-97), category?, status, note?}`; düzenlemede boş IBAN mevcut olanı korur |
 | GET · PUT | `/sites/{slug}/purchase-settings` | okuma `expenses.read`, yazma `expenses.manage` | R | `{thresholds: [{max, quotes}], above_quotes, tolerance_percent ("1.00"), link_days}`; varsayılan < 10.000 → 1, < 100.000 → 2, üstü 3; %1; 7 gün |
 | GET | `/sites/{slug}/purchase-budget?category_id=` | `expenses.read` | R | `{has_budget, annual, spent, committed, remaining}` — yürürlükteki işletme projesi kalemleri; bu yılın gerçekleşen gideri; onay bekleyen/onaylı talepler (seçilen teklif tutarı) + açık siparişlerin ödenmemiş kısmı |
 | GET | `/sites/{slug}/purchase-requests?status=` | `expenses.read` | R | sayfalı satır `{id, number "ST-2026-0001", title, category_name, over_budget, estimated_total, quote_count, required_quotes, status, order_number, …}` |

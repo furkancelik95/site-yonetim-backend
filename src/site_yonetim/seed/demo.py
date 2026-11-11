@@ -273,7 +273,7 @@ async def _seed_demo(
                 iban=spec.iban,
             )
             with site_scope(site.id):
-                await _seed_structure(session, site, spec)
+                await _seed_structure(session, site, spec, today)
                 for key in spec.extra_modules:
                     await set_module_enabled(session, site, key, enable=True)
                 await _seed_finance(session, spec, today)
@@ -329,7 +329,7 @@ async def _seed_demo(
     return True
 
 
-async def _seed_structure(session: AsyncSession, site: Site, spec: SiteSpec) -> None:
+async def _seed_structure(session: AsyncSession, site: Site, spec: SiteSpec, today: date) -> None:
     types = {t.name: t.id for t in await session.scalars(select(UnitType))}
     blocks = {}
     for order, block_spec in enumerate(spec.blocks):
@@ -361,10 +361,12 @@ async def _seed_structure(session: AsyncSession, site: Site, spec: SiteSpec) -> 
     )
     await session.flush()
     logger.info("%s: %d blok, %d bölüm", site.name, len(blocks), len(units))
-    await _seed_people(session, spec, blocks)
+    await _seed_people(session, spec, blocks, today)
 
 
-async def _seed_people(session: AsyncSession, spec: SiteSpec, blocks: dict[str, Block]) -> None:
+async def _seed_people(
+    session: AsyncSession, spec: SiteSpec, blocks: dict[str, Block], today: date
+) -> None:
     units = {(unit.block_id, unit.number): unit for unit in await session.scalars(select(Unit))}
     for occ in occupancy_for(spec):
         block = blocks[occ.block]
@@ -379,7 +381,8 @@ async def _seed_people(session: AsyncSession, spec: SiteSpec, blocks: dict[str, 
             session.add(tenant)
             await session.flush()
             await add_party(session, unit=unit, block=block, person=tenant,
-                            role=PartyRole.TENANT, start_date=occ.tenant_since)  # fmt: skip
+                            role=PartyRole.TENANT, start_date=occ.tenant_since,
+                            today=today)  # fmt: skip
 
 
 async def _seed_finance(session: AsyncSession, spec: SiteSpec, today: date) -> None:

@@ -44,8 +44,15 @@ JWT_SECRET=$(rnd)
 LOG_LEVEL=INFO
 # Demo: yönetici hesaplarında 2FA kurulumu uyarıyla istenir, süre dolup erişim kapanmaz.
 MFA_GRACE_DAYS=180
+# Demo: SMS/e-posta kodları test gelen kutusunda ve giriş ekranında görünür (boşsa kapalı).
+TEST_INBOX_ENABLED=true
 EOF
   umask 022
+fi
+# Önceki kurulumların api.env'i: test gelen kutusu artık varsayılan kapalı. Demo (development)
+# kurulumunda satır yoksa eklenir; elle yazılmış değere ve üretim kurulumuna dokunulmaz.
+if grep -q '^ENVIRONMENT=development' "$DIR/api.env" && ! grep -q '^TEST_INBOX_ENABLED=' "$DIR/api.env"; then
+  printf '%s\n' 'TEST_INBOX_ENABLED=true' >>"$DIR/api.env"
 fi
 sed -i "s|^DOMAIN=.*|DOMAIN=$DOMAIN|" "$DIR/.env"
 ln -sf "$DIR/.env" "$DIR/backend/deploy/.env"

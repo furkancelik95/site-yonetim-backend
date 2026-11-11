@@ -8,13 +8,13 @@ import pytest
 from site_yonetim.domain.communication import (
     SYSTEM_BY_CODE,
     Variant,
+    card_phone,
     check_period,
     check_variants,
     in_quiet,
     shift_out_of_quiet,
     sms_count,
     valid_map,
-    valid_phone,
 )
 
 TZ = ZoneInfo("Europe/Istanbul")
@@ -70,9 +70,13 @@ def test_kroki_ve_telefon() -> None:
     assert valid_map(png)
     assert not valid_map("data:image/svg+xml;base64,PHN2Zz4=")
     assert not valid_map("data:image/png;base64,/9j/4AAQSkZJRgABAQ")  # JPEG içerik PNG diye
-    assert valid_phone("112")
-    assert valid_phone("+905551112233")
-    assert not valid_phone("12")
+    assert card_phone("112") == "112"
+    assert card_phone(" 155 ") == "155"
+    assert card_phone("+905551112233") == "+905551112233"
+    assert card_phone("0212 555 00 00") == "+902125550000"
+    for bad in ("12", "999", "123", "+49 151 23456789", "0212 555", "+112"):
+        with pytest.raises(ValueError, match=r"10 hane|Kısa numara"):
+            card_phone(bad)
 
 
 def test_seffaflik_donemi() -> None:
