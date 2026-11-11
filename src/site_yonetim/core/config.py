@@ -68,8 +68,9 @@ class Settings(BaseSettings):
     email_provider: Literal["test"] = "test"
     push_provider: Literal["test"] = "test"
     # Test sağlayıcısının son mesajlarını (giriş kodları dahil) gösterme: platform yöneticisine
-    # "test gelen kutusu" ve demo girişinde kodun ekranda görünmesi. Boşsa geliştirme/test
-    # ortamında açık; ÜRETİMDE HİÇBİR KOŞULDA açılmaz (açılış reddedilir).
+    # "test gelen kutusu" ve demo girişinde kodun ekranda görünmesi. Boşsa her ortamda KAPALI;
+    # demo kurulumu ve test yapılandırması açıkça `true` verir. ÜRETİMDE HİÇBİR KOŞULDA açılmaz
+    # (açılış reddedilir).
     test_inbox_enabled: bool | None = None
     # Davet ve bildirim bağlantılarının kökü (frontend adresi). Boşsa ilk CORS kaynağı.
     public_web_url: str | None = None
@@ -127,7 +128,7 @@ class Settings(BaseSettings):
         """Test sağlayıcısının mesajları (kodlar dahil) gösterilebilir mi? Üretimde asla."""
         if self.is_production:
             return False
-        return True if self.test_inbox_enabled is None else self.test_inbox_enabled
+        return bool(self.test_inbox_enabled)
 
     @property
     def web_url(self) -> str:

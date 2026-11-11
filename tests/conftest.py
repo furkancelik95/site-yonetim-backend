@@ -23,6 +23,11 @@ def make_settings() -> SettingsFactory:
             "log_level": "WARNING",
         }
         values.update(overrides)
+        # Test gelen kutusu varsayılan kapalı; test kodunu/davet bağlantısını yanıtta görmeye
+        # dayanan testler için açıkça açık. Üretimde açılamaz (ayar reddedilir) → orada verilmez.
+        # Kapalı davranış testleri `test_inbox_enabled=False` ile ezer.
+        if str(values["environment"]) != "production":
+            values.setdefault("test_inbox_enabled", True)
         return Settings(_env_file=None, **values)
 
     return factory
