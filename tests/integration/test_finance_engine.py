@@ -345,6 +345,36 @@ async def test_taslak_yenile_reddet_iptal(world: World, other: dict[str, str]) -
     assert (await w.post("/charge-runs/drafts", {"charge_date": "2026-06-01"})).status_code == 201
 
 
+async def test_onaya_gonderilen_taslak_onaylar_listesine_duser(
+    world: World, other: dict[str, str]
+) -> None:
+    """Test raporu #5: "Onaya gönder" (`charge-runs/{id}/submit`) sonrası talep onaycının
+    Onaylar kutusunda (bekleyenler) ve gönderenin "taleplerim" sekmesinde görünür."""
+    w = world
+    await finalized_plan(w)
+    run = (await w.post("/charge-runs/drafts", {"charge_date": "2026-06-01"})).json()["data"]
+    await rule(w, "charge_run")
+    sent = await w.post(f"/charge-runs/{run['id']}/submit")
+    assert sent.status_code == 202, sent.text
+    request_id = sent.json()["data"]["approval_request_id"]
+
+    async def tab(headers: dict[str, str], name: str) -> list[dict[str, Any]]:
+        response = await w.api.get(w.url("/approvals"), params={"tab": name}, headers=headers)
+        assert response.status_code == 200, response.text
+        items: list[dict[str, Any]] = response.json()["items"]
+        return items
+
+    [pending] = [r for r in await tab(other, "pending") if r["id"] == request_id]
+    assert pending["action_type"] == "charge_run"
+    assert request_id in [r["id"] for r in await tab(w.headers, "mine")]
+    # Gönderen kendi talebini onaylayamaz: onun bekleyenlerinde yok.
+    assert request_id not in [r["id"] for r in await tab(w.headers, "pending")]
+    await approve(w, other, request_id)
+    # Tahakkuk tarihi geçmişse onayla birlikte kesinleşir (FIN-05 adım 8)
+    assert (await w.get(f"/charge-runs/{run['id']}")).json()["status"] in ("approved", "posted")
+    assert request_id not in [r["id"] for r in await tab(other, "pending")]
+
+
 # --- K2 gecikme tazminatı -----------------------------------------------------------------
 
 
