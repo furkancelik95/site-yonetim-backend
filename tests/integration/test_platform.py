@@ -262,3 +262,72 @@ async def test_olmayan_plana_gecilemez(
     )
 
     assert response.status_code == 422
+
+
+# --- Plan kapsamı (test raporu: site formunda şirket planı görünüyordu) ------------------
+
+
+@pytest.fixture
+async def company_plan(session_factory: Factory, plans: dict[str, str]) -> str:
+    async with session_factory() as session, session.begin():
+        plan = Plan(
+            name="Yönetim Şirketi",
+            allowed_modules=[*STANDART, "portfolio"],
+            sort_order=4,
+        )
+        session.add(plan)
+    return str(plan.id)
+
+
+async def test_planlar_kapsama_gore_suzulur_suzgecsiz_hepsi(
+    api: httpx2.AsyncClient, admin: dict[str, str], company_plan: str
+) -> None:
+    async def names(query: str) -> list[tuple[str, str]]:
+        response = await api.get(f"/api/v1/platform/plans{query}", headers=admin)
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["total"] == len(body["items"])
+        return [(p["name"], p["scope"]) for p in body["items"]]
+
+    everything = [
+        ("Başlangıç", "site"),
+        ("Standart", "site"),
+        ("Yönetim Şirketi", "organization"),
+    ]
+    assert await names("") == everything  # geriye uyumlu: süzgeçsiz bugünkü gibi
+    assert await names("?scope=site") == everything[:2]
+    assert await names("?scope=organization") == everything[2:]
+    wrong = await api.get("/api/v1/platform/plans?scope=hepsi", headers=admin)
+    assert wrong.status_code == 422
+
+
+async def test_siteye_sirket_plani_atanamaz(
+    api: httpx2.AsyncClient, admin: dict[str, str], plans: dict[str, str], company_plan: str
+) -> None:
+    created = await api.post(
+        "/api/v1/platform/sites",
+        headers=admin,
+        json={"name": "Deneme Sitesi", "plan_id": company_plan},
+    )
+    assert created.status_code == 422
+    assert created.json()["error"]["code"] == "organization_plan"
+    assert "yönetim şirketi planı" in created.json()["error"]["fields"]["plan_id"]
+
+    site = (
+        await api.post(
+            "/api/v1/platform/sites",
+            headers=admin,
+            json={"name": "Deneme Sitesi", "plan_id": plans["Standart"]},
+        )
+    ).json()["data"]
+    changed = await api.patch(
+        f"/api/v1/platform/sites/{site['id']}/plan", headers=admin, json={"plan_id": company_plan}
+    )
+    assert changed.status_code == 422
+    assert changed.json()["error"]["fields"]["plan_id"].startswith("'Yönetim Şirketi'")
+
+
+async def test_musteriye_sirket_plani_atanabilir(
+    api: httpx2.AsyncClient, admin: dict[str, str], company_plan: str
+) -> None:
+    assert (await _customer(api, admin, company_plan)).status_code == 201
