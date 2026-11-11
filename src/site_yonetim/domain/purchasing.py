@@ -21,7 +21,11 @@ from enum import StrEnum
 
 from site_yonetim.domain.money import ZERO, round_money
 from site_yonetim.domain.text import format_money_tr
-from site_yonetim.domain.validation import normalize_email_address, normalize_iban
+from site_yonetim.domain.validation import (
+    normalize_email_address,
+    normalize_iban,
+    normalize_tr_phone,
+)
 
 
 class VendorStatus(StrEnum):
@@ -198,15 +202,8 @@ class CheckedVendor:
 
 
 def normalize_phone(value: str) -> str:
-    """Sabit ya da cep: 10 hane (baştaki 0/90 atılır) → `+90…`."""
-    digits = "".join(ch for ch in value if ch.isdigit())
-    if len(digits) == 12 and digits.startswith("90"):
-        digits = digits[2:]
-    elif len(digits) == 11 and digits.startswith("0"):
-        digits = digits[1:]
-    if len(digits) != 10 or digits.startswith("0"):
-        raise ValueError("Telefon 10 hane olmalı (ör. 0212 123 45 67).")
-    return f"+90{digits}"
+    """Tedarikçi telefonu: sabit ya da cep TR numarası → `+90…` (`normalize_tr_phone`)."""
+    return normalize_tr_phone(value)
 
 
 def check_vendor(data: VendorInput) -> CheckedVendor:

@@ -1,9 +1,12 @@
 import pytest
 
 from site_yonetim.domain.validation import (
+    EMERGENCY_SHORT_CODES,
     normalize_email_address,
+    normalize_emergency_phone,
     normalize_iban,
     normalize_tax_number,
+    normalize_tr_phone,
 )
 
 
@@ -54,3 +57,41 @@ def test_vkn_10_hane() -> None:
     for bad in ("123456789", "12345678901", "12345abcde"):
         with pytest.raises(ValueError, match="10 haneli"):
             normalize_tax_number(bad)
+
+
+# --- Sabit/cep TR telefonu ve acil kart numarası (test raporu) ------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("0212 123 45 67", "+902121234567"),  # sabit, İstanbul
+        ("(0312) 555 00 00", "+903125550000"),  # sabit, Ankara
+        ("0532 123 45 67", "+905321234567"),  # cep
+        ("+90 532 123 45 67", "+905321234567"),
+        ("905321234567", "+905321234567"),
+        ("2121234567", "+902121234567"),
+        ("0850 222 33 44", "+908502223344"),
+    ],
+)
+def test_tr_telefonu_sabit_ve_cep_e164(raw: str, expected: str) -> None:
+    assert normalize_tr_phone(raw) == expected
+
+
+@pytest.mark.parametrize(
+    "raw", ["", "123", "0212 123 45", "00212 123 45 67", "0012121234567", "+49 151 23456789"]
+)
+def test_tr_telefonu_gecersiz(raw: str) -> None:
+    with pytest.raises(ValueError, match="10 hane"):
+        normalize_tr_phone(raw)
+
+
+def test_acil_kisa_kodlar_beyaz_liste() -> None:
+    assert {"112", "110", "155", "156", "177", "122"} <= EMERGENCY_SHORT_CODES
+    for code in EMERGENCY_SHORT_CODES:
+        assert normalize_emergency_phone(code) == code
+    assert normalize_emergency_phone("0212 123 45 67") == "+902121234567"
+    with pytest.raises(ValueError, match="Kısa numara"):
+        normalize_emergency_phone("999")
+    with pytest.raises(ValueError, match="Acil kod"):
+        normalize_emergency_phone("12")

@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from enum import StrEnum
 
+from site_yonetim.domain.validation import normalize_emergency_phone
+
 # --- Okuma onayı ve zamanlama (ILT-01, 16.2–16.3) ----------------------------------------
 
 ACK_HOURS_MIN, ACK_HOURS_MAX = 1, 720
@@ -275,15 +277,12 @@ MUSTER_POINTS_MAX, PHONES_MAX = 20, 20
 MAP_MAX_CHARS = 400_000  # küçültülmüş görsel (data URL); belge deposuna taşınabilir
 _MAP_PREFIX = re.compile(r"^data:image/(png|jpeg|webp);base64,")
 _MAGIC = {"png": b"\x89PNG", "jpeg": b"\xff\xd8\xff", "webp": b"RIFF"}
-_PHONE = re.compile(r"^\+?\d{3,13}$")
 
 
-def clean_phone(value: str) -> str:
-    return re.sub(r"[^\d+]", "", value)
-
-
-def valid_phone(value: str) -> bool:
-    return bool(_PHONE.fullmatch(value))
+def card_phone(value: str) -> str:
+    """Acil bilgi kartı numarası: beyaz listedeki kısa acil kod (112, 110, 155 …) olduğu gibi,
+    değilse sabit/cep TR numarası E.164 (`+902121234567`). Geçersizse `ValueError` (Türkçe)."""
+    return normalize_emergency_phone(value)
 
 
 def valid_map(value: str) -> bool:
