@@ -2,6 +2,10 @@
 
 Kayıtlar otomatik yazılır (`models/audit.py`); bu uç yalnız okur. Sayfalı, yeni üstte.
 Telefon, e-posta, IBAN ve vergi no kayıtta maskelidir; açan bir yol yoktur (PLT-06).
+
+Kişisel veri görmeyen okuyucu (`people.read` yok — Denetçi, KMK m.41, docs/05): "Bugün" ve
+listelerdeki ad gizleme kuralı burada da uygulanır — kişi aktörün adı, IP ve tarayıcı bilgisi
+ile ayrıntıdaki ad/plaka alanları `***` döner. Sistem aktörünün adı (gece işi) açık kalır.
 """
 
 import datetime as dt
@@ -15,6 +19,7 @@ from sqlalchemy import func, select
 from site_yonetim.api.deps import BUSINESS_TZ, SiteContext, require_permission
 from site_yonetim.api.schemas import Page, PageParams
 from site_yonetim.domain.access import Permission
+from site_yonetim.domain.masking import mask_all, mask_person_names
 from site_yonetim.models import AuditLog
 from site_yonetim.models.audit import ActorType, AuditAction
 
@@ -33,13 +38,38 @@ class AuditOut(BaseModel):
     entity_id: uuid.UUID | None
     before: dict[str, Any] | None = Field(description="değişiklikte eski değerler")
     after: dict[str, Any] | None = Field(description="yeni değerler / olay ayrıntısı")
-    ip: str | None
+    ip: str | None = Field(description="people.read yoksa `***`")
     actor_type: ActorType = Field(
         description="user (kişi) · system (gece işi, demo) · delegate · support_session"
     )
     request_id: str | None = Field(description="isteğin kimliği (yanıttaki X-Request-ID)")
     user_agent: str | None
     reason: str | None = Field(description="hassas işlemlerde gerekçe")
+
+    @classmethod
+    def of(cls, r: AuditLog, *, personal: bool) -> AuditOut:
+        """`personal`: okuyucu kişisel veriyi görebilir (`people.read`)."""
+
+        def hide(value: str | None) -> str | None:
+            return value if personal or not value else mask_all(value)
+
+        person = r.actor_type != ActorType.SYSTEM.value
+        return cls(
+            id=r.id,
+            at=r.created_at,
+            user_id=r.user_id,
+            actor_name=hide(r.actor_name) if person else r.actor_name,
+            action=AuditAction(r.action),
+            entity=r.entity,
+            entity_id=r.entity_id,
+            before=r.before if personal else mask_person_names(r.before),
+            after=r.after if personal else mask_person_names(r.after),
+            ip=hide(r.ip),
+            actor_type=ActorType(r.actor_type),
+            request_id=r.request_id,
+            user_agent=hide(r.user_agent),
+            reason=r.reason,
+        )
 
 
 @router.get("/audit", summary="Denetim kaydı (yeni üstte)")
@@ -77,26 +107,9 @@ async def list_audit(
         .offset(paging.offset)
         .limit(paging.page_size)
     )
+    personal = ctx.access.can(Permission.PEOPLE_READ)
     return Page(
-        items=[
-            AuditOut(
-                id=r.id,
-                at=r.created_at,
-                user_id=r.user_id,
-                actor_name=r.actor_name,
-                action=AuditAction(r.action),
-                entity=r.entity,
-                entity_id=r.entity_id,
-                before=r.before,
-                after=r.after,
-                ip=r.ip,
-                actor_type=ActorType(r.actor_type),
-                request_id=r.request_id,
-                user_agent=r.user_agent,
-                reason=r.reason,
-            )
-            for r in rows
-        ],
+        items=[AuditOut.of(r, personal=personal) for r in rows],
         page=paging.page,
         page_size=paging.page_size,
         total=total,

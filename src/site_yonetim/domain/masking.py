@@ -61,6 +61,36 @@ SENSITIVE_COLUMNS: dict[str, Callable[[str], str]] = {
 }
 
 
+# Kişisel veri görmeyen okuyucu (`people.read` yok — Denetçi, docs/05) için denetim kaydı
+# yanıtında ayrıca gizlenen ad/plaka alanları. Kayıt kendisi değişmez; yalnız yanıt maskelenir.
+PERSON_NAME_KEYS = frozenset(
+    {
+        "first_name",
+        "last_name",
+        "full_name",
+        "person_name",
+        "visitor_name",
+        "delivered_to",
+        "returned_to",
+        "assigned_to",
+        "plate",
+        "plate_number",
+        "user_name",
+        "by_name",
+        "author_name",
+        "created_by_name",
+        "requested_by_name",
+    }
+)
+
+
+def mask_person_names(detail: dict[str, object] | None) -> dict[str, object] | None:
+    """Ayrıntıdaki ad/plaka değerlerini gizler (dolu değer → "***")."""
+    if detail is None:
+        return None
+    return {k: mask_all("") if k in PERSON_NAME_KEYS and v else v for k, v in detail.items()}
+
+
 def mask_value(column: str, value: object) -> object:
     masker = SENSITIVE_COLUMNS.get(column)
     if masker is mask_all and isinstance(value, (list, dict)) and value:
