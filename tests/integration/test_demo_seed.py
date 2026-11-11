@@ -1,6 +1,6 @@
 """Demo verisi ve site kurulumu — docs/10 (gerçek PostgreSQL, RLS'e tabi rol)."""
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -425,12 +425,18 @@ async def test_demo_duyuru_ve_talep(
     resident = await login_headers(api, "sakin@demo.local", DEMO_PASSWORD)
     listed = (await api.get("/api/v1/sites/aksu-konaklari/announcements", headers=resident)).json()
     assert [a["title"] for a in listed["items"]] == [
-        "Olağanüstü genel kurul toplantı çağrısı",  # malik: okuma onaylı çağrı (75), sabit
-        "Olağan genel kurul toplantısı",
+        "Olağan genel kurul toplantısı",  # sabit, 3 gün önce
+        "Olağanüstü genel kurul toplantı çağrısı",  # malik: okuma onaylı çağrı (75), 5 gün önce
         "Asansör yenileme çalışması — okuma onayı",
         "Planlı su kesintisi",
         "Aidat ödeme hatırlatması",
     ]
+    # Test raporu: iki genel kurul duyurusu aynı gün/saatte yayımlanmış görünmesin.
+    ordinary, extraordinary = (
+        datetime.fromisoformat(a["published_at"]).date() for a in listed["items"][:2]
+    )
+    assert (SEED_DAY - ordinary).days == 3
+    assert (SEED_DAY - extraordinary).days == 5
     manager = await login_headers(api, "yonetici@demo.local", DEMO_PASSWORD)
     requests_page = (await api.get("/api/v1/sites/aksu-konaklari/requests", headers=manager)).json()
     # 6 demo talebi + bugün planı gelen hidrofor bakımının iş emri (HIZ-06)
