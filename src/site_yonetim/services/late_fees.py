@@ -10,8 +10,11 @@ Site kararıyla açılır (finans parametresi `late_fee_enabled`, **varsayılan 
 Hesap ana borç bazındadır (basit — tazminata tazminat yok): bir ana borca o güne kadar işlemiş
 **toplam** gecikme hesaplanır, daha önce yazılmış olan (`late_fee_accruals`) düşülür, yalnız fark
 yazılır — aynı gün ikinci çalışma bir şey yazmaz (FIN-03 S3). Kısmi ödeme ve plan kapatmaları
-açık tutarı düşürür. Ödeme planı süresince (plan bozulmadıkça) taksitlere gecikme işlemez
-(`plan_suspends_late_fee`). Oran ve yöntemin hukuki teyidi açık: avukat görüşüne kadar parametre
+açık tutarı düşürür. Ödeme planı süresince (plan bozulmadıkça) plandaki kalemlere gecikme
+işlemez (`plan_suspends_late_fee`, FIN-03): taksitlere ve planın kapattığı borç kısmına — plandan
+önceki günlerin henüz yazılmamış gecikmesi de plan yürürlükteyken yazılmaz. Plan bozulunca ya da
+iptal edilince normal kurala döner; iptalde yeniden açılan borç (ilk vadeyi taşır) iptal gününden
+işler, plan süresi sayılmaz. Oran ve yöntemin hukuki teyidi açık: avukat görüşüne kadar parametre
 (docs/12 K2); oran KMK m.20 üst sınırı olan aylık %5'i aşamaz.
 """
 
@@ -42,9 +45,22 @@ PRINCIPAL_SOURCES = (
     LedgerSource.PAYMENT_PLAN.value,
 )
 
+# Yürürlükteki plan = `p.status = 'active' AND p.broken_at IS NULL` (aşağıda üç yerde aynı).
+# Planın kapattığı ("restructure") kısım ve taksitler plan süresince gecikme işletmez; plan
+# bozulunca ya da iptal edilince normal kurallara döner.
 _PRINCIPALS = text(
     """
-    SELECT e.id, e.account_id, e.debit, COALESCE(e.due_date, e.date) AS due, e.date
+    SELECT e.id, e.account_id, e.debit, COALESCE(e.due_date, e.date) AS due, e.date,
+           COALESCE((
+               SELECT SUM(c.amount) FROM payment_plan_closures c
+               JOIN payment_plans p ON p.site_id = c.site_id AND p.id = c.plan_id
+               WHERE :suspend_plans AND c.site_id = e.site_id AND c.ledger_entry_id = e.id
+                 AND c.kind = 'restructure' AND p.status = 'active' AND p.broken_at IS NULL
+           ), 0) AS in_plan,
+           CASE WHEN e.source = 'payment_plan' AND NOT EXISTS (
+               SELECT 1 FROM payment_plan_installments i
+               WHERE i.site_id = e.site_id AND i.ledger_entry_id = e.id
+           ) THEN e.date END AS reopened_on
     FROM ledger_entries e
     WHERE e.site_id = :site_id AND e.debit > 0 AND e.source = ANY(CAST(:sources AS text[]))
       AND (CAST(:account_ids AS uuid[]) IS NULL OR e.account_id = ANY(CAST(:account_ids AS uuid[])))
@@ -79,6 +95,9 @@ _REDUCTIONS = text(
     FROM payment_plan_closures c
     JOIN payment_plans p ON p.site_id = c.site_id AND p.id = c.plan_id
     WHERE c.site_id = :site_id AND c.ledger_entry_id = ANY(CAST(:ids AS uuid[]))
+      -- yürürlükteki planın kapattığı kısım ana borçtan baştan düşülür (`in_plan`)
+      AND NOT (:suspend_plans AND c.kind = 'restructure'
+               AND p.status = 'active' AND p.broken_at IS NULL)
     """
 )
 _POSTED = text(
@@ -171,7 +190,10 @@ async def accrue(
         return Accrued(0, ZERO)
     ids = [row.id for row in rows]
     reductions: dict[uuid.UUID, list[tuple[date, Decimal]]] = defaultdict(list)
-    for r in await session.execute(_REDUCTIONS, {"site_id": site_id, "ids": ids}):
+    suspend = bool(params["plan_suspends_late_fee"])
+    for r in await session.execute(
+        _REDUCTIONS, {"site_id": site_id, "ids": ids, "suspend_plans": suspend}
+    ):
         reductions[r.entry_id].append((r.day, r.amount))
     posted = {
         r.principal_entry_id: r.total
@@ -179,8 +201,10 @@ async def accrue(
     }
     by_account: dict[uuid.UUID, list[tuple[uuid.UUID, Decimal, date]]] = defaultdict(list)
     for row in rows:
+        # Plan iptalinde yeniden açılan borç ilk vadeyi taşır; plan süresi gecikmeye sayılmaz.
+        start = max((d for d in (floor, row.reopened_on) if d is not None), default=None)
         total = accrued_late_fee(
-            row.debit, row.due, reductions[row.id], as_of, rule, start_floor=floor
+            row.debit - row.in_plan, row.due, reductions[row.id], as_of, rule, start_floor=start
         )
         increment = total - posted.get(row.id, ZERO)
         if increment > ZERO:
