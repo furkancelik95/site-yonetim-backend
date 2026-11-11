@@ -28,12 +28,44 @@ def normalize_iban(value: str) -> str:
     return iban
 
 
+def vkn_valid(vkn: str) -> bool:
+    """Vergi kimlik numarası (10 hane) sağlama basamağı — GİB algoritması.
+
+    İlk 9 hanenin her biri için `t = (hane + 9 − i) mod 10`; `t ≠ 0` ise
+    `(t × 2^(9 − i)) mod 9` (sonuç 0 ise 9) toplanır; son hane `(10 − toplam mod 10) mod 10`."""
+    if len(vkn) != 10 or not vkn.isdigit():
+        return False
+    total = 0
+    for i, ch in enumerate(vkn[:9]):
+        t = (int(ch) + 9 - i) % 10
+        if t:
+            total += (t * 2 ** (9 - i)) % 9 or 9
+    return (10 - total % 10) % 10 == int(vkn[9])
+
+
+def tckn_valid(tckn: str) -> bool:
+    """T.C. kimlik numarası (11 hane): ilk hane 0 değil; 10. hane
+    `((1+3+5+7+9. haneler) × 7 − (2+4+6+8. haneler)) mod 10`; 11. hane ilk 10 hanenin
+    toplamı mod 10."""
+    if len(tckn) != 11 or not tckn.isdigit() or tckn[0] == "0":
+        return False
+    d = [int(ch) for ch in tckn]
+    tenth = (sum(d[0:9:2]) * 7 - sum(d[1:8:2])) % 10
+    return d[9] == tenth and d[10] == sum(d[:10]) % 10
+
+
 def normalize_tax_number(value: str) -> str:
-    """Vergi kimlik numarası (VKN): 10 hane."""
-    vkn = "".join(value.split())
-    if not (len(vkn) == 10 and vkn.isdigit()):
-        raise ValueError("Vergi kimlik numarası 10 haneli olmalı.")
-    return vkn
+    """Vergi numarası: kurum için VKN (10 hane), şahıs için T.C. kimlik no (11 hane); ikisi de
+    sağlama basamağıyla doğrulanır. Müşteride şahıs/kurum tipi alanı yok: hane sayısı tipi
+    belirler. Mevcut kayıtlar yeniden doğrulanmaz (yalnız yeni girişte)."""
+    number = "".join(value.split())
+    if not number.isdigit() or len(number) not in (10, 11):
+        raise ValueError("Vergi no 10 haneli (VKN) ya da T.C. kimlik no 11 haneli olmalı.")
+    if len(number) == 10 and not vkn_valid(number):
+        raise ValueError("Vergi kimlik numarası geçersiz; lütfen numarayı kontrol edin.")
+    if len(number) == 11 and not tckn_valid(number):
+        raise ValueError("T.C. kimlik numarası geçersiz; lütfen numarayı kontrol edin.")
+    return number
 
 
 # --- Kişi (docs/03 §4, docs/11 §3) ------------------------------------------

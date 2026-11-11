@@ -158,6 +158,8 @@ class KnowledgeArticle(Base):
     screens: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
     updated_by_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
     updated_by_name: Mapped[str] = mapped_column(Text)
+    # Yayından kaldırma (arşiv): yardımda ve aramada görünmez; kalıcı silme yok.
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class KnowledgeFeedback(Base):

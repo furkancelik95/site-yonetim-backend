@@ -143,9 +143,22 @@ Her hata aynı gövdeyi döner:
 |---|---|---|---|
 | GET | `/platform/overview` | R | müşteri sayısı, site sayısı, bölüm sayısı, tavanı aşan siteler, müşteri ve site listeleri (sayfalı: `customers`, `sites`). Yalnız kullanım ölçüsü — borç/sakin verisi yok (`05` §5) |
 | GET | `/platform/plans` | R | sayfalı |
-| POST | `/platform/customers` | R | `{name, tax_number?, plan_id, admin_full_name, admin_email}` → organizasyon + ilk yetkili (Sahip) + **bir kez gösterilen geçici parola** (`Cache-Control: no-store`). Tek transaction. Aynı e-posta 409 `email_already_exists`, olmayan plan 422 |
-| POST | `/platform/sites` | R | `{name, slug?, plan_id, organization_id?, property_kind, city?, district?, iban?, bank_name?}` → site + varsayılan kurulum (`10-demo-veri.md` §3). IBAN TR + mod-97 doğrulanır. Aynı ad (Türkçe büyük/küçük harf duyarsız) ya da slug 409 `site_already_exists` |
+| POST | `/platform/customers` | R | `{name, tax_number?, plan_id, admin_full_name, admin_email}` → organizasyon + ilk yetkili (Sahip) + **bir kez gösterilen geçici parola** (`Cache-Control: no-store`). Tek transaction. Aynı e-posta 409 `email_already_exists`, olmayan plan 422. `tax_number`: 10 hane VKN ya da 11 hane T.C. kimlik no, sağlama basamağıyla doğrulanır (422 `fields.tax_number`) |
+| POST | `/platform/sites` | R | `{name, slug?, plan_id, organization_id?, property_kind, city?, district?, iban?, bank_name?}` → site + varsayılan kurulum (`10-demo-veri.md` §3). IBAN TR + mod-97 doğrulanır. Aynı ad (Türkçe büyük/küçük harf duyarsız) ya da slug 409 `site_already_exists`. Yanıtta ayrıca `requested_slug` (gönderilmediyse null) ve `slug_adjusted` (gönderilen ek `04` §11 kuralıyla düzeltildi); mesaj kullanılan eki söyler. Ad "… Sitesi/Site" ile bitiyorsa mesaja "sitesi" eklenmez |
 | PATCH | `/platform/sites/{id}/plan` | R | `{plan_id}` |
+| PATCH | `/platform/sites/{id}` | R | `{name?, address?, city?, district?}` — yalnız gönderilen alanlar; boş metin adres/il/ilçeyi temizler. Adres eki ve plan buradan değişmez. Aynı ad 409 `site_already_exists`, olmayan site 404 |
+| PATCH | `/platform/customers/{id}` | R | `{name}` (3–150) → `{organization_id, name, tax_number, plan_id}`. Vergi no ve plan değişmez; müşteride iletişim/adres alanı yok |
+
+### 2.2a Platform destek ve bilgi bankası (servis istekleri 82–84; PYN-04, PYN-06)
+| Yöntem | Yol | İzin | Durum | Not |
+|---|---|---|---|---|
+| GET | `/sites/{slug}/support-tickets?status=` | yönetim rolleri (`members.manage` · `finance.read` · `modules.manage`) | R | sayfalı. Bilette `sla{first_due, resolve_due, first_breached, resolve_breached, first_response_overdue, breached}` — `breached` = ilk yanıt ya da çözüm hedefi aşıldı (tek tanım); `first_response_overdue` = açık, hiç yanıtlanmamış, ilk yanıt hedefi geçmiş. **`summary{open, sla_breached, first_response_overdue, critical}`**: sitenin açık (çözüldü/kapandı dışı) biletleri veritabanında sayılır; sayfa ve `status` süzgecinden bağımsız. Ekranın SLA aşımı rozeti `summary.sla_breached` olmalı |
+| GET | `/platform/support-tickets?status=` | platform yöneticisi | R | sayfalı, kritik önce; aynı bilet şeması ve `summary` (tüm tesisler) |
+| GET | `/knowledge-articles?q=&screen=&audience=` | giriş | R | sayfalı; **yayından kaldırılan (arşiv) makale görünmez**. Makalede `archived_at` |
+| POST | `/knowledge-articles/{id}/feedback` | giriş | R | `{helpful}`; arşivdeki makale 404 |
+| GET | `/platform/knowledge-articles?q=&audience=&archived=` | platform yöneticisi | R | yönetim listesi; `archived=true` yayından kaldırılanlar |
+| POST · PATCH | `/platform/knowledge-articles` · `/{id}` | platform yöneticisi | R | yayınla · düzenle |
+| POST | `/platform/knowledge-articles/{id}/archive` · `/restore` | platform yöneticisi | R | yayından kaldır · yeniden yayınla; ikinci kez 409 `already_archived` / `not_archived`. Kalıcı silme yok |
 
 ### 2.3 Portföy
 | Yöntem | Yol | İzin | Durum | Not |
@@ -258,8 +271,8 @@ kişisel veriyi görmez (`05`). Sakin kendi hesabında kendi adını görür.
 | GET | `/sites/{slug}/cash-accounts/{id}/statement` | `finance.cash.read` | R | sayfalı, `from`, `to` — `04` §10.5: `opening` (devreden), `closing`, `total_in`, `total_out`, `movements` (en yeni üstte, `running_balance`, `is_reversed`) |
 | GET | `/sites/{slug}/cash-accounts/{id}/statement/export.xlsx` | `finance.cash.read` | R | sayfalama yok, tüm aralık |
 | POST | `/sites/{slug}/cash-movements` | `finance.cash.manage` | R | elle hareket `{cash_account_id, date, direction: in\|out, amount, description, reference?}` · `Idempotency-Key` |
-| POST | `/sites/{slug}/cash-transfers` | `finance.cash.manage` | R | `{from_id, to_id, date, amount, note?}` → `{outgoing, incoming}` · `Idempotency-Key` |
-| POST | `/sites/{slug}/cash-movements/{id}/reverse` | `finance.cash.manage` | R | `{reason}`; tahsilat/gider kaynaklıysa 409 · `Idempotency-Key` |
+| POST | `/sites/{slug}/cash-transfers` | `finance.cash.manage` | R | `{from_id, to_id, date, amount, note?}` → `{outgoing, incoming}` · `Idempotency-Key`. Hesap yok/kapalı hatası `fields.from_id` ya da `fields.to_id` |
+| POST | `/sites/{slug}/cash-movements/{id}/reverse` | `finance.cash.manage` | R | `{reason}`; tahsilat/gider kaynaklıysa 409 · `Idempotency-Key`. Aktarım bacağı verilirse **iki bacak birlikte** ters kaydedilir (toplam bakiye değişmez); yanıt istenen bacağın ters kaydı |
 
 ### 2.8a Finans Mod P — dönem kapanışı, kasa günü, borç takibi, ödeme planı, dönem dışı ücret, muhasebe aktarımı, parametreler (servis istekleri 27–34)
 **Dönem kilidi (D-11, FIN-13):** kapanıştaki (`closing`) ya da kilitli (`locked`) döneme **hiçbir

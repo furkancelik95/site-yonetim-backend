@@ -48,10 +48,9 @@ from site_yonetim.domain.support import (
     TicketPriority,
     TicketStatus,
     ViewAsStatus,
-    first_breached,
-    resolve_breached,
     session_effective_status,
     ticket_number,
+    ticket_sla,
     view_as_effective_status,
 )
 from site_yonetim.models import (
@@ -143,8 +142,35 @@ class TicketMessageOut(BaseModel):
 class TicketSlaOut(BaseModel):
     first_due: dt.datetime
     resolve_due: dt.datetime
-    first_breached: bool
-    resolve_breached: bool
+    first_breached: bool = Field(description="ilk yanıt hedefi aşıldı (geç yanıt ya da hâlâ yok)")
+    resolve_breached: bool = Field(description="çözüm hedefi aşıldı")
+    first_response_overdue: bool = Field(
+        description="açık, hiç yanıtlanmamış ve ilk yanıt hedefi geçmiş"
+    )
+    breached: bool = Field(
+        description="SLA aşımı — ilk yanıt ya da çözüm hedefi aşıldı (iki ekranda tek tanım)"
+    )
+
+
+class TicketSummaryOut(BaseModel):
+    """Açık biletlerin özeti — veritabanında sayılır; sayfadan ve `status` süzgecinden
+    bağımsızdır. Açık = çözüldü/kapandı dışındaki durumlar."""
+
+    open: int = Field(description="açık bilet sayısı")
+    sla_breached: int = Field(description="açıkta SLA aşımı (`sla.breached`) olan bilet sayısı")
+    first_response_overdue: int = Field(
+        description="açıkta hiç yanıtlanmamış ve ilk yanıt hedefi geçmiş bilet sayısı"
+    )
+    critical: int = Field(description="açıkta kritik öncelikli bilet sayısı")
+
+    @classmethod
+    def of(cls, summary: svc.SlaSummary) -> TicketSummaryOut:
+        return cls(
+            open=summary.open,
+            sla_breached=summary.sla_breached,
+            first_response_overdue=summary.first_response_overdue,
+            critical=summary.critical,
+        )
 
 
 class SupportTicketOut(BaseModel):
@@ -167,9 +193,21 @@ class SupportTicketOut(BaseModel):
     on_call: bool = Field(description="kritik bilet nöbet hattına düştü (paket 7/24 ise)")
 
 
+class SupportTicketPage(Page[SupportTicketOut]):
+    summary: TicketSummaryOut
+
+
 def ticket_out(
     ticket: SupportTicket, site: Site, messages: list[SupportTicketMessage], now: dt.datetime
 ) -> SupportTicketOut:
+    sla = ticket_sla(
+        status=TicketStatus(ticket.status),
+        first_due=ticket.first_due,
+        resolve_due=ticket.resolve_due,
+        first_response_at=ticket.first_response_at,
+        resolved_at=ticket.resolved_at,
+        now=now,
+    )
     return SupportTicketOut(
         id=ticket.id,
         number=ticket_number(ticket.number),
@@ -201,8 +239,10 @@ def ticket_out(
         sla=TicketSlaOut(
             first_due=ticket.first_due,
             resolve_due=ticket.resolve_due,
-            first_breached=first_breached(ticket.first_due, ticket.first_response_at, now),
-            resolve_breached=resolve_breached(ticket.resolve_due, ticket.resolved_at, now),
+            first_breached=sla.first_breached,
+            resolve_breached=sla.resolve_breached,
+            first_response_overdue=sla.first_response_overdue,
+            breached=sla.breached,
         ),
         support_tier=ticket.support_tier,
         on_call=ticket.on_call,
@@ -223,7 +263,8 @@ async def list_tickets(
     paging: Paging,
     now: NowDep,
     status_: Annotated[TicketStatus | None, Query(alias="status")] = None,
-) -> Page[SupportTicketOut]:
+) -> SupportTicketPage:
+    """`summary` açık biletlerin SLA özeti (veritabanında; sayfa ve süzgeçten bağımsız)."""
     query = select(SupportTicket)
     if status_ is not None:
         query = query.where(SupportTicket.status == status_.value)
@@ -236,11 +277,12 @@ async def list_tickets(
         )
     )
     messages = await svc.messages_of(ctx.session, [t.id for t in rows])
-    return Page(
+    return SupportTicketPage(
         items=[ticket_out(t, ctx.site, messages[t.id], now) for t in rows],
         page=paging.page,
         page_size=paging.page_size,
         total=total or 0,
+        summary=TicketSummaryOut.of(await svc.sla_summary(ctx.session, now)),
     )
 
 

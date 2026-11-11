@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import func, or_, select, text, update
+from sqlalchemy import and_, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -23,6 +23,7 @@ from site_yonetim.db.tenancy import all_sites_scope, site_scope
 from site_yonetim.domain.access import Permission
 from site_yonetim.domain.notifications import NotificationCategory
 from site_yonetim.domain.support import (
+    DONE_STATUSES,
     OPEN_SESSION_STATUSES,
     VIEW_AS_MINUTES,
     MessageSide,
@@ -175,6 +176,36 @@ async def messages_of(
         for row in rows:
             found[row.ticket_id].append(row)
     return found
+
+
+@dataclass(frozen=True, slots=True)
+class SlaSummary:
+    open: int
+    sla_breached: int
+    first_response_overdue: int
+    critical: int
+
+
+async def sla_summary(session: AsyncSession, now: datetime) -> SlaSummary:
+    """Açık biletlerin SLA özeti — veritabanında sayılır, sayfadan ve durum süzgecinden
+    bağımsızdır. Tanım `domain/support.ticket_sla` ile aynıdır. Kapsam çağıranın: site
+    oturumunda o site, `all_sites_scope()` içinde tüm tesisler."""
+    t = SupportTicket
+    is_open = t.status.not_in([s.value for s in DONE_STATUSES])
+    first = func.coalesce(t.first_response_at, now) > t.first_due
+    resolve = func.coalesce(t.resolved_at, now) > t.resolve_due
+    overdue = and_(t.first_response_at.is_(None), t.first_due < now)
+    row = (
+        await session.execute(
+            select(
+                func.count(),
+                func.count().filter(or_(first, resolve)),
+                func.count().filter(overdue),
+                func.count().filter(t.priority == TicketPriority.CRITICAL.value),
+            ).where(is_open)
+        )
+    ).one()
+    return SlaSummary(int(row[0]), int(row[1]), int(row[2]), int(row[3]))
 
 
 async def get_ticket(session: AsyncSession, ticket_id: uuid.UUID) -> SupportTicket | None:

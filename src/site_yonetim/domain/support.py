@@ -143,6 +143,36 @@ def resolve_breached(resolve_due: datetime, resolved_at: datetime | None, now: d
     return (resolved_at or now) > resolve_due
 
 
+# Çözülmüş ya da kapanmış bilet "açık" sayılmaz; özet sayaçları yalnız açık biletleri sayar.
+DONE_STATUSES = frozenset({TicketStatus.RESOLVED, TicketStatus.CLOSED})
+
+
+@dataclass(frozen=True, slots=True)
+class TicketSla:
+    first_breached: bool  # ilk yanıt hedefi aşıldı (yanıt geç geldi ya da hâlâ yok)
+    resolve_breached: bool  # çözüm hedefi aşıldı
+    first_response_overdue: bool  # açık, hiç yanıtlanmadı ve ilk yanıt hedefi geçti
+    breached: bool  # ilk yanıt ya da çözüm hedeflerinden biri aşıldı — "SLA aşımı" tek tanım
+
+
+def ticket_sla(
+    *,
+    status: TicketStatus,
+    first_due: datetime,
+    resolve_due: datetime,
+    first_response_at: datetime | None,
+    resolved_at: datetime | None,
+    now: datetime,
+) -> TicketSla:
+    """Bir biletin SLA durumu — site ve platform ekranı aynı tanımı kullanır (PYN-06).
+
+    `services/support.sla_summary` aynı tanımı veritabanında sayar; ikisi birlikte değişir."""
+    first = first_breached(first_due, first_response_at, now)
+    resolve = resolve_breached(resolve_due, resolved_at, now)
+    overdue = status not in DONE_STATUSES and first_response_at is None and now > first_due
+    return TicketSla(first, resolve, overdue, first or resolve)
+
+
 class TicketRuleError(Exception):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
