@@ -34,6 +34,7 @@ from site_yonetim.domain.management import Employer
 from site_yonetim.domain.modules import ModuleKey
 from site_yonetim.domain.money import distribute, round_money
 from site_yonetim.domain.operations import (
+    FINAL_STATUSES,
     Audience,
     Importance,
     RequestChannel,
@@ -299,6 +300,8 @@ async def _seed_demo(
                             )
                         )
                 await session.flush()  # kiracı satırları kapsam kapanmadan yazılmalı
+                # Üyelikler yazıldıktan sonra: demo teknik personeli kendi taleplerini görsün
+                await _assign_demo_technician(session, site, user_ids, today)
 
     async with factory() as session:
         aksu = await session.scalar(select(Site.id).where(Site.slug == RESIDENT.site_slug))
@@ -579,6 +582,39 @@ async def _seed_operations(session: AsyncSession, site: Site, spec: SiteSpec, to
             )
 
     await _seed_requests(session, site, today)
+
+
+TECHNICIAN_EMAIL = "teknik@demo.local"
+TECHNICIAN_TEAM = "Teknik ekip"  # REQUESTS'teki serbest metin atama
+
+
+async def _assign_demo_technician(
+    session: AsyncSession, site: Site, user_ids: dict[str, uuid.UUID], today: date
+) -> None:
+    """ "Teknik ekip"e serbest metinle atanmış, bitmemiş demo taleplerini demo teknik
+    personeline (`assignee_user_id`) atar. Teknik şablon yalnız kendine atananları görür
+    (`requests.assigned`); bu olmadan sıfırlamadan sonra teknik hesabın listesi boş kalır.
+    Talep seed'inden sonra, üyelikler yazılınca çalışır (atanan talep işleyebilen personel
+    olmalı). Zaman bugün 08:30: talebin önceki olaylarından sonra."""
+    account = next((a for a in ACCOUNTS if a.email == TECHNICIAN_EMAIL), None)
+    user_id = user_ids.get(TECHNICIAN_EMAIL)
+    if account is None or user_id is None or account.site_slug != site.slug:
+        return
+    rows = list(
+        await session.scalars(
+            select(Request)
+            .where(
+                Request.assigned_to == TECHNICIAN_TEAM,
+                Request.status.not_in([s.value for s in FINAL_STATUSES]),
+            )
+            .order_by(Request.number)
+        )
+    )
+    at = datetime.combine(today, time(8, 30), BUSINESS_TZ)
+    for row in rows:
+        await requests.assign(
+            session, site, row, None, assignee_user_id=user_id, actor="Site Yönetimi", now=at
+        )
 
 
 async def _seed_requests(session: AsyncSession, site: Site, today: date) -> None:

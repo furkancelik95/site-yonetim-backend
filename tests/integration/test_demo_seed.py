@@ -199,6 +199,21 @@ async def test_demo_hesaplariyla_giris_ve_roller(
     assert await sites_of("platform@demo.local") == {}
 
 
+async def test_demo_teknik_personelin_kapsaminda_acik_talep_var(
+    dev_settings: Settings, session_factory: Factory, api: httpx2.AsyncClient
+) -> None:
+    """Teknik şablon yalnız kendine atananları görür (`requests.assigned`); demo sıfırlamadan
+    sonra teknik hesabın talep listesi boş kalmamalı."""
+    await seed_demo(dev_settings, session_factory)
+    headers = await login_headers(api, "teknik@demo.local", DEMO_PASSWORD)
+    me = (await api.get("/api/v1/me", headers=headers)).json()
+    listed = await api.get("/api/v1/sites/aksu-konaklari/requests", headers=headers)
+    assert listed.status_code == 200, listed.text
+    mine = listed.json()["items"]
+    active = {"open", "assigned", "in_progress", "waiting"}
+    assert any(r["status"] in active and r["assignee_id"] == me["user_id"] for r in mine)
+
+
 async def test_uygulama_acilisinda_gelistirmede_yuklenir(
     dev_settings: Settings, database_urls: DatabaseUrls, admin_engine: object
 ) -> None:
