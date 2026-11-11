@@ -137,11 +137,21 @@ async def test_kapali_ziyaretci_alani_kaydedilmez(gw: GateWorld) -> None:
             "unit_id": gw.w.unit_id,
             "full_name": "Can Er",
             "plate_number": "34 ABC 12",
-            "phone": "555",
+            "phone": "0532 123 45 67",
         },
     )
     data = visitor.json()["data"]
-    assert (data["plate_number"], data["phone"]) == (None, "555")
+    assert (data["plate_number"], data["phone"]) == (None, "+905321234567")
+    # Telefon doğrulanır: geçersiz numara 422 alan hatası; boş bırakmak serbest.
+    bad = await gw.post(
+        "/visitors", gw.guard, {"unit_id": gw.w.unit_id, "full_name": "Can Er", "phone": "555"}
+    )
+    assert bad.status_code == 422
+    assert "phone" in bad.json()["error"]["fields"]
+    empty = await gw.post(
+        "/visitors", gw.guard, {"unit_id": gw.w.unit_id, "full_name": "Can Er", "phone": " "}
+    )
+    assert (empty.status_code, empty.json()["data"]["phone"]) == (201, None)
 
 
 # --- 41: ön davet ve kodla giriş ---------------------------------------------------------------

@@ -38,6 +38,7 @@ from site_yonetim.domain.security import (
 )
 from site_yonetim.domain.structure import PartyRole
 from site_yonetim.domain.text import tr_lower
+from site_yonetim.domain.validation import normalize_phone
 from site_yonetim.domain.vehicles import VehicleStatus
 from site_yonetim.models import (
     Block,
@@ -328,6 +329,11 @@ async def record_visitor(
     fields = await session.scalar(select(SecuritySettings.visitor_fields)) or {}
     plate = normalize_plate(data.plate_number) or None if fields.get("plate", True) else None
     phone = _clean(data.phone, 20) if fields.get("phone", False) else None
+    if phone is not None:  # boş serbest (alan isteğe bağlı); dolu numara geçerli olmalı
+        try:
+            phone = normalize_phone(phone)
+        except ValueError as exc:
+            raise OperationRuleError("invalid_phone", str(exc), field="phone") from exc
     enter = data.enter_now and data.expected_on in (None, today)
     visitor = Visitor(
         unit_id=data.unit_id,
