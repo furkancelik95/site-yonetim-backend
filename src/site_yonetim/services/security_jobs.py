@@ -36,6 +36,7 @@ from site_yonetim.services import patrol as patrol_svc
 from site_yonetim.services import retention
 from site_yonetim.services.charging import BUSINESS_TZ
 from site_yonetim.services.gatehouse import (
+    LongWaiting,
     load_settings,
     long_waiting,
     manager_user_ids,
@@ -54,11 +55,26 @@ class DailyResult:
     anonymized: int
 
 
+REMIND_BATCH = 200
+
+
 async def remind_long_waiting(session: AsyncSession, site: Site, *, now: datetime) -> int:
-    """Uzun bekleyen her kargo için sakine günde bir hatırlatma; yönetime tek özet."""
+    """Uzun bekleyen **her** kargo için sakine günde bir hatırlatma; yönetime tek özet.
+
+    Kargolar sayfa sayfa gezilir: eskiden ilk 200 (en eski) kargoyla sınırlıydı; teslim
+    alınmamış eski kargo birikince daha yeni (ör. 12–13 günlük) kargolar hatırlatma almıyordu."""
     days = (await load_settings(session)).data.parcel_long_wait_days
-    rows = await long_waiting(session, days=days, now=now)
     today = now.astimezone(BUSINESS_TZ).date()
+    rows: list[LongWaiting] = []
+    page = await long_waiting(session, days=days, now=now, limit=REMIND_BATCH)
+    while page:
+        rows.extend(page)
+        if len(page) < REMIND_BATCH:
+            break
+        last = page[-1].package
+        page = await long_waiting(
+            session, days=days, now=now, limit=REMIND_BATCH, after=(last.received_at, last.id)
+        )
     sent = 0
     for item in rows:
         sent += await notify_svc.notify(
