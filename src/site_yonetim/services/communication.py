@@ -28,10 +28,9 @@ from site_yonetim.domain.communication import (
     SYSTEM_TEMPLATES,
     TemplateDef,
     Variant,
+    card_phone,
     check_variants,
-    clean_phone,
     valid_map,
-    valid_phone,
 )
 from site_yonetim.domain.members import FormFieldError
 from site_yonetim.models import Block, EmergencyInfoCard, EmergencySettings
@@ -241,11 +240,13 @@ async def publish_card(session: AsyncSession, data: CardInput, *, by: str) -> in
     phones: list[dict[str, Any]] = []
     for i, p in enumerate(data.phones[:PHONES_MAX]):
         label = " ".join((p.get("label") or "").split())
-        number = clean_phone(p.get("number") or "")
+        number = (p.get("number") or "").strip()
         if not 1 <= len(label) <= 40:
             errors[f"phones.{i}.label"] = "Ad yazın."
-        if not valid_phone(number):
-            errors[f"phones.{i}.number"] = "Geçerli bir numara yazın."
+        try:
+            number = card_phone(number)
+        except ValueError as exc:
+            errors[f"phones.{i}.number"] = str(exc)
         phones.append({"label": label, "number": number})
     instructions = dict(DEFAULT_INSTRUCTIONS)
     for key in INSTRUCTION_KEYS:

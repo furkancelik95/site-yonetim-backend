@@ -16,6 +16,8 @@ ayrı Docker yığınlarıdır, yalnız HTTPS'i veren Caddy ortaktır.
 - Demo: `ENVIRONMENT=development` + `SEED_DEMO_DATA=true` → açılışta demo verisi, giriş
   ekranında demo hesapları (parola `Demo1234!`). **Gerçek veri girilmez.** Gerçek kullanımda
   `api.env` içinde `ENVIRONMENT=production`, `SEED_DEMO_DATA=false`.
+- Test gelen kutusu (giriş kodları ekranda): `TEST_INBOX_ENABLED=true`. Boşsa kapalıdır;
+  `kurulum.sh` demo kurulumunda yazar, eski `api.env`'de satır yoksa ekler. Üretimde açılamaz.
 - Dışarı hiçbir port açılmaz; API ve veritabanı iç ağda. API yalnız RLS'e tabi rolle bağlanır,
   tablo sahibi parolası API'ye verilmez (`.env` compose için, `api.env` yalnız API için).
 - Gece işleri (otomatik tahakkuk, tekrarlanan gider, mutabakat, temizlik) bu demoda zamanlanmaz.

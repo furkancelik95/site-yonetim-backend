@@ -78,3 +78,60 @@ def normalize_phone(value: str) -> str:
             raise ValueError("Telefon numarasını ülke koduyla girin (ör. +49 151 2345 6789).")
         return text
     return normalize_tr_mobile(text)
+
+
+def normalize_tr_phone(value: str) -> str:
+    """Sabit ya da cep TR telefonu → E.164 (`+902121234567`, `+905321234567`).
+
+    Yalnız rakamlar alınır; baştaki `90` (ör. `+90 …`) ya da `0` atılır; kalan 10 hane olmalı ve
+    0 ile başlamamalı (alan kodu 2xx/3xx/4xx, cep 5xx, `0850` gibi 8xx). İletişim kişisi,
+    tedarikçi ve acil durum kartı numaraları için; giriş/SMS telefonu `normalize_phone`.
+    """
+    digits = "".join(ch for ch in value if ch.isdigit())
+    if len(digits) == 12 and digits.startswith("90"):
+        digits = digits[2:]
+    elif len(digits) == 11 and digits.startswith("0"):
+        digits = digits[1:]
+    if len(digits) != 10 or digits.startswith("0"):
+        raise ValueError("Telefon 10 hane olmalı (ör. 0212 123 45 67 ya da 0532 123 45 67).")
+    return f"+90{digits}"
+
+
+# Acil durum kartında kabul edilen kısa numaralar (beyaz liste). 2021'den beri çoğu 112'ye
+# yönlenir; kartta kullanıcıların alıştığı numara yazılabilsin diye listede.
+EMERGENCY_SHORT_CODES: frozenset[str] = frozenset(
+    {
+        "110",  # itfaiye
+        "112",  # acil çağrı
+        "114",  # zehir danışma (UZEM)
+        "122",  # AFAD
+        "155",  # polis
+        "156",  # jandarma
+        "158",  # sahil güvenlik
+        "177",  # orman yangını
+        "183",  # sosyal destek
+        "184",  # SABİM
+        "185",  # su arıza
+        "186",  # elektrik arıza
+        "187",  # doğalgaz acil
+    }
+)
+
+
+def normalize_emergency_phone(value: str) -> str:
+    """Acil durum kartı numarası: beyaz listedeki 3 haneli kısa kod (`112`) olduğu gibi; değilse
+    sabit/cep TR numarası (`normalize_tr_phone`)."""
+    digits = "".join(ch for ch in value if ch.isdigit())
+    if len(digits) == 3 and not value.strip().startswith("+"):
+        if digits in EMERGENCY_SHORT_CODES:
+            return digits
+        raise ValueError(
+            "Kısa numara tanınmadı; acil kodlardan birini (ör. 112, 110, 155) ya da 10 haneli "
+            "telefon numarasını yazın."
+        )
+    try:
+        return normalize_tr_phone(value)
+    except ValueError:
+        raise ValueError(
+            "Acil kod (ör. 112) ya da 10 haneli telefon numarası yazın (ör. 0212 123 45 67)."
+        ) from None

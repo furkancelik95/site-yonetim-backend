@@ -273,7 +273,7 @@ async def test_acil_bilgi_karti_ve_etag(comm: World) -> None:
     published = await call(w, "PUT", "/emergency-info-card", json={**CARD, "block_notes": [note]})
     assert published.status_code == 200, published.text
     card = published.json()["data"]
-    assert (card["version"], card["phones"][1]["number"]) == (1, "02125550000")
+    assert (card["version"], card["phones"][1]["number"]) == (1, "+902125550000")  # E.164
     assert card["block_notes"][0]["block_name"] == "A"
     assert card["instructions"]["fire"]  # verilmeyen talimat varsayılan kalır
 

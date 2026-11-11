@@ -12,7 +12,7 @@ uv run python -m site_yonetim.cli run-request-jobs       # talep kapanış + SLA
 uv run python -m site_yonetim.cli run-charge-schedules # otomatik aylık tahakkuk (günde bir)
 uv run python -m site_yonetim.cli run-recurring-expenses # tekrarlanan giderler (günde bir)
 uv run python -m site_yonetim.cli run-approval-jobs      # onay hatırlatma/eskalasyon (saatlik)
-uv run python -m site_yonetim.cli run-structure-jobs     # öznitelik yürürlüğü, davet (günde bir)
+uv run python -m site_yonetim.cli run-structure-jobs     # öznitelik, davet, malik -O (günde bir)
 uv run python -m site_yonetim.cli run-staff-jobs         # ayrılan personelin erişimini kapat (gece)
 uv run python -m site_yonetim.cli run-document-expiry    # belge geçerlilik uyarısı (günde bir)
 uv run python -m site_yonetim.cli run-contract-jobs      # karne taslağı, artış 30 gün kala onay
@@ -346,7 +346,10 @@ async def _run_structure_jobs() -> int:
     finally:
         await engine.dispose()
     for r in results:
-        print(f"{r.site_id}: öznitelik {r.applied}, süresi dolan davet {r.expired}")
+        print(
+            f"{r.site_id}: öznitelik {r.applied}, süresi dolan davet {r.expired}, "
+            f"kapanan malik oturan hesabı {r.closed_occupants}"
+        )
     print(f"{len(results)} sitede yapı işleri çalıştı.")
     return 0
 
@@ -536,7 +539,9 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser(
         "run-patrol-checks", help="Başlamayan/geciken devriye bildirimi (5 dakikada bir)"
     )
-    sub.add_parser("run-structure-jobs", help="Öznitelik yürürlüğü, davet süresi (günde bir)")
+    sub.add_parser(
+        "run-structure-jobs", help="Öznitelik yürürlüğü, davet, malik -O kapanışı (günde bir)"
+    )
     sub.add_parser("run-staff-jobs", help="Ayrılan personelin site erişimini kapat (gece)")
     sub.add_parser("run-document-expiry", help="Belge geçerlilik uyarısı (günde bir)")
     sub.add_parser(
