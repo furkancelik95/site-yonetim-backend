@@ -77,6 +77,20 @@ async def test_k25_vade_ayin_10u_ve_parametre(world: World) -> None:
     assert (schedule["due_day"], schedule["draft_lead_days"]) == (10, 5)
 
 
+async def test_k25_onizleme_vadesi_kesimden_once_dusmez(world: World) -> None:
+    """Test raporu #15: vade dönemin `due_day`'i; tahakkuk tarihinden önceye düşerse sonraki
+    ayın aynı günü — "+14 gün" ya da "bugün" değil."""
+    w = world
+    await finalized_plan(w)
+    cases = {"2026-06-15": "2026-07-10", "2026-06-10": "2026-06-10", "2026-06-09": "2026-06-10"}
+    for charge_date, due in cases.items():
+        preview = (await w.get("/charge-runs/preview", params={"charge_date": charge_date})).json()
+        assert (preview["charge_date"], preview["due_date"]) == (charge_date, due)
+    default = (await w.get("/charge-runs/preview")).json()
+    assert default["due_date"][-2:] == "10"
+    assert default["due_date"] > default["charge_date"]
+
+
 # --- D-6 avansın sonraki borca mahsubu ------------------------------------------------------
 
 

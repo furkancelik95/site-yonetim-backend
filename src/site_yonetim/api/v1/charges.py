@@ -201,7 +201,13 @@ async def preview(
     today: TodayDep,
     paging: Paging,
     charge_date: Annotated[date | None, Query(description="boşsa sıradaki dönemin 1'i")] = None,
-    due_date: Annotated[date | None, Query(description="boşsa tahakkuk + 14 gün")] = None,
+    due_date: Annotated[
+        date | None,
+        Query(
+            description="boşsa dönemin vade günü (finans parametresi `due_day`, K25); tahakkuk "
+            "tarihinden önceye düşerse sonraki ayın aynı günü"
+        ),
+    ] = None,
 ) -> PreviewOut:
     try:
         prepared = await svc.prepare(ctx.session, today, charge_date=charge_date, due_date=due_date)
