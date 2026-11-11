@@ -113,6 +113,8 @@ async def test_ayni_eposta_ile_ikinci_musteri_409(
     [
         ({"admin_email": "gecersiz"}, "admin_email", "Geçerli bir e-posta"),
         ({"tax_number": "123"}, "tax_number", "10 haneli"),
+        ({"tax_number": "1234567891"}, "tax_number", "Vergi kimlik numarası geçersiz"),
+        ({"tax_number": "12345678901"}, "tax_number", "T.C. kimlik numarası geçersiz"),
         ({"name": "AB"}, "name", "En az 3"),
     ],
 )
