@@ -49,7 +49,7 @@ from site_yonetim.domain.gatehouse import (
 from site_yonetim.domain.members import FormFieldError
 from site_yonetim.domain.modules import ModuleKey
 from site_yonetim.domain.operations import OperationRuleError
-from site_yonetim.domain.security import VisitorKind
+from site_yonetim.domain.security import VisitorKind, VisitorStatus
 from site_yonetim.models import VisitorInvite, VisitRequest
 from site_yonetim.services import gatehouse as gate_svc
 from site_yonetim.services import security as security_svc
@@ -141,6 +141,45 @@ async def my_invites(ctx: ResidentVisitors, today: TodayDep, now: NowDep) -> lis
         return []
     rows = list(await ctx.session.scalars(svc.resident_invites_query(units, today)))
     return await _invites_out(ctx, rows, now)
+
+
+class MyVisitorOut(BaseModel):
+    id: uuid.UUID
+    unit_id: uuid.UUID
+    unit_name: str
+    full_name: str
+    kind: VisitorKind
+    plate: str | None
+    visit_date: dt.date
+    status: VisitorStatus
+    entered_at: dt.datetime | None
+    exited_at: dt.datetime | None
+
+
+@router.get("/resident/visitors", summary="Ziyaretçi geçmişim (son 30 gün)")
+async def my_visitors(ctx: ResidentVisitors, today: TodayDep) -> list[MyVisitorOut]:
+    """Bölümlerime gelen ziyaretçiler — güvenliğin doğrudan kaydettikleri dahil. Telefon ve not
+    dönmez; saklama süresi dolup anonimleşen kayıtta ad "Anonim"."""
+    units = await my_unit_ids(ctx, today)
+    if not units:
+        return []
+    rows = list(await ctx.session.scalars(svc.resident_visitors_query(units, today)))
+    names = await security_svc.unit_names(ctx.session, {v.unit_id for v in rows})
+    return [
+        MyVisitorOut(
+            id=v.id,
+            unit_id=v.unit_id,
+            unit_name=names.get(v.unit_id, "—"),
+            full_name=v.full_name,
+            kind=VisitorKind(v.kind),
+            plate=display_plate(v.plate_number) if v.plate_number else None,
+            visit_date=v.visit_date,
+            status=VisitorStatus(v.status),
+            entered_at=v.entered_at,
+            exited_at=v.exited_at,
+        )
+        for v in rows
+    ]
 
 
 class VisitorInviteIn(BaseModel):

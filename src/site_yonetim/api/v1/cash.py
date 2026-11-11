@@ -410,6 +410,11 @@ async def reverse_movement(
         )
     except FinanceRuleError as exc:
         raise finance_error(exc) from exc
-    result = Written(data=MovementOut.of(reversal), message="Hareket ters kayıtla geri alındı.")
+    message = (
+        "Aktarımın iki hareketi de ters kayıtla geri alındı."
+        if reversal.source == CashSource.TRANSFER.value
+        else "Hareket ters kayıtla geri alındı."
+    )
+    result = Written(data=MovementOut.of(reversal), message=message)
     await commit_with_key(ctx.session, idem, status.HTTP_200_OK, result)
     return result

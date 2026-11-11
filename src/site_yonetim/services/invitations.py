@@ -349,7 +349,13 @@ async def accept(
     if active is None:
         try:
             await structure.add_party(
-                session, unit=unit, block=block, person=person, role=role, start_date=today
+                session,
+                unit=unit,
+                block=block,
+                person=person,
+                role=role,
+                start_date=today,
+                today=today,
             )
         except StructureRuleError as exc:
             raise InvitationRuleError(

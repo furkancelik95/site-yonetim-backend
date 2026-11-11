@@ -3,8 +3,10 @@
 - Geçmiş olağan genel kurul (~5 ay önce): çağrı gönderilmiş ve çoğu okunmuş, hazirun (kendisi ve
   fiziki vekil), dört madde oylanmış (biri 4/5 tüm malik çoğunluğuna takılıp RET), tutanak
   kesinleşmiş, kabul edilen kararlar karar defterinde.
-- Yaklaşan olağanüstü genel kurul (25 gün sonra): format ve karar türleri seçilmiş, çağrısı 3 gün
-  önce maliklere gönderilmiş; okuma onaylarının bir kısmı gelmiş.
+- Yaklaşan olağanüstü genel kurul (25 gün sonra): format ve karar türleri seçilmiş, çağrısı 5 gün
+  önce maliklere gönderilmiş (tebliğ ile toplantı arası 30 gün); okuma onaylarının bir kısmı
+  gelmiş. Çağrı günü, olağan genel kurul duyurusundan (`demo_data.ANNOUNCEMENTS[0]`, 3 gün önce)
+  ayrı: aynı saatte iki genel kurul duyurusu yayımlanmış görünmesin.
 Hepsi gerçek servislerden geçer (nisap, vekâlet sınırı, değişmez kayıtlar aynı).
 """
 
@@ -175,7 +177,7 @@ async def _past(session: AsyncSession, today: date) -> None:
 
 async def _upcoming(session: AsyncSession, today: date) -> None:
     meet_on = today + timedelta(days=25)
-    sent_on = today - timedelta(days=3)
+    sent_on = today - timedelta(days=5)  # olağan genel kurul duyurusu 3 gün önce: ayrı gün
     meeting = await meetings_svc.create(
         session,
         kind=MeetingKind.GENERAL_EXTRAORDINARY.value,

@@ -77,6 +77,20 @@ async def test_k25_vade_ayin_10u_ve_parametre(world: World) -> None:
     assert (schedule["due_day"], schedule["draft_lead_days"]) == (10, 5)
 
 
+async def test_k25_onizleme_vadesi_kesimden_once_dusmez(world: World) -> None:
+    """Test raporu #15: vade dönemin `due_day`'i; tahakkuk tarihinden önceye düşerse sonraki
+    ayın aynı günü — "+14 gün" ya da "bugün" değil."""
+    w = world
+    await finalized_plan(w)
+    cases = {"2026-06-15": "2026-07-10", "2026-06-10": "2026-06-10", "2026-06-09": "2026-06-10"}
+    for charge_date, due in cases.items():
+        preview = (await w.get("/charge-runs/preview", params={"charge_date": charge_date})).json()
+        assert (preview["charge_date"], preview["due_date"]) == (charge_date, due)
+    default = (await w.get("/charge-runs/preview")).json()
+    assert default["due_date"][-2:] == "10"
+    assert default["due_date"] > default["charge_date"]
+
+
 # --- D-6 avansın sonraki borca mahsubu ------------------------------------------------------
 
 
@@ -345,6 +359,36 @@ async def test_taslak_yenile_reddet_iptal(world: World, other: dict[str, str]) -
     assert (await w.post("/charge-runs/drafts", {"charge_date": "2026-06-01"})).status_code == 201
 
 
+async def test_onaya_gonderilen_taslak_onaylar_listesine_duser(
+    world: World, other: dict[str, str]
+) -> None:
+    """Test raporu #5: "Onaya gönder" (`charge-runs/{id}/submit`) sonrası talep onaycının
+    Onaylar kutusunda (bekleyenler) ve gönderenin "taleplerim" sekmesinde görünür."""
+    w = world
+    await finalized_plan(w)
+    run = (await w.post("/charge-runs/drafts", {"charge_date": "2026-06-01"})).json()["data"]
+    await rule(w, "charge_run")
+    sent = await w.post(f"/charge-runs/{run['id']}/submit")
+    assert sent.status_code == 202, sent.text
+    request_id = sent.json()["data"]["approval_request_id"]
+
+    async def tab(headers: dict[str, str], name: str) -> list[dict[str, Any]]:
+        response = await w.api.get(w.url("/approvals"), params={"tab": name}, headers=headers)
+        assert response.status_code == 200, response.text
+        items: list[dict[str, Any]] = response.json()["items"]
+        return items
+
+    [pending] = [r for r in await tab(other, "pending") if r["id"] == request_id]
+    assert pending["action_type"] == "charge_run"
+    assert request_id in [r["id"] for r in await tab(w.headers, "mine")]
+    # Gönderen kendi talebini onaylayamaz: onun bekleyenlerinde yok.
+    assert request_id not in [r["id"] for r in await tab(w.headers, "pending")]
+    await approve(w, other, request_id)
+    # Tahakkuk tarihi geçmişse onayla birlikte kesinleşir (FIN-05 adım 8)
+    assert (await w.get(f"/charge-runs/{run['id']}")).json()["status"] in ("approved", "posted")
+    assert request_id not in [r["id"] for r in await tab(other, "pending")]
+
+
 # --- K2 gecikme tazminatı -----------------------------------------------------------------
 
 
@@ -393,8 +437,8 @@ async def test_k2_gecikme_acikken_ay_sonu_ve_odeme_aninda(world: World) -> None:
     assert accruals == 2
 
 
-async def test_k2_odeme_plani_suresince_gecikme_islemez(world: World) -> None:
-    w = world
+async def _plan_on_july_debt(w: World) -> str:
+    """Vade 10 Temmuz (tolerans 5), 20 Temmuz'da 2 taksitli plan (15.08, 15.09)."""
     await finalized_plan(w)
     await params(w, "2026-07", late_fee_enabled=True)
     await post_run(w, "2026-07-01")
@@ -404,14 +448,57 @@ async def test_k2_odeme_plani_suresince_gecikme_islemez(world: World) -> None:
         {"amount": "1000.00", "installment_count": 2, "first_due_date": "2026-08-15"},
         headers={"Idempotency-Key": str(uuid.uuid4())},
     )
-    assert plan.status_code in (201, 202), plan.text
-    w.set_today(date(2026, 8, 1))
+    assert plan.status_code == 201, plan.text
+    return str(plan.json()["data"]["id"])
+
+
+async def _month_end(w: World, day: date) -> None:
+    w.set_today(day)
     await finance_jobs.run_all(
-        w.factory, now=datetime(2026, 8, 1, 3, tzinfo=UTC), today=date(2026, 8, 1)
+        w.factory, now=datetime(day.year, day.month, day.day, 3, tzinfo=UTC), today=day
     )
-    fees = await entries(w, "late_fee")
-    # 10 Temmuz vadesi, plan 20 Temmuz'da kapattı: yalnız 16–20 Temmuz (5 gün) = 8,33
-    assert [f.debit for f in fees] == [Decimal("8.33")]
+
+
+async def test_k2_odeme_plani_suresince_gecikme_islemez(world: World) -> None:
+    """Test raporu #7 (docs/04 §6, FIN-03: "ödeme planındaki kalemlerde, plan bozulmadıkça
+    gecikme işlemez"): plan yürürlükteyken plana alınan borca da taksite de gecikme yazılmaz —
+    plandan önceki günlerin gecikmesi de plandan sonra deftere düşmez. Ödeme anında da yok."""
+    w = world
+    await _plan_on_july_debt(w)
+    await _month_end(w, date(2026, 8, 1))
+    assert await entries(w, "late_fee") == []
+    w.set_today(date(2026, 8, 20))  # 1. taksit vadesi + tolerans içinde ödeniyor
+    assert (await pay(w, "500.00", "2026-08-20")).status_code == 201
+    await _month_end(w, date(2026, 9, 1))
+    assert await entries(w, "late_fee") == []
+
+
+async def test_k2_plan_bozulunca_gecikme_yeniden_isler(world: World) -> None:
+    """Plan bozulursa (1. taksit vade + 10 gün tolerans geçti) normal kurala döner: plana
+    alınan borcun plandan önceki 16–20 Temmuz gecikmesi (5 gün = 8,33) ve gecikmiş taksitin
+    21–31 Ağustos gecikmesi (500 × 0,05/30 × 11 = 9,17) yazılır."""
+    w = world
+    await _plan_on_july_debt(w)
+    await _month_end(w, date(2026, 8, 1))
+    await _month_end(w, date(2026, 9, 1))
+    [fee] = await entries(w, "late_fee")
+    assert (fee.debit, fee.date) == (Decimal("17.50"), date(2026, 8, 31))
+
+
+async def test_k2_plan_iptalinde_plan_suresi_gecikmeye_sayilmaz(world: World) -> None:
+    """İptalde kalan borç ilk vadesiyle (10 Temmuz) yeniden açılır; gecikme yeniden açılış
+    gününden işler (1–31 Ağustos: 1000 × 0,05/30 × 31 = 51,67), plan süresi (20.07–01.08)
+    sayılmaz; plandan önceki 16–20 Temmuz da (8,33) yazılır."""
+    w = world
+    plan_id = await _plan_on_july_debt(w)
+    await _month_end(w, date(2026, 8, 1))
+    assert await entries(w, "late_fee") == []  # Temmuz ay sonu: plan yürürlükte
+    w.app.dependency_overrides[get_now] = lambda: datetime(2026, 8, 1, 9, tzinfo=UTC)
+    cancelled = await w.post(f"/payment-plans/{plan_id}/cancel", {"reason": "Sakin vazgeçti"})
+    assert cancelled.status_code == 200, cancelled.text
+    await _month_end(w, date(2026, 9, 1))
+    [fee] = await entries(w, "late_fee")
+    assert fee.debit == Decimal("60.00")
 
 
 # --- D-10 satır düzeltmesi ------------------------------------------------------------------

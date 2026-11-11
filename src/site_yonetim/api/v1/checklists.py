@@ -1,7 +1,9 @@
 """Denetim (kontrol) listeleri — Yazılım Dokümanı OPS-03 (servis isteği 55).
 
-Çekirdek (modül yok); izin `requests.assign`. Olumsuz madde için talep yalnız talep modülü açıksa
-açılır. Fotoğraf veri adresi olarak gelir, dosya deposuna yazılır; yanıtta `photo_id` döner
+Çekirdek (modül yok). Şablon yönetimi `requests.assign`; şablon listesi, denetim geçmişi ve
+denetim kaydı `requests.assign` ya da `requests.assigned` (teknik personel — Ürün Dokümanı 5.2
+"denetim formları"). Olumsuz madde için talep yalnız talep modülü açıksa açılır. Fotoğraf veri
+adresi olarak gelir, dosya deposuna yazılır; yanıtta `photo_id` döner
 (`GET …/operation-photos/{id}`).
 """
 
@@ -16,7 +18,7 @@ from pydantic import BaseModel, Field
 from site_yonetim.api.deps import CurrentUserDep, SiteContext, require_permission
 from site_yonetim.api.schemas import Written
 from site_yonetim.api.v1.expenses import StoreDep
-from site_yonetim.api.v1.ops_shared import fields_error
+from site_yonetim.api.v1.ops_shared import any_permission, fields_error
 from site_yonetim.core.errors import NotFoundError
 from site_yonetim.domain.access import Permission
 from site_yonetim.domain.facility import ChecklistItemType
@@ -28,6 +30,10 @@ from site_yonetim.services.facility_common import PhotoSink
 
 router = APIRouter(prefix="/sites/{slug}", tags=["denetim listeleri"])
 Assigner = Annotated[SiteContext, Depends(require_permission(Permission.REQUESTS_ASSIGN))]
+Inspector = Annotated[
+    SiteContext,
+    Depends(any_permission(Permission.REQUESTS_ASSIGN, Permission.REQUESTS_ASSIGNED)),
+]
 LIST_MAX = 200
 
 
@@ -70,7 +76,7 @@ class ChecklistTemplateOut(BaseModel):
 
 
 @router.get("/checklist-templates", summary="Denetim şablonları (ilk açılışta hazır şablonlar)")
-async def list_templates(ctx: Assigner) -> list[ChecklistTemplateOut]:
+async def list_templates(ctx: Inspector) -> list[ChecklistTemplateOut]:
     await svc.ensure_defaults(ctx.session)
     rows = list(await ctx.session.scalars(svc.templates_query().limit(LIST_MAX)))
     await ctx.session.commit()
@@ -181,7 +187,7 @@ class ChecklistInspectionOut(BaseModel):
 
 
 @router.get("/inspections", summary=f"Denetim geçmişi (yeniden eskiye, son {LIST_MAX})")
-async def list_inspections(ctx: Assigner) -> list[ChecklistInspectionOut]:
+async def list_inspections(ctx: Inspector) -> list[ChecklistInspectionOut]:
     rows = await ctx.session.scalars(svc.inspections_query().limit(LIST_MAX))
     return [ChecklistInspectionOut.of(x) for x in rows]
 
@@ -192,7 +198,7 @@ async def list_inspections(ctx: Assigner) -> list[ChecklistInspectionOut]:
     summary="Denetimi kaydet — olumsuz maddeler için talep açılır",
 )
 async def create_inspection(
-    body: InspectionIn, ctx: Assigner, current: CurrentUserDep, store: StoreDep
+    body: InspectionIn, ctx: Inspector, current: CurrentUserDep, store: StoreDep
 ) -> Written[ChecklistInspectionOut]:
     await svc.ensure_defaults(ctx.session)
     template = await svc.get_template(ctx.session, body.template_id) if body.template_id else None

@@ -678,6 +678,8 @@ async def test_k11_borclu_bolum_kisiti(rz: Rz) -> None:
                 select(LedgerAccount).where(
                     LedgerAccount.unit_id == uuid.UUID(rz.ids["unit_A"]),
                     LedgerAccount.kind == "occupant",
+                    # kiracılı bölüm: malikin -O hesabı kapalı (docs/03 §5), borç açık hesaba
+                    LedgerAccount.is_closed.is_(False),
                 )
             )
             assert account is not None

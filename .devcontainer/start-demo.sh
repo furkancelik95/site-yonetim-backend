@@ -33,6 +33,8 @@ fi
 cat >"$ROOT/.env" <<EOF
 ENVIRONMENT=development
 SEED_DEMO_DATA=true
+# Demo: giriş kodları test gelen kutusunda ve giriş ekranında görünür (boşsa kapalı).
+TEST_INBOX_ENABLED=true
 DATABASE_URL=postgresql+asyncpg://site_yonetim_app:${DB_APP_PASSWORD}@db:5432/site_yonetim
 DATABASE_ADMIN_URL=postgresql+asyncpg://site_yonetim_owner:${DB_OWNER_PASSWORD}@db:5432/site_yonetim
 REFRESH_COOKIE_SECURE=${COOKIE_SECURE}

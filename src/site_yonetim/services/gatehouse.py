@@ -4,10 +4,10 @@
 
 import uuid
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from site_yonetim.domain.access import Permission
@@ -22,7 +22,6 @@ from site_yonetim.domain.gatehouse import (
 )
 from site_yonetim.domain.operations import OperationRuleError
 from site_yonetim.domain.security import PackageStatus
-from site_yonetim.domain.structure import PartyRole
 from site_yonetim.domain.text import tr_lower
 from site_yonetim.models import (
     Block,
@@ -31,11 +30,10 @@ from site_yonetim.models import (
     ParcelDelegate,
     SecuritySettings,
     Site,
-    SiteMembership,
-    UnitParty,
 )
 from site_yonetim.services import roles as roles_svc
 from site_yonetim.services.security import unit_names
+from site_yonetim.services.security import unit_user_ids as unit_user_ids
 
 # --- Ayarlar -------------------------------------------------------------------------------
 
@@ -185,29 +183,8 @@ async def require_gate(session: AsyncSession, gate_id: uuid.UUID | None) -> None
 # --- Bildirim alıcıları -------------------------------------------------------------------
 
 
-def _active_party(today: date) -> Any:
-    return (
-        UnitParty.start_date <= today,
-        or_(UnitParty.end_date.is_(None), UnitParty.end_date >= today),
-        UnitParty.role != PartyRole.PROXY.value,
-    )
-
-
-async def unit_user_ids(
-    session: AsyncSession, unit_ids: set[uuid.UUID], today: date
-) -> set[uuid.UUID]:
-    """Bölümün bugünkü malik/kiracı/oturanlarının giriş hesapları (etkin sakin üyeliği)."""
-    if not unit_ids:
-        return set()
-    persons = select(UnitParty.person_id).where(
-        UnitParty.unit_id.in_(unit_ids), *_active_party(today)
-    )
-    rows = await session.scalars(
-        select(SiteMembership.user_id).where(
-            SiteMembership.person_id.in_(persons), SiteMembership.is_active
-        )
-    )
-    return set(rows)
+# `unit_user_ids` (bölüm sakinlerinin hesapları) kargo kaydı da kullandığı için `services/security`
+# içindedir; diğer kapı servisleri buradan almaya devam eder (yeniden dışa aktarım).
 
 
 async def manager_user_ids(session: AsyncSession, site: Site) -> set[uuid.UUID]:
@@ -284,19 +261,23 @@ class LongWaiting:
     delegates: list[str]
 
 
-async def long_waiting(session: AsyncSession, *, days: int, now: datetime) -> list[LongWaiting]:
-    """Ayardaki günden uzun teslim bekleyen kargolar (en eski üstte)."""
-    rows = list(
-        await session.scalars(
-            select(Package)
-            .where(
-                Package.status == PackageStatus.WAITING.value,
-                Package.received_at < now - timedelta(days=days),
-            )
-            .order_by(Package.received_at, Package.id)
-            .limit(LONG_WAIT_LIMIT)
-        )
+async def long_waiting(
+    session: AsyncSession,
+    *,
+    days: int,
+    now: datetime,
+    limit: int = LONG_WAIT_LIMIT,
+    after: tuple[datetime, uuid.UUID] | None = None,
+) -> list[LongWaiting]:
+    """Ayardaki günden uzun teslim bekleyen kargolar (en eski üstte). `after`: anahtar kümesi
+    sayfalaması (gece işi bütün kargoları sayfa sayfa gezer)."""
+    query = select(Package).where(
+        Package.status == PackageStatus.WAITING.value,
+        Package.received_at < now - timedelta(days=days),
     )
+    if after is not None:
+        query = query.where(tuple_(Package.received_at, Package.id) > tuple_(*after))
+    rows = list(await session.scalars(query.order_by(Package.received_at, Package.id).limit(limit)))
     units = {p.unit_id for p in rows}
     names = await unit_names(session, units)
     by_unit: dict[uuid.UUID, list[str]] = {}

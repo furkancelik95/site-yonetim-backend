@@ -1,7 +1,12 @@
 """Talep / arıza uçları — docs/06 §2.10 (modül: `requests`; kapalıysa 404).
 
-- `requests.read` olan tüm talepleri görür; izni olmayan sakin yalnız **kendi** taleplerini
-  (docs/05 §6). Başkasının talebi "yok"tur (404).
+- `requests.read` olan tüm talepleri görür; `requests.assigned` (teknik personel) yalnız kendine
+  atanan ya da kendi açtığı talepleri; izni olmayan sakin yalnız **kendi** taleplerini
+  (docs/05 §6). Kapsam dışındaki talep "yok"tur (404).
+- Personel işlemleri (durum, iç not, teklif, birleştirme önerisi): `requests.assign` ya da
+  kapsamındaki talepte `requests.assigned`. Atama ve departman yalnız `requests.assign`.
+- Bu uçtan açılan talep `staff` kanalıdır (sakin onayı beklemez, K18); sakin hesabı bu uca
+  gelirse eskisi gibi sakin talebi (`resident`) sayılır. Sakin ucu: `resident/requests`.
 - Sakin talebi kendi adına ve yalnız kendi bölümü (ya da ortak alan) için açar.
 - Durum akışı dokümandaki geçiş tablosuyla (K18): tablo dışı 409; çözüldü/iptal yapılırken
   `resolution` zorunlu. Satırda `allowed_transitions` (personelin seçebileceği durumlar).
@@ -30,13 +35,14 @@ from site_yonetim.api.deps import (
 )
 from site_yonetim.api.schemas import Money, Page, PageParams, Written
 from site_yonetim.core.errors import ApiError, ForbiddenError, NotFoundError
-from site_yonetim.domain.access import Permission
+from site_yonetim.domain.access import Permission, UserKind
 from site_yonetim.domain.members import FORM_ERROR
 from site_yonetim.domain.modules import ModuleKey
 from site_yonetim.domain.operations import (
     RESIDENT_CANCELLABLE,
     STATUS_LABELS,
     OperationRuleError,
+    RequestChannel,
     RequestEventKind,
     RequestPriority,
     RequestStatus,
@@ -95,8 +101,28 @@ def _own_only(ctx: SiteContext) -> uuid.UUID | None:
     raise ForbiddenError
 
 
+def _assigned_only(ctx: SiteContext) -> bool:
+    """Tüm talepleri değil, yalnız kendine atanan / kendi açtığı talepleri görür."""
+    return not ctx.access.can(Permission.REQUESTS_READ) and ctx.access.can(
+        Permission.REQUESTS_ASSIGNED
+    )
+
+
 def require(ctx: SiteContext, permission: Permission) -> None:
     if not ctx.access.can(permission):
+        raise ForbiddenError
+
+
+def can_work(ctx: SiteContext) -> bool:
+    """Talep üzerinde personel işlemi (durum, iç not, teklif): tüm talepler ya da kapsamı.
+    Kapsam `visible` ile zaten uygulanmıştır."""
+    return ctx.access.can(Permission.REQUESTS_ASSIGN) or ctx.access.can(
+        Permission.REQUESTS_ASSIGNED
+    )
+
+
+def require_work(ctx: SiteContext) -> None:
+    if not can_work(ctx):
         raise ForbiddenError
 
 
@@ -198,7 +224,8 @@ class RequestOut(BaseModel):
     status: RequestStatus
     status_label: str = Field(description="`İşlemde`")
     allowed_transitions: list[RequestStatus] = Field(
-        description="personelin seçebileceği durumlar (requests.assign yoksa boş)"
+        description="personelin seçebileceği durumlar (requests.assign / requests.assigned yoksa "
+        "boş)"
     )
     can_cancel: bool = Field(description="sakin kendi talebini iptal edebilir mi (iş başlamadan)")
     unit_id: uuid.UUID | None
@@ -206,7 +233,13 @@ class RequestOut(BaseModel):
     location: str | None
     reported_by_person_id: uuid.UUID | None
     reporter_name: str | None = Field(description="people.read ya da kendi talebi; yoksa null")
-    assigned_to: str | None
+    assigned_to: str | None = Field(description="atanan kişinin adı ya da firma (görünen ad)")
+    assignee_id: uuid.UUID | None = Field(
+        description="atanan personelin kullanıcı kimliği; firmaya / serbest metinle atanmışsa null"
+    )
+    channel: RequestChannel = Field(
+        description="resident: sakin açtı (kapanış sakin onayıyla) · staff: personel açtı"
+    )
     department_id: uuid.UUID | None
     department_name: str | None
     due_at: dt.datetime | None
@@ -256,7 +289,7 @@ async def out(ctx: SiteContext, requests: list[Request], now: dt.datetime) -> li
         session, {r.reported_by_person_id for r in requests if r.reported_by_person_id}
     )
     names = ctx.access.can(Permission.PEOPLE_READ)
-    staff = ctx.access.can(Permission.REQUESTS_ASSIGN)
+    staff = can_work(ctx)
     me = ctx.access.person_id
     teams = await departments_svc.names(
         session, {r.department_id for r in requests if r.department_id}
@@ -300,6 +333,8 @@ async def out(ctx: SiteContext, requests: list[Request], now: dt.datetime) -> li
                 if r.reported_by_person_id and (names or r.reported_by_person_id == me)
                 else None,
                 assigned_to=r.assigned_to,
+                assignee_id=r.assignee_user_id,
+                channel=RequestChannel(r.channel),
                 department_id=r.department_id,
                 department_name=teams.get(r.department_id) if r.department_id else None,
                 due_at=r.due_at,
@@ -341,9 +376,15 @@ async def detail(ctx: SiteContext, request: Request, now: dt.datetime) -> Reques
     return RequestDetail(**base.model_dump(), events=[EventOut.of(e) for e in events])
 
 
-async def visible(ctx: SiteContext, request_id: uuid.UUID, *, for_update: bool = False) -> Request:
-    own = _own_only(ctx)
+async def visible(
+    ctx: SiteContext, request_id: uuid.UUID, user_id: uuid.UUID, *, for_update: bool = False
+) -> Request:
     request = await svc.get(ctx.session, request_id, for_update=for_update)
+    if request is not None and _assigned_only(ctx):
+        if svc.in_assigned_scope(request, user_id, ctx.access.person_id):
+            return request
+        raise NotFoundError("Talep bulunamadı.")
+    own = _own_only(ctx)
     if request is None or (own is not None and request.reported_by_person_id != own):
         raise NotFoundError("Talep bulunamadı.")
     return request
@@ -352,11 +393,40 @@ async def visible(ctx: SiteContext, request_id: uuid.UUID, *, for_update: bool =
 # --- Liste ve ayrıntı ----------------------------------------------------------------------
 
 
+class AssignableOut(BaseModel):
+    id: uuid.UUID = Field(description="kullanıcı kimliği — `assign` gövdesinde `assignee_id`")
+    full_name: str
+    roles: list[str]
+    all_requests: bool = Field(
+        description="true: tüm talepleri görür (requests.assign); false: yalnız kendine atananları"
+    )
+
+
+@router.get("/assignable-staff", summary="Talep atanabilecek personel")
+async def assignable_staff(
+    ctx: RequestsModule,
+    now: NowDep,
+    q: Annotated[str | None, Query(max_length=60, description="ad araması")] = None,
+) -> list[AssignableOut]:
+    """Tesis kapsamlı rolünde `requests.assign` ya da `requests.assigned` olan etkin kullanıcılar
+    (ada göre). Personel ile departman arasında veri bağı yok; departman süzgeci verilmez."""
+    require(ctx, Permission.REQUESTS_ASSIGN)
+    term = " ".join((q or "").split()).casefold()
+    return [
+        AssignableOut(
+            id=a.user_id, full_name=a.full_name, roles=list(a.roles), all_requests=a.all_requests
+        )
+        for a in await svc.assignable_staff(ctx.session, ctx.site, now)
+        if term in a.full_name.casefold()
+    ]
+
+
 @router.get("", summary="Talepler (yeni üstte)")
 async def list_requests(
     ctx: RequestsModule,
     paging: Paging,
     now: NowDep,
+    current: CurrentUserDep,
     status_filter: Annotated[RequestStatus | None, Query(alias="status")] = None,
     category: Annotated[str | None, Query(max_length=60)] = None,
     priority: RequestPriority | None = None,
@@ -366,11 +436,13 @@ async def list_requests(
     ] = None,
     unit_id: Annotated[uuid.UUID | None, Query(description="bölüm kartı süzgeci")] = None,
 ) -> Page[RequestOut]:
+    scoped = _assigned_only(ctx)
     query = svc.list_query(
         status=status_filter,
         category=category or None,
         priority=priority,
-        reporter=_own_only(ctx),
+        reporter=None if scoped else _own_only(ctx),
+        scope=svc.assigned_scope(current.user.id, ctx.access.person_id) if scoped else None,
         department_id=department_id,
         sla_breached=sla_breached,
         now=now,
@@ -384,8 +456,10 @@ async def list_requests(
 
 
 @router.get("/{request_id}", summary="Talep ayrıntısı ve geçmişi")
-async def get_request(request_id: uuid.UUID, ctx: RequestsModule, now: NowDep) -> RequestDetail:
-    return await detail(ctx, await visible(ctx, request_id), now)
+async def get_request(
+    request_id: uuid.UUID, ctx: RequestsModule, now: NowDep, current: CurrentUserDep
+) -> RequestDetail:
+    return await detail(ctx, await visible(ctx, request_id, current.user.id), now)
 
 
 class RequestCreate(BaseModel):
@@ -408,7 +482,9 @@ async def create_request(
     ctx: RequestsModule, body: RequestCreate, current: CurrentUserDep, today: TodayDep, now: NowDep
 ) -> Written[RequestDetail]:
     require(ctx, Permission.REQUESTS_CREATE)
-    own = not ctx.access.can(Permission.REQUESTS_READ) and ctx.access.person_id is not None
+    # Personel ucu: `staff` kanalı. Yalnız sakin hesabı (kişiye bağlı) bu uca gelirse geriye uyum
+    # için sakin talebi sayılır (kendi adına, kendi bölümü).
+    own = current.user.kind == UserKind.RESIDENT.value and ctx.access.person_id is not None
     return await create_for(ctx, body, current, today, now, own=own)
 
 
@@ -445,6 +521,8 @@ async def create_for(
                 unit_id=body.unit_id,
                 location=body.location,
                 reported_by_person_id=reporter,
+                channel=RequestChannel.RESIDENT if own else RequestChannel.STAFF,
+                created_by_user_id=current.user.id,
             ),
             actor=current.user.full_name,
             now=now,
@@ -471,8 +549,8 @@ class StatusIn(BaseModel):
 async def change_status(
     request_id: uuid.UUID, ctx: RequestsModule, body: StatusIn, current: CurrentUserDep, now: NowDep
 ) -> Written[RequestDetail]:
-    require(ctx, Permission.REQUESTS_ASSIGN)
-    request = await visible(ctx, request_id, for_update=True)
+    require_work(ctx)
+    request = await visible(ctx, request_id, current.user.id, for_update=True)
     try:
         await svc.change_status(
             ctx.session,
@@ -492,7 +570,15 @@ async def change_status(
 
 
 class AssignIn(BaseModel):
-    assignee: str = Field(min_length=2, max_length=120, description="personel ya da firma adı")
+    assignee: str | None = Field(
+        default=None,
+        min_length=2,
+        max_length=120,
+        description="firma ya da serbest metin (geriye uyum); `assignee_id` varsa yok sayılır",
+    )
+    assignee_id: uuid.UUID | None = Field(
+        default=None, description="personel (GET …/requests/assignable-staff `id`)"
+    )
 
 
 @router.post("/{request_id}/assign", summary="Ata (açık talep 'Atandı' olur)")
@@ -500,9 +586,17 @@ async def assign_request(
     request_id: uuid.UUID, ctx: RequestsModule, body: AssignIn, current: CurrentUserDep, now: NowDep
 ) -> Written[RequestDetail]:
     require(ctx, Permission.REQUESTS_ASSIGN)
-    request = await visible(ctx, request_id, for_update=True)
+    request = await visible(ctx, request_id, current.user.id, for_update=True)
     try:
-        await svc.assign(ctx.session, request, body.assignee, actor=current.user.full_name, now=now)
+        await svc.assign(
+            ctx.session,
+            ctx.site,
+            request,
+            body.assignee,
+            assignee_user_id=body.assignee_id,
+            actor=current.user.full_name,
+            now=now,
+        )
     except OperationRuleError as exc:
         raise rule_error(exc) from exc
     await ctx.session.commit()
@@ -525,7 +619,7 @@ async def add_comment(
     now: NowDep,
 ) -> Written[RequestDetail]:
     """Yorumu talebi açan sakin de görür; yalnız personelin göreceği not için `/internal-notes`."""
-    request = await visible(ctx, request_id)  # requests.read ya da kendi talebi
+    request = await visible(ctx, request_id, current.user.id)  # kapsamındaki talep
     try:
         await svc.comment(ctx.session, request, body.body, actor=current.user.full_name)
     except OperationRuleError as exc:
@@ -547,7 +641,7 @@ async def set_department(
     now: NowDep,
 ) -> Written[RequestDetail]:
     require(ctx, Permission.REQUESTS_ASSIGN)
-    request = await visible(ctx, request_id, for_update=True)
+    request = await visible(ctx, request_id, current.user.id, for_update=True)
     try:
         department = await departments_svc.assign(
             ctx.session, request, body.department_id, actor=current.user.full_name
@@ -583,9 +677,11 @@ class InternalNoteIn(BaseModel):
 
 
 @router.get("/{request_id}/internal-notes", summary="İç notlar (yalnız personel)")
-async def internal_notes(request_id: uuid.UUID, ctx: RequestsModule) -> list[InternalNoteOut]:
-    require(ctx, Permission.REQUESTS_ASSIGN)
-    request = await visible(ctx, request_id)
+async def internal_notes(
+    request_id: uuid.UUID, ctx: RequestsModule, current: CurrentUserDep
+) -> list[InternalNoteOut]:
+    require_work(ctx)
+    request = await visible(ctx, request_id, current.user.id)
     return [InternalNoteOut.of(n) for n in await desk_svc.notes(ctx.session, request.id)]
 
 
@@ -597,8 +693,8 @@ async def internal_notes(request_id: uuid.UUID, ctx: RequestsModule) -> list[Int
 async def add_internal_note(
     request_id: uuid.UUID, ctx: RequestsModule, body: InternalNoteIn, current: CurrentUserDep
 ) -> Written[InternalNoteOut]:
-    require(ctx, Permission.REQUESTS_ASSIGN)
-    request = await visible(ctx, request_id)
+    require_work(ctx)
+    request = await visible(ctx, request_id, current.user.id)
     try:
         note = await desk_svc.add_note(
             ctx.session,
@@ -639,10 +735,13 @@ class MergeSuggestionsOut(BaseModel):
 
 
 @router.get("/{request_id}/merge-suggestions", summary="Bu talepler aynı arıza olabilir")
-async def merge_suggestions(request_id: uuid.UUID, ctx: RequestsModule) -> MergeSuggestionsOut:
-    """Kural tabanlı öneri (yapay zekâ yok): aynı kategori + konum/blok + zaman penceresi."""
+async def merge_suggestions(
+    request_id: uuid.UUID, ctx: RequestsModule, current: CurrentUserDep
+) -> MergeSuggestionsOut:
+    """Kural tabanlı öneri (yapay zekâ yok): aynı kategori + konum/blok + zaman penceresi.
+    Başka talepleri listelediği için yalnız `requests.assign`."""
     require(ctx, Permission.REQUESTS_ASSIGN)
-    request = await visible(ctx, request_id)
+    request = await visible(ctx, request_id, current.user.id)
     found = await desk_svc.merge_suggestions(ctx.session, request)
     units = await svc.unit_names(ctx.session, {r.unit_id for r in found.similar if r.unit_id})
     linked = found.linked
@@ -693,8 +792,8 @@ class QuoteIn(BaseModel):
 async def create_quote(
     request_id: uuid.UUID, ctx: RequestsModule, body: QuoteIn, current: CurrentUserDep, now: NowDep
 ) -> Written[ServiceQuoteOut]:
-    require(ctx, Permission.REQUESTS_ASSIGN)
-    request = await visible(ctx, request_id, for_update=True)
+    require_work(ctx)
+    request = await visible(ctx, request_id, current.user.id, for_update=True)
     try:
         quote = await paid_svc.create_quote(
             ctx.session,

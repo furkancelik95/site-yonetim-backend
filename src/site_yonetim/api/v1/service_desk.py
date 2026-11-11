@@ -29,6 +29,7 @@ from site_yonetim.api.v1.requests import (
     ServiceQuoteOut,
     form_error,
     require,
+    require_work,
     rule_error,
 )
 from site_yonetim.core.errors import ForbiddenError, NotFoundError
@@ -280,7 +281,7 @@ class ReplyTemplateIn(BaseModel):
 
 @router.get("/reply-templates", summary="Hazır yanıt şablonları")
 async def list_templates(ctx: Module) -> list[ReplyTemplateOut]:
-    require(ctx, Permission.REQUESTS_ASSIGN)
+    require_work(ctx)  # requests.assign ya da requests.assigned (yorumda hazır yanıt)
     return [ReplyTemplateOut.of(t) for t in await setup_svc.templates(ctx.session)]
 
 
@@ -521,7 +522,7 @@ class TariffWriteOut(BaseModel):
 
 @router.get("/service-tariffs", summary="Hizmet tarifesi")
 async def list_tariffs(ctx: Module) -> list[ServiceTariffOut]:
-    require(ctx, Permission.REQUESTS_ASSIGN)
+    require_work(ctx)  # teknik personel ücretli hizmet teklifi hazırlar (Ürün Dokümanı 5.1)
     return [ServiceTariffOut.of(t) for t in await paid_svc.tariffs(ctx.session)]
 
 
@@ -615,10 +616,17 @@ async def complete_quote(
     now: NowDep,
     today: TodayDep,
 ) -> Written[ServiceQuoteOut]:
-    require(ctx, Permission.REQUESTS_ASSIGN)
+    require_work(ctx)
     quote = await paid_svc.get_quote(ctx.session, quote_id)
     request = await requests_svc.get(ctx.session, quote.request_id) if quote else None
-    if quote is None or request is None:
+    if (
+        quote is None
+        or request is None
+        or (
+            not ctx.access.can(Permission.REQUESTS_ASSIGN)
+            and not requests_svc.in_assigned_scope(request, current.user.id, ctx.access.person_id)
+        )
+    ):
         raise NotFoundError("Teklif bulunamadı.")
     try:
         await paid_svc.complete(

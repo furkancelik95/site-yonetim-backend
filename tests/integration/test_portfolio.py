@@ -49,11 +49,11 @@ async def test_portfoy_site_basina_ozet(world: World) -> None:
 async def test_fields_follow_each_sites_permissions(world: World) -> None:
     user = await create_user(world.factory, "karma@test.local")
     await add_site_membership(world.factory, world.site_id, user.id, "Denetçi")
-    await add_site_membership(world.factory, world.other_site_id, user.id, "Teknik Personel")
+    await add_site_membership(world.factory, world.other_site_id, user.id, "Yönetim Kurulu Üyesi")
     headers = await login_headers(world.api, "karma@test.local")
     aksu, yildiz = (await world.api.get("/api/v1/portfolio", headers=headers)).json()["sites"]
     assert aksu["finance"] is not None and aksu["requests"] is None  # noqa: PT018 - Denetçi
-    assert yildiz["finance"] is None and yildiz["requests"] is not None  # noqa: PT018 - Teknik
+    assert yildiz["finance"] is not None and yildiz["requests"] is not None  # noqa: PT018 - YK
 
 
 async def test_overdue_requests_are_counted(world: World) -> None:

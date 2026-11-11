@@ -677,3 +677,123 @@ async def test_destek_ekibi_oturumda_sakin_olarak_goruntuleyebilir(
                 )
             )
     assert "support_session" in types
+
+
+async def test_sla_ozeti_iki_ekranda_ayni_tanim(
+    destek: tuple[World, dict[str, str], Clock],
+) -> None:
+    """Test raporu #9: site ve platform ekranı SLA aşımını farklı sayıyordu. Tek tanım
+    (`ticket_sla`) ve veritabanında sayılan `summary` — sayfa ve süzgeçten bağımsız."""
+    w, platform, clock = destek
+    critical = (await w.post("/support-tickets", ticket_body(priority="critical"))).json()["data"]
+    normal = (await w.post("/support-tickets", ticket_body(priority="normal"))).json()["data"]
+    done = (await w.post("/support-tickets", ticket_body(priority="critical"))).json()["data"]
+    other = await w.api.post(
+        w.url("/support-tickets", YILDIZ), json=ticket_body(priority="high"), headers=w.headers
+    )
+    assert other.status_code == 201
+
+    clock.now = T0 + timedelta(minutes=30)
+    for tid, status_ in ((normal["id"], "answered"), (done["id"], "resolved")):
+        replied = await w.api.post(
+            f"/api/v1/platform/support-tickets/{tid}/messages",
+            json={"body": "İnceledik.", "status": status_},
+            headers=platform,
+        )
+        assert replied.status_code == 200, replied.text
+
+    clock.now = T0 + timedelta(hours=5)
+    site = (await w.get("/support-tickets", params={"page_size": 1})).json()
+    assert site["summary"] == {
+        "open": 2,
+        "sla_breached": 1,
+        "first_response_overdue": 1,
+        "critical": 1,
+    }
+    by_id = {t["id"]: t["sla"] for t in (await w.get("/support-tickets")).json()["items"]}
+    assert by_id[critical["id"]]["breached"] is True
+    assert by_id[critical["id"]]["first_response_overdue"] is True
+    assert by_id[normal["id"]]["breached"] is False
+    assert by_id[done["id"]]["first_response_overdue"] is False
+
+    # Süzgeç özeti değiştirmez; platform tüm tesisleri sayar (Yıldız'ın yüksek bileti de aşımda)
+    filtered = (await w.get("/support-tickets", params={"status": "closed"})).json()
+    assert filtered["total"] == 0
+    assert filtered["summary"] == site["summary"]
+    listed = (await w.api.get("/api/v1/platform/support-tickets", headers=platform)).json()
+    assert listed["summary"] == {
+        "open": 3,
+        "sla_breached": 2,
+        "first_response_overdue": 2,
+        "critical": 1,
+    }
+    assert sum(t["sla"]["breached"] for t in listed["items"] if t["status"] not in (
+        "resolved", "closed"
+    )) == listed["summary"]["sla_breached"]  # fmt: skip
+
+    # Geç gelen ilk yanıt: aşım kalır, "yanıt bekliyor" düşer
+    late = await w.api.post(
+        f"/api/v1/platform/support-tickets/{critical['id']}/messages",
+        json={"body": "Geç de olsa bakıyoruz."},
+        headers=platform,
+    )
+    assert late.json()["data"]["sla"]["first_response_overdue"] is False
+    assert late.json()["data"]["sla"]["breached"] is True
+    after = (await w.get("/support-tickets")).json()["summary"]
+    assert (after["sla_breached"], after["first_response_overdue"]) == (1, 0)
+
+
+async def test_bilgi_bankasi_yayindan_kaldirma(
+    destek: tuple[World, dict[str, str], Clock],
+) -> None:
+    """Test raporu (platform): makale yayından kaldırılabilir; arşivdeki makale yardımda ve
+    aramada çıkmaz, geri bildirim alamaz; geri alınabilir. Kalıcı silme yok."""
+    w, platform, _ = destek
+    body = {
+        "title": "Aidat nasıl ödenir",
+        "body": "Ödeme ekranında IBAN ve referans kodunu kullanarak havale yapabilirsiniz.",
+        "audience": "resident",
+        "screens": ["odeme"],
+    }
+    article = (
+        await w.api.post("/api/v1/platform/knowledge-articles", json=body, headers=platform)
+    ).json()["data"]
+    assert article["archived_at"] is None
+    url = f"/api/v1/platform/knowledge-articles/{article['id']}"
+
+    denied = await w.api.post(f"{url}/archive", headers=w.headers)
+    assert denied.status_code == 404  # platform yöneticisi değil
+    archived = await w.api.post(f"{url}/archive", headers=platform)
+    assert archived.status_code == 200, archived.text
+    assert archived.json()["data"]["archived_at"] is not None
+    assert "yayından kaldırıldı" in archived.json()["message"]
+    again = await w.api.post(f"{url}/archive", headers=platform)
+    assert (again.status_code, again.json()["error"]["code"]) == (409, "already_archived")
+
+    for params in ({"q": "havale"}, {"screen": "odeme"}, {}):
+        found = await w.api.get("/api/v1/knowledge-articles", params=params, headers=w.headers)
+        assert found.json()["total"] == 0, params
+    feedback = await w.api.post(
+        f"/api/v1/knowledge-articles/{article['id']}/feedback",
+        json={"helpful": True},
+        headers=w.headers,
+    )
+    assert feedback.status_code == 404
+    managed = await w.api.get(
+        "/api/v1/platform/knowledge-articles", params={"archived": "true"}, headers=platform
+    )
+    assert [a["id"] for a in managed.json()["items"]] == [article["id"]]
+    live = await w.api.get("/api/v1/platform/knowledge-articles", headers=platform)
+    assert live.json()["total"] == 0
+    assert (
+        await w.api.get("/api/v1/platform/knowledge-articles", headers=w.headers)
+    ).status_code == 404
+    assert (await w.api.delete(url, headers=platform)).status_code == 405  # kalıcı silme yok
+
+    restored = await w.api.post(f"{url}/restore", headers=platform)
+    assert restored.status_code == 200
+    assert restored.json()["data"]["archived_at"] is None
+    found = await w.api.get("/api/v1/knowledge-articles", params={"q": "havale"}, headers=w.headers)
+    assert found.json()["total"] == 1
+    twice = await w.api.post(f"{url}/restore", headers=platform)
+    assert twice.json()["error"]["code"] == "not_archived"

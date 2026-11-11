@@ -262,5 +262,10 @@ def test_uretimde_test_kutusu_acilamaz() -> None:
     assert Settings(**base).test_inbox_active is False  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="TEST_INBOX_ENABLED"):
         Settings(**base, test_inbox_enabled=True)  # type: ignore[arg-type]
+    # Test raporu: boşsa geliştirmede de kapalı; demo/test açıkça açar.
     dev = Settings(_env_file=None, environment=Environment.DEVELOPMENT)
-    assert dev.test_inbox_active is True
+    assert dev.test_inbox_active is False
+    explicit = Settings(
+        _env_file=None, environment=Environment.DEVELOPMENT, test_inbox_enabled=True
+    )
+    assert explicit.test_inbox_active is True

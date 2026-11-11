@@ -23,7 +23,9 @@ from site_yonetim.api.schemas import MAX_PAGE_SIZE, Page, PageParams, Written
 from site_yonetim.api.v1.support import (
     SupportSessionOut,
     SupportTicketOut,
+    SupportTicketPage,
     TicketMessageIn,
+    TicketSummaryOut,
     rule_error,
     session_out,
     ticket_out,
@@ -44,7 +46,7 @@ from site_yonetim.domain.support import (
     TicketStatus,
     clean_screens,
 )
-from site_yonetim.models import KnowledgeArticle, Site, SupportSession, SupportTicket
+from site_yonetim.models import KnowledgeArticle, Site, SupportSession, SupportTicket, User
 from site_yonetim.services import support as svc
 from site_yonetim.services.sites import find_site_by_slug
 
@@ -72,8 +74,9 @@ async def platform_tickets(
     paging: Paging,
     now: NowDep,
     status_: Annotated[TicketStatus | None, Query(alias="status")] = None,
-) -> Page[SupportTicketOut]:
-    """Öncelik (kritik önce), sonra en yeni. SLA aşımı yanıtta hesaplanır."""
+) -> SupportTicketPage:
+    """Öncelik (kritik önce), sonra en yeni. SLA aşımı yanıtta hesaplanır; `summary` tüm
+    tesislerin açık biletlerini veritabanında sayar (sayfa ve süzgeçten bağımsız)."""
     query = select(SupportTicket, Site).join(Site, Site.id == SupportTicket.site_id)
     if status_ is not None:
         query = query.where(SupportTicket.status == status_.value)
@@ -87,11 +90,13 @@ async def platform_tickets(
             )
         ).all()
         messages = await svc.messages_of(session, [t.id for t, _ in rows])
-    return Page(
+        summary = await svc.sla_summary(session, now)
+    return SupportTicketPage(
         items=[ticket_out(t, s, messages[t.id], now) for t, s in rows],
         page=paging.page,
         page_size=paging.page_size,
         total=total or 0,
+        summary=TicketSummaryOut.of(summary),
     )
 
 
@@ -227,6 +232,9 @@ class KnowledgeArticleOut(BaseModel):
     not_helpful: int
     updated_at: dt.datetime
     updated_by: str
+    archived_at: dt.datetime | None = Field(
+        default=None, description="yayından kaldırıldı (arşiv); yardımda ve aramada görünmez"
+    )
 
 
 class KnowledgeArticleIn(BaseModel):
@@ -271,6 +279,7 @@ def article_out(article: KnowledgeArticle, counts: tuple[int, int]) -> Knowledge
         not_helpful=counts[1],
         updated_at=stamp,
         updated_by=article.updated_by_name,
+        archived_at=article.archived_at,
     )
 
 
@@ -290,8 +299,28 @@ async def list_articles(
     page_size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = MAX_PAGE_SIZE,
 ) -> Page[KnowledgeArticleOut]:
     """Makale tüm tesisler için ortak. `screen` yol önekiyle eşleşir (`satin-alma` makalesi
-    `satin-alma/talepler` ekranında da görünür)."""
-    query = select(KnowledgeArticle)
+    `satin-alma/talepler` ekranında da görünür). Yayından kaldırılan (arşiv) makale görünmez."""
+    return await _article_page(
+        session, q=q, screen=screen, audience=audience, archived=False, page=page,
+        page_size=page_size,
+    )  # fmt: skip
+
+
+async def _article_page(
+    session: SessionDep,
+    *,
+    q: str | None,
+    screen: str | None,
+    audience: ArticleAudience | None,
+    archived: bool,
+    page: int,
+    page_size: int,
+) -> Page[KnowledgeArticleOut]:
+    query = select(KnowledgeArticle).where(
+        KnowledgeArticle.archived_at.is_not(None)
+        if archived
+        else KnowledgeArticle.archived_at.is_(None)
+    )
     if audience is not None:
         query = query.where(KnowledgeArticle.audience == audience.value)
     if q and q.strip():
@@ -328,7 +357,7 @@ async def article_feedback(
     article_id: uuid.UUID, body: FeedbackIn, current: CurrentUserDep, session: SessionDep
 ) -> Written[KnowledgeArticleOut]:
     article = await session.get(KnowledgeArticle, article_id)
-    if article is None:
+    if article is None or article.archived_at is not None:
         raise NotFoundError("Makale bulunamadı.")
     await svc.give_feedback(session, article, user_id=current.user.id, helpful=body.helpful)
     out = await _article_out(session, article)
@@ -380,3 +409,65 @@ async def update_article(
     out = await _article_out(session, article)
     await session.commit()
     return Written(data=out, message="Makale güncellendi.")
+
+
+@router.get("/knowledge-articles", summary="Bilgi bankası yönetimi (yayında ya da arşivde)")
+async def platform_articles(
+    _: PlatformAdminDep,
+    session: SessionDep,
+    q: Annotated[str | None, Query(max_length=100)] = None,
+    audience: ArticleAudience | None = None,
+    archived: Annotated[bool, Query(description="true: yayından kaldırılanlar")] = False,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = MAX_PAGE_SIZE,
+) -> Page[KnowledgeArticleOut]:
+    return await _article_page(
+        session, q=q, screen=None, audience=audience, archived=archived, page=page,
+        page_size=page_size,
+    )  # fmt: skip
+
+
+async def _set_archived(
+    session: SessionDep, user: User, article_id: uuid.UUID, at: dt.datetime | None
+) -> KnowledgeArticleOut:
+    article = await session.get(KnowledgeArticle, article_id, with_for_update=True)
+    if article is None:
+        raise NotFoundError("Makale bulunamadı.")
+    if (article.archived_at is None) == (at is None):
+        archiving = at is not None
+        raise ApiError(
+            HTTPStatus.CONFLICT,
+            "already_archived" if archiving else "not_archived",
+            "Makale zaten yayından kaldırılmış." if archiving else "Makale zaten yayında.",
+        )
+    article.archived_at = at
+    article.updated_by_id = user.id
+    article.updated_by_name = user.full_name
+    await session.flush()
+    await session.refresh(article)
+    return await _article_out(session, article)
+
+
+@router.post(
+    "/knowledge-articles/{article_id}/archive", summary="Makaleyi yayından kaldır (silme yok)"
+)
+async def archive_article(
+    article_id: uuid.UUID, current: PlatformAdminDep, session: SessionDep, now: NowDep
+) -> Written[KnowledgeArticleOut]:
+    out = await _set_archived(session, current.user, article_id, now)
+    await session.commit()
+    return Written(
+        data=out,
+        message="Makale yayından kaldırıldı; yardımda ve aramada görünmez. Geri alınabilir.",
+    )
+
+
+@router.post(
+    "/knowledge-articles/{article_id}/restore", summary="Arşivdeki makaleyi yeniden yayınla"
+)
+async def restore_article(
+    article_id: uuid.UUID, current: PlatformAdminDep, session: SessionDep
+) -> Written[KnowledgeArticleOut]:
+    out = await _set_archived(session, current.user, article_id, None)
+    await session.commit()
+    return Written(data=out, message="Makale yeniden yayınlandı.")

@@ -1,6 +1,6 @@
 """Demo verisi ve site kurulumu — docs/10 (gerçek PostgreSQL, RLS'e tabi rol)."""
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -107,9 +107,27 @@ async def test_demo_verisi_yuklenir(
         assert await _count(session_factory, Unit) == 84
         tenants = sum(1 for spec in SITES for o in occupancy_for(spec) if o.tenant)
         assert await _count(session_factory, Person) == 84 + tenants
-        # her malik: -M ve (kiracı eklenmeden önce) -O; her kiracı: -K
+        # her malik: -M ve (kiracı eklenmeden önce) -O; her kiracı: -K. Kiracı gelince malikin
+        # -O'su kapanır (docs/03 §5): her bölümde tek açık oturan hesabı.
         assert await _count(session_factory, LedgerAccount) == 84 * 2 + tenants
         assert tenants > 0
+        async with session_factory() as session:
+            closed = list(
+                await session.scalars(select(LedgerAccount).where(LedgerAccount.is_closed))
+            )
+            open_occupants = dict(
+                (
+                    await session.execute(
+                        select(LedgerAccount.unit_id, func.count())
+                        .where(LedgerAccount.kind == "occupant", ~LedgerAccount.is_closed)
+                        .group_by(LedgerAccount.unit_id)
+                    )
+                ).all()
+            )
+        assert len(closed) == tenants
+        assert all(a.kind == "occupant" and a.reference_code.endswith("-O") for a in closed)
+        assert len(open_occupants) == 84
+        assert set(open_occupants.values()) == {1}
         assert await _count(session_factory, Block) == 6
         assert await _count(session_factory, UnitType) == 9  # site başına 3
 
@@ -197,6 +215,21 @@ async def test_demo_hesaplariyla_giris_ve_roller(
     assert await sites_of("denetci@demo.local") == {"aksu-konaklari": "Denetçi"}
     assert await sites_of("teknik@demo.local") == {"aksu-konaklari": "Teknik Personel"}
     assert await sites_of("platform@demo.local") == {}
+
+
+async def test_demo_teknik_personelin_kapsaminda_acik_talep_var(
+    dev_settings: Settings, session_factory: Factory, api: httpx2.AsyncClient
+) -> None:
+    """Teknik şablon yalnız kendine atananları görür (`requests.assigned`); demo sıfırlamadan
+    sonra teknik hesabın talep listesi boş kalmamalı."""
+    await seed_demo(dev_settings, session_factory)
+    headers = await login_headers(api, "teknik@demo.local", DEMO_PASSWORD)
+    me = (await api.get("/api/v1/me", headers=headers)).json()
+    listed = await api.get("/api/v1/sites/aksu-konaklari/requests", headers=headers)
+    assert listed.status_code == 200, listed.text
+    mine = listed.json()["items"]
+    active = {"open", "assigned", "in_progress", "waiting"}
+    assert any(r["status"] in active and r["assignee_id"] == me["user_id"] for r in mine)
 
 
 async def test_uygulama_acilisinda_gelistirmede_yuklenir(
@@ -425,12 +458,18 @@ async def test_demo_duyuru_ve_talep(
     resident = await login_headers(api, "sakin@demo.local", DEMO_PASSWORD)
     listed = (await api.get("/api/v1/sites/aksu-konaklari/announcements", headers=resident)).json()
     assert [a["title"] for a in listed["items"]] == [
-        "Olağanüstü genel kurul toplantı çağrısı",  # malik: okuma onaylı çağrı (75), sabit
-        "Olağan genel kurul toplantısı",
+        "Olağan genel kurul toplantısı",  # sabit, 3 gün önce
+        "Olağanüstü genel kurul toplantı çağrısı",  # malik: okuma onaylı çağrı (75), 5 gün önce
         "Asansör yenileme çalışması — okuma onayı",
         "Planlı su kesintisi",
         "Aidat ödeme hatırlatması",
     ]
+    # Test raporu: iki genel kurul duyurusu aynı gün/saatte yayımlanmış görünmesin.
+    ordinary, extraordinary = (
+        datetime.fromisoformat(a["published_at"]).date() for a in listed["items"][:2]
+    )
+    assert (SEED_DAY - ordinary).days == 3
+    assert (SEED_DAY - extraordinary).days == 5
     manager = await login_headers(api, "yonetici@demo.local", DEMO_PASSWORD)
     requests_page = (await api.get("/api/v1/sites/aksu-konaklari/requests", headers=manager)).json()
     # 6 demo talebi + bugün planı gelen hidrofor bakımının iş emri (HIZ-06)
@@ -660,3 +699,40 @@ async def test_demo_genel_kurul(
     assert coming["invitation"]["recipients"] > 0
     assert 0 < coming["invitation"]["read"] < coming["invitation"]["recipients"]
     assert coming["attendance"] == []
+
+
+async def test_demo_arsa_paylari_toplami_paydaya_esit(
+    dev_settings: Settings, session_factory: Factory, admin_engine: object
+) -> None:
+    """Test raporu: her sitede bölümlerin arsa payı toplamı paydaya eşit, payda tek (docs/10 §1.4).
+
+    Payda tohumdan türetilir; değişirse demo tahakkukundaki "Arsa payı a / b" açıklamaları da
+    değişir — bilinçli olsun diye değerler sabit.
+    """
+    await seed_demo(dev_settings, session_factory, today=SEED_DAY)
+    async with session_factory() as session:
+        sites = {s.slug: s.id for s in await session.scalars(select(Site))}
+    totals = {}
+    for slug, site_id in sites.items():
+        with site_scope(site_id):
+            async with session_factory() as session:
+                row = (
+                    await session.execute(
+                        select(
+                            func.sum(Unit.land_share_numerator),
+                            func.min(Unit.land_share_denominator),
+                            func.max(Unit.land_share_denominator),
+                            func.count().filter(Unit.land_share_numerator.is_(None)),
+                        )
+                    )
+                ).one()
+        numerator_sum, low, high, missing = row
+        assert missing == 0, slug
+        assert low == high, slug  # sitede tek payda
+        assert numerator_sum == low, slug
+        totals[slug] = numerator_sum
+    assert totals == {
+        "aksu-konaklari": 51253,
+        "yildiz-sitesi": 27159,
+        "mimoza-apartmani": 13654,
+    }

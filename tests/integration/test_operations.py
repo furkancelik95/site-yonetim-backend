@@ -138,8 +138,13 @@ async def test_talep_acilir_ve_durumu_degisir(ops: Ops) -> None:
 
     tech = await ops.user("teknik@test.local", "Teknik Personel")
     request_id = data["id"]
-    assigned = await ops.post(f"/requests/{request_id}/assign", {"assignee": "Tesisatçı Ali"}, tech)
-    assert assigned.json()["message"] == "#1 talep Tesisatçı Ali kişisine atandı."
+    # Teknik personel atama yapamaz (Ürün Dokümanı 5.2: yalnız atananlar); yönetici kendisine atar.
+    denied = await ops.post(f"/requests/{request_id}/assign", {"assignee": "X Usta"}, tech)
+    assert denied.status_code == 403
+    staff = (await ops.get("/requests/assignable-staff", params={"q": "test"})).json()
+    tech_id = next(s["id"] for s in staff if not s["all_requests"])
+    assigned = await ops.post(f"/requests/{request_id}/assign", {"assignee_id": tech_id})
+    assert assigned.json()["message"] == "#1 talep Test KULLANICI kişisine atandı."
     assert assigned.json()["data"]["status_label"] == "Atandı"
     progress = await ops.post(f"/requests/{request_id}/status", {"status": "in_progress"}, tech)
     assert progress.json()["data"]["status_label"] == "İşlemde"

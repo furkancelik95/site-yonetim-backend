@@ -8,6 +8,13 @@
 - Durum akışı dokümandaki geçiş tablosuyla (K18, `domain/operations.TRANSITIONS`). Her değişiklik
   `request_events`'e yazılır (değişmez geçmiş); talebi açan sakine bildirim gider (HIZ-01 adım 6).
 - Durum değişikliği talep satırı kilitlenerek yapılır (eşzamanlı iki değişiklik sırayla işler).
+- Açılış kanalı (`channel`): sakin ucu `resident`, diğer her yol `staff`. Sakin onayı (K18) yalnız
+  `resident` talepte beklenir; personelin başkası adına açtığı talep personelce kapatılabilir.
+- Atama: kişi (`assignee_user_id`, talep işleyebilen site personeli) ya da serbest metin (firma);
+  atanan kişiye uygulama içi bildirim. `requests.assigned` kapsamı: kendine atanan ya da kendi
+  açtığı talepler (`assigned_scope`).
+- Açma ve atama denetim kaydına yazılır (`record`; başlık/açıklama kişisel veri taşıyabilir —
+  kayda yalnız numara, kategori, kanal ve atanan girer).
 """
 
 import uuid
@@ -18,6 +25,7 @@ from sqlalchemy import Select, and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from site_yonetim.db.tenancy import current_scope
+from site_yonetim.domain.access import Permission
 from site_yonetim.domain.notifications import NotificationCategory
 from site_yonetim.domain.operations import (
     ACTIVE_STATUSES,
@@ -25,6 +33,7 @@ from site_yonetim.domain.operations import (
     RESIDENT_CANCELLABLE,
     STATUS_LABELS,
     OperationRuleError,
+    RequestChannel,
     RequestEventKind,
     RequestPriority,
     RequestState,
@@ -49,12 +58,16 @@ from site_yonetim.models import (
     Request,
     RequestCategory,
     RequestEvent,
+    Site,
     SiteMembership,
     Unit,
     UnitParty,
+    User,
 )
+from site_yonetim.models.audit import AuditAction, record
 from site_yonetim.services import notifications as notify_svc
 from site_yonetim.services import request_setup
+from site_yonetim.services import roles as roles_svc
 from site_yonetim.services.charging import BUSINESS_TZ
 
 _NUMBER_LOCK = text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))")
@@ -157,6 +170,8 @@ class NewRequest:
     unit_id: uuid.UUID | None
     location: str | None
     reported_by_person_id: uuid.UUID | None
+    channel: RequestChannel = RequestChannel.STAFF
+    created_by_user_id: uuid.UUID | None = None
 
 
 async def create(session: AsyncSession, data: NewRequest, *, actor: str, now: datetime) -> Request:
@@ -190,7 +205,9 @@ async def create(session: AsyncSession, data: NewRequest, *, actor: str, now: da
         location=_clean(data.location),
         reported_by_person_id=data.reported_by_person_id,
         department_id=category.department_id,
+        channel=data.channel.value,
         created_by_name=actor,
+        created_by_user_id=data.created_by_user_id,
         sla_hour_type=rule.hour_type.value,
         sla_target_hours=rule.target_hours,
         sla_calendar=calendar_json(rule.calendar) if rule.calendar else None,
@@ -211,6 +228,20 @@ async def create(session: AsyncSession, data: NewRequest, *, actor: str, now: da
         )
     )
     await session.flush()
+    record(
+        session,
+        AuditAction.CREATE,
+        "requests",
+        request.id,
+        {
+            "number": request.number,
+            "category": request.category,
+            "priority": request.priority,
+            "channel": request.channel,
+            "unit_id": request.unit_id,
+            "department_id": request.department_id,
+        },
+    )
     await notify_reporter(session, request, f"Talebiniz alındı: #{request.number}", key="created")
     return request
 
@@ -232,7 +263,9 @@ def state_of(request: Request) -> RequestState:
     return RequestState(
         status=RequestStatus(request.status),
         has_assignee=bool(request.assigned_to),
-        awaits_resident=request.reported_by_person_id is not None,
+        # K18: yalnız sakinin (sakin ucundan) açtığı talep sakin onayıyla kapanır.
+        awaits_resident=request.channel == RequestChannel.RESIDENT.value
+        and request.reported_by_person_id is not None,
     )
 
 
@@ -326,27 +359,70 @@ async def cancel_by_resident(
     return request
 
 
+# Talebi işleyebilen personel: tüm talepler (`requests.assign`) ya da yalnız atananlar.
+ASSIGNABLE_PERMISSIONS = frozenset({Permission.REQUESTS_ASSIGN, Permission.REQUESTS_ASSIGNED})
+
+
+@dataclass(frozen=True, slots=True)
+class Assignable:
+    user_id: uuid.UUID
+    full_name: str
+    roles: tuple[str, ...]
+    all_requests: bool  # `requests.assign`: tüm talepler; değilse yalnız kendine atananlar
+
+
+async def assignable_staff(session: AsyncSession, site: Site, now: datetime) -> list[Assignable]:
+    """Talep atanabilecek etkin personel (tesis kapsamlı rolünde talep işleme izni olan)."""
+    rows = [
+        Assignable(
+            user_id=h.user.id,
+            full_name=h.user.full_name,
+            roles=tuple(r.name for r in h.roles),
+            all_requests=Permission.REQUESTS_ASSIGN in h.permissions,
+        )
+        for h in await roles_svc.holders(session, site, now)
+        if h.permissions & ASSIGNABLE_PERMISSIONS
+    ]
+    return sorted(rows, key=lambda a: (a.full_name.casefold(), str(a.user_id)))
+
+
 async def assign(
     session: AsyncSession,
+    site: Site,
     request: Request,
-    assignee: str,
+    assignee: str | None,
     *,
+    assignee_user_id: uuid.UUID | None = None,
     actor: str,
     now: datetime,
 ) -> Request:
-    """Kişiye/firmaya atar; açık talep "Atandı" olur (HIZ-02 adım 2)."""
-    name = " ".join(assignee.split())
+    """Kişiye (site personeli, `assignee_user_id`) ya da firmaya (serbest metin) atar; açık talep
+    "Atandı" olur (HIZ-02 adım 2). Kişiye atamada ad kullanıcı hesabından gelir ve atanana
+    uygulama içi bildirim gider."""
+    user: User | None = None
+    if assignee_user_id is not None:
+        staff = {a.user_id for a in await assignable_staff(session, site, now)}
+        if assignee_user_id not in staff:
+            raise OperationRuleError(
+                "assignee_not_staff",
+                "Seçilen kişi bu sitede talep işleyebilen personel değil.",
+                field="assignee_id",
+            )
+        user = await session.get(User, assignee_user_id)
+    name = user.full_name if user is not None else " ".join((assignee or "").split())
     if not name:
-        raise OperationRuleError("assignee_required", "Atanacak kişiyi yazın.", field="assignee")
+        raise OperationRuleError("assignee_required", "Atanacak kişiyi seçin.", field="assignee")
     if RequestStatus(request.status) in FINAL_STATUSES:
         raise OperationRuleError(
             "request_finished", "Kapanmış ya da iptal edilmiş talep atanamaz.", conflict=True
         )
-    if name == request.assigned_to:
+    if name == request.assigned_to and assignee_user_id == request.assignee_user_id:
         raise OperationRuleError(
             "already_assigned", f"Talep zaten {name} kişisine atanmış.", conflict=True
         )
+    previous = request.assignee_user_id
     request.assigned_to = name
+    request.assignee_user_id = assignee_user_id
     session.add(event(request, RequestEventKind.ASSIGNED, f"Atandı: {name}", actor, at=now))
     if RequestStatus(request.status) is RequestStatus.OPEN:
         await apply_status(
@@ -359,6 +435,27 @@ async def assign(
             now=now + timedelta(microseconds=1),
         )
     await session.flush()
+    record(
+        session,
+        AuditAction.UPDATE,
+        "requests",
+        request.id,
+        {"number": request.number, "assigned_to": name, "assignee_user_id": assignee_user_id},
+    )
+    if assignee_user_id is not None and assignee_user_id != previous:
+        await notify_svc.notify(
+            session,
+            [assignee_user_id],
+            notify_svc.Message(
+                category=NotificationCategory.OPERATIONS,
+                kind="request.assigned",
+                title=f"Size talep atandı: #{request.number}",
+                body=request.title,
+                link_entity="requests",
+                link_id=request.id,
+            ),
+            dedupe_key=f"request:{request.id}:assigned:{assignee_user_id}:{now.isoformat()}",
+        )
     return request
 
 
@@ -391,9 +488,13 @@ def list_query(
     sla_breached: bool | None = None,
     now: datetime | None = None,
     unit_id: uuid.UUID | None = None,
+    scope: Select[uuid.UUID] | None = None,
 ) -> Select[Request]:
-    """Yeni talep üstte. `reporter` verilirse yalnız o kişinin talepleri (sakin)."""
+    """Yeni talep üstte. `reporter` verilirse yalnız o kişinin talepleri (sakin); `scope`
+    verilirse yalnız o kimlikler (`assigned_scope`)."""
     query = select(Request)
+    if scope is not None:
+        query = query.where(Request.id.in_(scope))
     if department_id is not None:
         query = query.where(Request.department_id == department_id)
     if unit_id is not None:
@@ -411,6 +512,23 @@ def list_query(
             Request.status.in_([s.value for s in ACTIVE_STATUSES]), Request.due_at < now
         )
     return query.order_by(Request.number.desc())
+
+
+def assigned_scope(user_id: uuid.UUID, person_id: uuid.UUID | None) -> Select[uuid.UUID]:
+    """`requests.assigned`: kendine atanan, kendi açtığı ya da (sakin olarak) kendi adına
+    açılmış talepler."""
+    conditions = [Request.assignee_user_id == user_id, Request.created_by_user_id == user_id]
+    if person_id is not None:
+        conditions.append(Request.reported_by_person_id == person_id)
+    return select(Request.id).where(or_(*conditions))
+
+
+def in_assigned_scope(request: Request, user_id: uuid.UUID, person_id: uuid.UUID | None) -> bool:
+    return (
+        request.assignee_user_id == user_id
+        or request.created_by_user_id == user_id
+        or (person_id is not None and request.reported_by_person_id == person_id)
+    )
 
 
 # --- SLA -----------------------------------------------------------------------------------

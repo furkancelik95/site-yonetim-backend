@@ -1,7 +1,9 @@
 """Kapı işleri — docs/06 §2.12 (modüller: `packages`, `visitors`; kapalıysa 404).
 
 - Kargo: `security.packages`. Teslim kodu **güvenliğe dönmez**; sakin `resident/packages`'ta
-  görür. Teslimde kod doğrulanır (sabit zamanlı karşılaştırma).
+  görür. Kayıtta sakinlere uygulama içi bildirim (kodsuz). Teslimde kod doğrulanır (sabit
+  zamanlı); kargo başına 5 hatalı denemede 15 dk kilit (429 `pickup_code_locked`), her hatalı
+  deneme denetim kaydında.
 - Ziyaretçi: `security.visitors`. Kayıt (hemen giriş ya da beklenen), giriş, çıkış.
 - Daire arama: `security.*` — yalnız bölüm adı ve oturan adları; borç ve telefon yok (docs/05).
 
@@ -30,7 +32,13 @@ from site_yonetim.core.errors import ApiError, ForbiddenError, NotFoundError
 from site_yonetim.domain.access import Permission
 from site_yonetim.domain.modules import ModuleKey
 from site_yonetim.domain.operations import OperationRuleError
-from site_yonetim.domain.security import PackageStatus, VisitorKind, VisitorStatus
+from site_yonetim.domain.security import (
+    WRONG_PICKUP_CODE,
+    PackageStatus,
+    PickupCodeLockedError,
+    VisitorKind,
+    VisitorStatus,
+)
 from site_yonetim.models import Package, Visitor
 from site_yonetim.services import security as svc
 
@@ -69,6 +77,13 @@ Visitors = Annotated[SiteContext, Depends(_visitors)]
 
 
 def _error(exc: OperationRuleError) -> ApiError:
+    if isinstance(exc, PickupCodeLockedError):
+        return ApiError(
+            HTTPStatus.TOO_MANY_REQUESTS,
+            exc.code,
+            exc.message,
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        )
     if exc.conflict:
         return ApiError(HTTPStatus.CONFLICT, exc.code, exc.message)
     fields = {exc.field: exc.message} if exc.field else None
@@ -168,7 +183,11 @@ class DeliverIn(BaseModel):
     delivered_to: str = Field(min_length=2, max_length=80)
 
 
-@router.post("/packages/{package_id}/deliver", summary="Teslim et (kodla)")
+@router.post(
+    "/packages/{package_id}/deliver",
+    summary="Teslim et (kodla)",
+    responses={429: {"description": "`pickup_code_locked`: 5 hatalı denemeden sonra 15 dk"}},
+)
 async def deliver_package(
     package_id: uuid.UUID, ctx: Packages, body: DeliverIn, current: CurrentUserDep, now: NowDep
 ) -> Written[PackageOut]:
@@ -182,6 +201,8 @@ async def deliver_package(
             now=now, delivered_by=current.user.full_name,
         )  # fmt: skip
     except OperationRuleError as exc:
+        if exc.code == WRONG_PICKUP_CODE or isinstance(exc, PickupCodeLockedError):
+            await ctx.session.commit()  # deneme sayacı ve denetim kaydı kalıcı olsun
         raise _error(exc) from exc
     await ctx.session.commit()
     [item] = await packages_out(ctx, [package])

@@ -34,8 +34,10 @@ from site_yonetim.domain.management import Employer
 from site_yonetim.domain.modules import ModuleKey
 from site_yonetim.domain.money import distribute, round_money
 from site_yonetim.domain.operations import (
+    FINAL_STATUSES,
     Audience,
     Importance,
+    RequestChannel,
     RequestPriority,
     RequestStatus,
 )
@@ -271,7 +273,7 @@ async def _seed_demo(
                 iban=spec.iban,
             )
             with site_scope(site.id):
-                await _seed_structure(session, site, spec)
+                await _seed_structure(session, site, spec, today)
                 for key in spec.extra_modules:
                     await set_module_enabled(session, site, key, enable=True)
                 await _seed_finance(session, spec, today)
@@ -298,6 +300,8 @@ async def _seed_demo(
                             )
                         )
                 await session.flush()  # kiracı satırları kapsam kapanmadan yazılmalı
+                # Üyelikler yazıldıktan sonra: demo teknik personeli kendi taleplerini görsün
+                await _assign_demo_technician(session, site, user_ids, today)
 
     async with factory() as session:
         aksu = await session.scalar(select(Site.id).where(Site.slug == RESIDENT.site_slug))
@@ -325,7 +329,7 @@ async def _seed_demo(
     return True
 
 
-async def _seed_structure(session: AsyncSession, site: Site, spec: SiteSpec) -> None:
+async def _seed_structure(session: AsyncSession, site: Site, spec: SiteSpec, today: date) -> None:
     types = {t.name: t.id for t in await session.scalars(select(UnitType))}
     blocks = {}
     for order, block_spec in enumerate(spec.blocks):
@@ -357,10 +361,12 @@ async def _seed_structure(session: AsyncSession, site: Site, spec: SiteSpec) -> 
     )
     await session.flush()
     logger.info("%s: %d blok, %d bölüm", site.name, len(blocks), len(units))
-    await _seed_people(session, spec, blocks)
+    await _seed_people(session, spec, blocks, today)
 
 
-async def _seed_people(session: AsyncSession, spec: SiteSpec, blocks: dict[str, Block]) -> None:
+async def _seed_people(
+    session: AsyncSession, spec: SiteSpec, blocks: dict[str, Block], today: date
+) -> None:
     units = {(unit.block_id, unit.number): unit for unit in await session.scalars(select(Unit))}
     for occ in occupancy_for(spec):
         block = blocks[occ.block]
@@ -375,7 +381,8 @@ async def _seed_people(session: AsyncSession, spec: SiteSpec, blocks: dict[str, 
             session.add(tenant)
             await session.flush()
             await add_party(session, unit=unit, block=block, person=tenant,
-                            role=PartyRole.TENANT, start_date=occ.tenant_since)  # fmt: skip
+                            role=PartyRole.TENANT, start_date=occ.tenant_since,
+                            today=today)  # fmt: skip
 
 
 async def _seed_finance(session: AsyncSession, spec: SiteSpec, today: date) -> None:
@@ -580,6 +587,39 @@ async def _seed_operations(session: AsyncSession, site: Site, spec: SiteSpec, to
     await _seed_requests(session, site, today)
 
 
+TECHNICIAN_EMAIL = "teknik@demo.local"
+TECHNICIAN_TEAM = "Teknik ekip"  # REQUESTS'teki serbest metin atama
+
+
+async def _assign_demo_technician(
+    session: AsyncSession, site: Site, user_ids: dict[str, uuid.UUID], today: date
+) -> None:
+    """ "Teknik ekip"e serbest metinle atanmış, bitmemiş demo taleplerini demo teknik
+    personeline (`assignee_user_id`) atar. Teknik şablon yalnız kendine atananları görür
+    (`requests.assigned`); bu olmadan sıfırlamadan sonra teknik hesabın listesi boş kalır.
+    Talep seed'inden sonra, üyelikler yazılınca çalışır (atanan talep işleyebilen personel
+    olmalı). Zaman bugün 08:30: talebin önceki olaylarından sonra."""
+    account = next((a for a in ACCOUNTS if a.email == TECHNICIAN_EMAIL), None)
+    user_id = user_ids.get(TECHNICIAN_EMAIL)
+    if account is None or user_id is None or account.site_slug != site.slug:
+        return
+    rows = list(
+        await session.scalars(
+            select(Request)
+            .where(
+                Request.assigned_to == TECHNICIAN_TEAM,
+                Request.status.not_in([s.value for s in FINAL_STATUSES]),
+            )
+            .order_by(Request.number)
+        )
+    )
+    at = datetime.combine(today, time(8, 30), BUSINESS_TZ)
+    for row in rows:
+        await requests.assign(
+            session, site, row, None, assignee_user_id=user_id, actor="Site Yönetimi", now=at
+        )
+
+
 async def _seed_requests(session: AsyncSession, site: Site, today: date) -> None:
     """Talepler dokümandaki akışla (K18): Açık → Atandı → İşlemde → Beklemede → Çözüldü →
     (sakin onayıyla) Kapandı. Zamanlar açılıştan sonra ve sıralı; çözüldü talep sakin onayı
@@ -616,9 +656,12 @@ async def _seed_requests(session: AsyncSession, site: Site, today: date) -> None
                 priority=RequestPriority(demand.priority),
                 unit_id=None if common else unit_id,
                 location=demand.location,
-                reported_by_person_id=person_id,
+                # Ortak alan talebini yönetim açar (sakin onayı beklemez, K18); bölüm talebini
+                # sakin kendi ucundan açar.
+                reported_by_person_id=None if common else person_id,
+                channel=RequestChannel.STAFF if common else RequestChannel.RESIDENT,
             ),
-            actor="Demo verisi",
+            actor="Site Yönetimi" if common else "Demo verisi",
             now=opened,
         )
         created[demand.title] = request
@@ -626,7 +669,7 @@ async def _seed_requests(session: AsyncSession, site: Site, today: date) -> None
         if target is RequestStatus.OPEN:
             continue
         await requests.assign(
-            session, request, demand.assignee or "Teknik ekip", actor="Site Yönetimi",
+            session, site, request, demand.assignee or "Teknik ekip", actor="Site Yönetimi",
             now=opened + timedelta(hours=1),
         )  # fmt: skip
         steps = flow[1 : flow.index(target) + 1]
@@ -640,7 +683,7 @@ async def _seed_requests(session: AsyncSession, site: Site, today: date) -> None
             at = opened + timedelta(hours=1 + 3 * step)
             if status is RequestStatus.RESOLVED and target is RequestStatus.RESOLVED:
                 at = max(at, datetime.combine(today - timedelta(days=1), time(15), BUSINESS_TZ))
-            if status is RequestStatus.CLOSED:
+            if status is RequestStatus.CLOSED and not common:  # sakin onayıyla kapanır
                 await service_desk.confirm(
                     session, site, request, solved=True, score=4, comment="Hızlı çözüldü.",
                     person_id=person_id, actor="Sakin", now=at,

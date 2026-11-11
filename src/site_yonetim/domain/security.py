@@ -54,6 +54,22 @@ class VisitorStatus(StrEnum):
     DENIED = "denied"
 
 
+WRONG_PICKUP_CODE = "wrong_pickup_code"
+PICKUP_CODE_LOCKED = "pickup_code_locked"
+
+
+class PickupCodeLockedError(OperationRuleError):
+    """Kargo başına deneme sınırı aşıldı (girişteki emsal: 5 hatalı → 15 dk kilit) → 429."""
+
+    def __init__(self, retry_after_seconds: int) -> None:
+        super().__init__(
+            PICKUP_CODE_LOCKED,
+            "Bu kargo için çok fazla hatalı teslim kodu girildi; 15 dakika kilitlendi. "
+            "Kodu sakinden yeniden isteyin.",
+        )
+        self.retry_after_seconds = max(1, retry_after_seconds)
+
+
 def check_delivery(status: PackageStatus, expected_code: str, given_code: str) -> None:
     if status is not PackageStatus.WAITING:
         raise OperationRuleError(
@@ -63,7 +79,7 @@ def check_delivery(status: PackageStatus, expected_code: str, given_code: str) -
         )
     if not hmac.compare_digest(expected_code.encode(), given_code.strip().encode()):
         raise OperationRuleError(
-            "wrong_pickup_code", "Teslim kodu hatalı. Kodu sakinden yeniden isteyin.",
+            WRONG_PICKUP_CODE, "Teslim kodu hatalı. Kodu sakinden yeniden isteyin.",
             field="pickup_code",
         )  # fmt: skip
 

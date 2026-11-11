@@ -3,6 +3,12 @@
 - Teslim kodu `secrets` ile üretilir ve güvenliğe gösterilmez; sakin `resident/packages`
   üzerinden görür, teslimde güvenlik kodu sakinden alır.
 - Daire araması yalnız bölüm adı ve oturan adlarını döner (borç, telefon yok — docs/05).
+- Kargo kaydında bölümün sakinlerine (kargo yetkili hane üyeleri "oturan" ilişkisiyle dahil) ve
+  alıcıya uygulama içi bildirim (GUV-05 adım 3; P16c teslim kaydı `notify` içinde). Bildirim
+  metni teslim kodunu **taşımaz** — kod yalnız sakinin ekranında.
+- Teslim kodu kargo başına 5 hatalı denemede 15 dakika kilitlenir (girişteki emsal,
+  `domain/login.LoginState`); her hatalı deneme denetim kaydına yazılır.
+- Kargo ve ziyaretçi kaydı denetim kaydına yazılır — ziyaretçi adı/telefon/plaka olmadan.
 """
 
 import secrets
@@ -15,11 +21,15 @@ from sqlalchemy import Select, and_, func, or_, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from site_yonetim.domain.gatehouse import normalize_plate
+from site_yonetim.domain.login import LoginState
+from site_yonetim.domain.notifications import NotificationCategory
 from site_yonetim.domain.operations import OperationRuleError
 from site_yonetim.domain.security import (
     PICKUP_CODE_MAX,
     PICKUP_CODE_MIN,
+    WRONG_PICKUP_CODE,
     PackageStatus,
+    PickupCodeLockedError,
     VisitorKind,
     VisitorStatus,
     check_delivery,
@@ -28,17 +38,22 @@ from site_yonetim.domain.security import (
 )
 from site_yonetim.domain.structure import PartyRole
 from site_yonetim.domain.text import tr_lower
+from site_yonetim.domain.validation import normalize_phone
 from site_yonetim.domain.vehicles import VehicleStatus
 from site_yonetim.models import (
     Block,
     Package,
     Person,
     SecuritySettings,
+    SiteMembership,
     Unit,
     UnitParty,
     Vehicle,
     Visitor,
 )
+from site_yonetim.models.audit import AuditAction, record
+from site_yonetim.services import notifications as notify_svc
+from site_yonetim.services.charging import BUSINESS_TZ
 
 LOOKUP_LIMIT = 20
 OCCUPANT_ROLES = (PartyRole.TENANT.value, PartyRole.RESIDENT.value)
@@ -82,6 +97,37 @@ async def unit_names(session: AsyncSession, unit_ids: set[uuid.UUID]) -> dict[uu
     return {uid: f"{block}-{number}" if block else number for uid, number, block in rows}
 
 
+async def unit_user_ids(
+    session: AsyncSession, unit_ids: set[uuid.UUID], today: date
+) -> set[uuid.UUID]:
+    """Bölümün bugünkü malik/kiracı/oturanlarının giriş hesapları (etkin sakin üyeliği)."""
+    if not unit_ids:
+        return set()
+    persons = select(UnitParty.person_id).where(
+        UnitParty.unit_id.in_(unit_ids),
+        UnitParty.start_date <= today,
+        or_(UnitParty.end_date.is_(None), UnitParty.end_date >= today),
+        UnitParty.role != PartyRole.PROXY.value,
+    )
+    rows = await session.scalars(
+        select(SiteMembership.user_id).where(
+            SiteMembership.person_id.in_(persons), SiteMembership.is_active
+        )
+    )
+    return set(rows)
+
+
+async def _person_user_ids(session: AsyncSession, person_id: uuid.UUID | None) -> set[uuid.UUID]:
+    if person_id is None:
+        return set()
+    rows = await session.scalars(
+        select(SiteMembership.user_id).where(
+            SiteMembership.person_id == person_id, SiteMembership.is_active
+        )
+    )
+    return set(rows)
+
+
 # --- Kargo --------------------------------------------------------------------------
 
 
@@ -106,10 +152,39 @@ async def receive_package(
         received_at=now,
         received_by=received_by,
         note=_clean(note, 500),
-        notification_sent=False,  # K5: bildirim gönderilmiyor; sakin kodu kendi ekranında görür
+        notification_sent=False,
     )
     session.add(package)
     await session.flush()
+    record(
+        session,
+        AuditAction.CREATE,
+        "packages",
+        package.id,
+        {"unit_id": unit_id, "carrier": package.carrier, "status": package.status},
+    )
+    today = now.astimezone(BUSINESS_TZ).date()
+    users = await unit_user_ids(session, {unit_id}, today) | await _person_user_ids(
+        session, person_id
+    )
+    sent = await notify_svc.notify(
+        session,
+        users,
+        notify_svc.Message(
+            category=NotificationCategory.SECURITY,
+            kind="package.received",
+            title="Kargonuz geldi",
+            body=f"{package.carrier or 'Kargo'} güvenlikte. Teslim kodunuz Kargolarım ekranında; "
+            "kodu güvenliğe söyleyerek ya da teslim yetkilinizle alabilirsiniz.",
+            link_entity="packages",
+            link_id=package.id,
+        ),
+        dedupe_key=f"package:{package.id}:received",
+    )
+    if sent:
+        package.notification_sent = True
+        package.notification_channel = "in_app"
+        await session.flush()
     return package
 
 
@@ -129,12 +204,49 @@ async def deliver_package(
     now: datetime,
     delivered_by: str,
 ) -> Package:
-    check_delivery(PackageStatus(package.status), package.pickup_code, pickup_code)
+    """Hatalı kodda sayaç ve denetim kaydı **yazılır** (flush) ve hata fırlatılır: çağıran
+    `WRONG_PICKUP_CODE` / kilit hatasında işlemi onaylamalıdır (commit), yoksa deneme
+    sayılmaz. Kilitliyken kod hiç denetlenmez."""
+    state = LoginState(package.code_failed_attempts, package.code_locked_until)
+    locked_until = state.locked_until
+    if (
+        PackageStatus(package.status) is PackageStatus.WAITING
+        and locked_until
+        and now < locked_until
+    ):
+        raise PickupCodeLockedError(int((locked_until - now).total_seconds()))
+    try:
+        check_delivery(PackageStatus(package.status), package.pickup_code, pickup_code)
+    except OperationRuleError as exc:
+        if exc.code != WRONG_PICKUP_CODE:
+            raise
+        after = state.after_failure(now)
+        package.code_failed_attempts = after.failed_count
+        package.code_locked_until = after.locked_until
+        record(
+            session,
+            AuditAction.UPDATE,
+            "packages",
+            package.id,
+            {
+                "event": WRONG_PICKUP_CODE,
+                "attempt": state.failed_count + 1,
+                "locked_until": after.locked_until,
+                "unit_id": package.unit_id,
+            },
+            reason="Hatalı teslim kodu denemesi",
+        )
+        await session.flush()
+        if after.locked_until is not None:
+            raise PickupCodeLockedError(int((after.locked_until - now).total_seconds())) from exc
+        raise
     name = _clean(delivered_to, 80)
     if not name:
         raise OperationRuleError(
             "delivered_to_required", "Teslim alan kişinin adını yazın.", field="delivered_to"
         )
+    package.code_failed_attempts = 0
+    package.code_locked_until = None
     package.status = PackageStatus.DELIVERED.value
     package.delivered_at = now
     package.delivered_by = delivered_by
@@ -217,6 +329,11 @@ async def record_visitor(
     fields = await session.scalar(select(SecuritySettings.visitor_fields)) or {}
     plate = normalize_plate(data.plate_number) or None if fields.get("plate", True) else None
     phone = _clean(data.phone, 20) if fields.get("phone", False) else None
+    if phone is not None:  # boş serbest (alan isteğe bağlı); dolu numara geçerli olmalı
+        try:
+            phone = normalize_phone(phone)
+        except ValueError as exc:
+            raise OperationRuleError("invalid_phone", str(exc), field="phone") from exc
     enter = data.enter_now and data.expected_on in (None, today)
     visitor = Visitor(
         unit_id=data.unit_id,
@@ -234,6 +351,14 @@ async def record_visitor(
     )
     session.add(visitor)
     await session.flush()
+    # Kişisel veri (ad, telefon, plaka) denetim kaydına girmez: saklama süresi denetimden kısa.
+    record(
+        session,
+        AuditAction.CREATE,
+        "visitors",
+        visitor.id,
+        {"unit_id": visitor.unit_id, "kind": visitor.kind, "status": visitor.status},
+    )
     return visitor
 
 

@@ -7,7 +7,15 @@ yazılmaz. Saklama süresi site ayarı (`security_settings.retention_months`, K8
 import datetime as dt
 import uuid
 
-from sqlalchemy import CheckConstraint, Date, DateTime, Index, Text, UniqueConstraint
+from sqlalchemy import (
+    CheckConstraint,
+    Date,
+    DateTime,
+    Index,
+    SmallInteger,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from site_yonetim.db.base import Base, TenantMixin, enum_check, tenant_fk, tenant_table_args
@@ -43,8 +51,12 @@ class Package(TenantMixin, Base):
     delivered_by: Mapped[str | None] = mapped_column(Text)
     delivered_to: Mapped[str | None] = mapped_column(Text)
     note: Mapped[str | None] = mapped_column(Text)
-    notification_sent: Mapped[bool] = mapped_column(default=False)  # K5: gönderim yok
+    # Kayıtta sakine uygulama içi bildirim (+ P16c teslim kaydı) yazılır; dış sağlayıcı K5.
+    notification_sent: Mapped[bool] = mapped_column(default=False)
     notification_channel: Mapped[str | None] = mapped_column(Text)
+    # Teslim kodu deneme sınırı, kargo başına (girişteki emsal: 5 hatalı → 15 dk kilit).
+    code_failed_attempts: Mapped[int] = mapped_column(SmallInteger, default=0)
+    code_locked_until: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Visitor(TenantMixin, Base):

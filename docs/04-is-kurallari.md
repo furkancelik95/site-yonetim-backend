@@ -365,7 +365,11 @@ def late_fee(outstanding: Decimal, due_date: date, as_of: date, policy) -> Decim
   `late_fee_minimum_amount`. Yöntem yürürlüğünden önceki günlere işletilmez.
 - Ana borç: tahakkuk, dönem dışı ücret, devir ve ödeme planı taksiti (ters kaydı alınmamış).
   Kısmi ödemede açık tutar mahsup tarihinin ertesinden düşer; plan kapatması plan yürürlük
-  tarihinde. Ödeme planı süresince (plan bozulmadıkça) taksite işlemez (`plan_suspends_late_fee`).
+  tarihinde. Ödeme planı süresince (plan bozulmadıkça) plandaki kalemlere işlemez
+  (`plan_suspends_late_fee`, FIN-03 "ödeme planındaki kalemlerde gecikme işlemez"): taksitlere ve
+  planın kapattığı borç kısmına; plandan önceki günlerin henüz yazılmamış gecikmesi de plan
+  yürürlükteyken yazılmaz. Plan bozulunca (`broken_at`) ya da iptal edilince normal kurala döner;
+  iptalde ilk vadeyle yeniden açılan borç iptal gününden işler (plan süresi sayılmaz).
 - Ana borç başına o güne kadar işlemiş **toplam** hesaplanır, daha önce yazılan
   (`late_fee_accruals`) düşülür; yalnız fark yazılır → tekrar güvenli (FIN-03 S3).
 - Ay sonu işi `run-finance-jobs` içinde önceki ay için bir kez (`late_fee_runs`); hareket tarihi

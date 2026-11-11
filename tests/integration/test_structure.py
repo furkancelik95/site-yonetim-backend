@@ -12,9 +12,12 @@ from datetime import date
 import httpx2
 import pytest
 from fastapi import FastAPI
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from site_yonetim.api.deps import get_today
+from site_yonetim.db.tenancy import site_scope
+from site_yonetim.models import AuditLog, Site
 from site_yonetim.services.provisioning import provision_site
 from tests.integration.conftest import add_site_membership, create_user, login_headers
 
@@ -332,6 +335,137 @@ async def test_malik_ve_kiraci_cari_hesaplari_acilir(api: httpx2.AsyncClient, wo
     assert detail["owner_names"] == ["Ayşe TEST"]
     assert detail["tenant_names"] == ["Mehmet TEST"]
     assert {a["kind"] for a in detail["accounts"]} == {"owner", "occupant"}
+
+
+def _open_occupants(detail: Mapping[str, object]) -> list[str]:
+    accounts = detail["accounts"]
+    assert isinstance(accounts, list)
+    return [a["reference_code"] for a in accounts if a["kind"] == "occupant" and not a["is_closed"]]
+
+
+async def test_kiraci_eklenince_malikin_oturan_hesabi_kapanir_ve_denetime_yazilir(
+    api: httpx2.AsyncClient, world: World, session_factory: Factory
+) -> None:
+    """Test raporu: kiracılı bölümde iki oturan hesabı (A12-O ve A12-K) açık kalıyordu."""
+    unit = await _unit(api, world, world.a, await _block(api, world, world.a))
+    await _party(api, world, unit, "owner", "Ayşe")
+
+    tenant = await _party(api, world, unit, "tenant", "Mehmet", start_date="2026-06-01")
+
+    data = tenant.json()["data"]
+    assert [a["reference_code"] for a in data["closed_accounts"]] == ["A12-O"]
+    assert data["closed_accounts"][0]["is_closed"] is True
+    assert data["kept_open_accounts"] == []
+    assert "malikin oturan hesabı kapatıldı (A12-O)" in tenant.json()["message"]
+    detail = (await api.get(f"/api/v1/sites/{world.a}/units/{unit}", headers=world.headers)).json()
+    assert _open_occupants(detail) == ["A12-K"]
+    closed_id = data["closed_accounts"][0]["id"]
+    # Kapalı hesaba tahsilat yazılamaz (mevcut kapatma mekanizması)
+    payment = await _post(
+        api,
+        world,
+        world.a,
+        "/payments",
+        {"ledger_account_id": closed_id, "amount": "10.00", "date": "2026-09-01", "method": "cash"},
+    )
+    assert payment.status_code == 409
+    assert payment.json()["error"]["code"] == "account_closed"
+
+    async with session_factory() as session:
+        site_id = await session.scalar(select(Site.id).where(Site.slug == world.a))
+    assert site_id is not None
+    with site_scope(site_id):
+        async with session_factory() as session:
+            rows = list(
+                await session.scalars(
+                    select(AuditLog).where(
+                        AuditLog.entity == "ledger_accounts",
+                        AuditLog.entity_id == uuid.UUID(closed_id),
+                    )
+                )
+            )
+    assert [(r.action, r.after, r.user_id is not None) for r in rows] == [
+        ("update", {"reference_code": "A12-O", "kind": "occupant", "is_closed": True}, True)
+    ]
+    assert rows[0].reason is not None
+    assert "kiracı" in rows[0].reason
+
+
+async def test_kiraci_cikinca_malikin_oturan_hesabi_ayni_kodla_yeniden_acilir(
+    api: httpx2.AsyncClient, world: World
+) -> None:
+    unit = await _unit(api, world, world.a, await _block(api, world, world.a))
+    await _party(api, world, unit, "owner", "Ayşe")
+    party = (await _party(api, world, unit, "tenant", "Mehmet", start_date="2026-06-01")).json()[
+        "data"
+    ]["party"]
+
+    ended = await _post(
+        api, world, world.a, f"/units/{unit}/parties/{party['id']}/end", {"end_date": "2026-09-30"}
+    )
+
+    assert ended.status_code == 200
+    assert "malikin oturan hesabı açıldı (A12-O)" in ended.json()["message"]
+    detail = (await api.get(f"/api/v1/sites/{world.a}/units/{unit}", headers=world.headers)).json()
+    assert sorted(_open_occupants(detail)) == ["A12-K", "A12-O"]  # kiracının -K'si kendi kaydı
+    assert len([a for a in detail["accounts"] if a["reference_code"].startswith("A12-O")]) == 1
+
+
+async def test_kiraci_cikinca_hic_oturan_hesabi_olmayan_malike_acilir(
+    api: httpx2.AsyncClient, world: World
+) -> None:
+    """Kiracı önce eklendiyse malike `-O` açılmamıştı; kiracı çıkınca mevcut kuralla açılır."""
+    unit = await _unit(api, world, world.a, await _block(api, world, world.a))
+    party = (await _party(api, world, unit, "tenant", "Mehmet")).json()["data"]["party"]
+    await _party(api, world, unit, "owner", "Ayşe")
+
+    ended = await _post(
+        api, world, world.a, f"/units/{unit}/parties/{party['id']}/end", {"end_date": "2026-09-30"}
+    )
+
+    assert "malikin oturan hesabı açıldı (A12-O)" in ended.json()["message"]
+
+
+async def test_baska_kiraci_varken_cikista_oturan_hesabi_acilmaz(
+    api: httpx2.AsyncClient, world: World
+) -> None:
+    unit = await _unit(api, world, world.a, await _block(api, world, world.a))
+    await _party(api, world, unit, "owner", "Ayşe")
+    first = (await _party(api, world, unit, "tenant", "Mehmet")).json()["data"]["party"]
+    await _party(api, world, unit, "tenant", "Zeynep", start_date="2026-03-01")
+
+    ended = await _post(
+        api, world, world.a, f"/units/{unit}/parties/{first['id']}/end", {"end_date": "2026-09-30"}
+    )
+
+    assert ended.json()["message"].endswith("geçmiş kayıt korunur.")
+    detail = (await api.get(f"/api/v1/sites/{world.a}/units/{unit}", headers=world.headers)).json()
+    assert "A12-O" not in _open_occupants(detail)
+
+
+async def test_bakiyeli_malik_oturan_hesabi_acik_kalir(
+    api: httpx2.AsyncClient, world: World
+) -> None:
+    """Kapalı hesaba tahsilat yazılamaz: borçlu `-O` kapatılırsa borç takılı kalır."""
+    unit = await _unit(api, world, world.a, await _block(api, world, world.a))
+    owner = await _party(api, world, unit, "owner", "Ayşe")
+    occupant = next(a for a in owner.json()["data"]["opened_accounts"] if a["kind"] == "occupant")
+    debt = await _post(
+        api,
+        world,
+        world.a,
+        f"/accounts/{occupant['id']}/opening-balance",
+        {"amount": "250.00", "direction": "debit", "date": "2026-05-01"},
+    )
+    assert debt.status_code == 201, debt.text
+
+    tenant = await _party(api, world, unit, "tenant", "Mehmet", start_date="2026-06-01")
+
+    data = tenant.json()["data"]
+    assert data["closed_accounts"] == []
+    assert [a["reference_code"] for a in data["kept_open_accounts"]] == ["A12-O"]
+    assert "A12-O bakiyesi sıfırlanınca kapanacak" in tenant.json()["message"]
+    assert data["kept_open_accounts"][0]["has_balance"] is True
 
 
 async def test_kiraci_varken_eklenen_malige_oturan_hesabi_acilmaz(

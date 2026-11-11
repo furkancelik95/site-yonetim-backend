@@ -93,3 +93,26 @@ def statuses(enabled: Set[ModuleKey], plan_modules: Iterable[str] | None) -> lis
         ModuleStatus(key, enabled=key in enabled or key in CORE_MODULES, in_plan=key in allowed)
         for key in ModuleKey
     ]
+
+
+# --- Plan kapsamı (docs/01 "Planlar", docs/10 §1.1) --------------------------------------
+
+
+class PlanScope(StrEnum):
+    """Plan kime satılır: site planları (Başlangıç/Standart/Pro) ya da yönetim şirketi planı.
+
+    Ayrı sütun yok: şirket planı, çoklu site portföyünü (`portfolio`) açan plandır — docs/01'de
+    yalnız "Yönetim Şirketi" planı `portfolio`'yu içerir ("Pro: portfolio hariç hepsi").
+    """
+
+    SITE = "site"
+    ORGANIZATION = "organization"
+
+
+ORGANIZATION_PLAN_MODULE = ModuleKey.PORTFOLIO
+
+
+def plan_scope(allowed_modules: Iterable[str]) -> PlanScope:
+    if ORGANIZATION_PLAN_MODULE.value in set(allowed_modules):
+        return PlanScope.ORGANIZATION
+    return PlanScope.SITE

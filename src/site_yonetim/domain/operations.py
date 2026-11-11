@@ -58,6 +58,13 @@ class RequestStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class RequestChannel(StrEnum):
+    """Talebin açıldığı kanal (K18: yalnız **sakinin açtığı** talep sakin onayıyla kapanır)."""
+
+    RESIDENT = "resident"  # sakin ucu (`/resident/requests`)
+    STAFF = "staff"  # personel ucu, denetim listesi, bakım planı, demo ortak alan talebi
+
+
 class RequestEventKind(StrEnum):
     CREATED = "created"
     STATUS_CHANGED = "status_changed"
